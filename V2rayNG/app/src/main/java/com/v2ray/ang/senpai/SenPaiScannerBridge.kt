@@ -1,7 +1,7 @@
 package com.v2ray.ang.senpai
 
-import com.senpaiscanner.mobile.Callback
-import com.senpaiscanner.mobile.Mobile
+import com.matinsenpai.senpaiscanner.Callback
+import com.matinsenpai.senpaiscanner.Mobile
 
 object SenPaiScannerBridge {
 
