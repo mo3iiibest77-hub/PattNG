@@ -237,6 +237,9 @@ fun MainScreen(
                     displayText = displayText,
                     isRunning = isRunning,
                     isDarkTheme = isDarkTheme,
+                    isScanning = uiState.isScanning,
+                    scanDone = uiState.scanDone,
+                    scanTotal = uiState.scanTotal,
                     onAction = onAction
                 )
             },

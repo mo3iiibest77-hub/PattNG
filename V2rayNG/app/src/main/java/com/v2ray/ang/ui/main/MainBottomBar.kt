@@ -22,23 +22,30 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.v2ray.ang.R
 import com.v2ray.ang.ui.compose.AppDivider
 import com.v2ray.ang.ui.compose.colorFabActive
 import com.v2ray.ang.ui.compose.colorFabInactiveDark
 import com.v2ray.ang.ui.compose.colorFabInactiveLight
 
+private val colorGold = Color(0xFFC9A84C)
+private val colorDark = Color(0xFF1A1A1A)
+
 @Composable
 fun MainBottomBar(
     displayText: String,
     isRunning: Boolean,
     isDarkTheme: Boolean,
+    isScanning: Boolean,
+    scanDone: Int,
+    scanTotal: Int,
     onAction: (MainAction) -> Unit
 ) {
     Box(modifier = Modifier.fillMaxWidth()) {
@@ -61,12 +68,44 @@ fun MainBottomBar(
                 Text(
                     text = displayText,
                     style = MaterialTheme.typography.bodyMedium,
-                    modifier = Modifier.semantics {
-                        contentDescription = displayText
-                    }
+                    modifier = Modifier.semantics { contentDescription = displayText }
                 )
+                if (isScanning && scanTotal > 0) {
+                    Text(
+                        text = "$scanDone/$scanTotal",
+                        fontSize = 12.sp,
+                        color = colorGold
+                    )
+                }
             }
         }
+
+        // دکمه‌ی "Find Best IP" — سمت چپ FAB اصلی
+        FloatingActionButton(
+            onClick = {
+                if (isScanning) onAction(MainAction.CancelCFScan)
+                else onAction(MainAction.StartCFScan)
+            },
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .padding(end = 88.dp)   // کنار FAB اصلی
+                .offset(y = (-28).dp)
+                .navigationBarsPadding()
+                .size(44.dp),
+            containerColor = if (isScanning) Color(0xFF8B0000) else colorGold
+        ) {
+            Icon(
+                painter = painterResource(
+                    if (isScanning) R.drawable.ic_stop_24dp
+                    else R.drawable.ic_star_24dp
+                ),
+                contentDescription = if (isScanning) "Cancel scan" else "Find Best IP",
+                tint = Color.White,
+                modifier = Modifier.size(20.dp)
+            )
+        }
+
+        // FAB اصلی (play/stop)
         FloatingActionButton(
             onClick = { onAction(MainAction.ToggleService) },
             modifier = Modifier

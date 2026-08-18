@@ -4,7 +4,6 @@ import com.v2ray.ang.dto.ConnectionTestResult
 import com.v2ray.ang.dto.GroupMapItem
 import com.v2ray.ang.dto.LocateTarget
 
-/** Locale-neutral state formatted only when it reaches the main UI. */
 sealed interface MainStatus {
     data object Disconnected : MainStatus
     data object Connected : MainStatus
@@ -13,9 +12,6 @@ sealed interface MainStatus {
     data class ConnectionTest(val result: ConnectionTestResult) : MainStatus
 }
 
-/**
- * Main UI state
- */
 data class MainUiState(
     val groups: List<GroupMapItem> = emptyList(),
     val selectedGroupId: String = "",
@@ -26,12 +22,14 @@ data class MainUiState(
     val locateTarget: LocateTarget? = null,
     val confirmRemove: Boolean = false,
     val doubleColumnDisplay: Boolean = false,
-    val shareQRCodeBitmap: android.graphics.Bitmap? = null
+    val shareQRCodeBitmap: android.graphics.Bitmap? = null,
+    // CF Scanner state
+    val isScanning: Boolean = false,
+    val scanDone: Int = 0,
+    val scanTotal: Int = 0,
+    val scanBestIp: String? = null,
 )
 
-/**
- * All possible user interaction intents
- */
 sealed interface MainAction {
     data object Initialize : MainAction
     data object RefreshGroups : MainAction
@@ -46,14 +44,12 @@ sealed interface MainAction {
     data object SortByTestResults : MainAction
     data object UpdateSubscriptions : MainAction
     data object ExportAll : MainAction
-
     data object ImportQRcode : MainAction
     data object ImportClipboard : MainAction
     data object ImportConfigLocal : MainAction
     data class ImportManually(val type: Int) : MainAction
     data object RestartService : MainAction
     data object LocateSelectedServer : MainAction
-
     data class SelectGroup(val groupId: String) : MainAction
     data class SelectServer(val guid: String) : MainAction
     data class RemoveServer(val guid: String) : MainAction
@@ -63,8 +59,9 @@ sealed interface MainAction {
     data class ShareClipboard(val guid: String) : MainAction
     data class ShareFullContent(val guid: String) : MainAction
     data object DismissQRCodeDialog : MainAction
-
     data class ImportBatchConfig(val configText: String) : MainAction
-
     data class LocateHandled(val target: LocateTarget) : MainAction
+    // CF Scanner
+    data object StartCFScan : MainAction
+    data object CancelCFScan : MainAction
 }

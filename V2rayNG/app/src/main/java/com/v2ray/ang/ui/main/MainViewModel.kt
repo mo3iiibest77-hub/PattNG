@@ -18,6 +18,9 @@ import com.v2ray.ang.extension.matchesPattern
 import com.v2ray.ang.extension.moveItem
 import com.v2ray.ang.ui.base.BaseViewModel
 import com.v2ray.ang.util.LogUtil
+import com.v2ray.ang.senpai.CandidateResult
+import com.v2ray.ang.senpai.CloudflareScanner
+import com.v2ray.ang.senpai.ScanCallback
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
@@ -73,6 +76,14 @@ class MainViewModel(
     private var preloadJob: Job? = null
     private var selectedGroupLoadJob: Job? = null
     private var reloadJob: Job? = null
+    private var scanJob: Job? = null
+
+    private val cfCandidates = listOf(
+        "104.16.0.1", "104.17.0.1", "104.18.0.1",
+        "172.64.0.1", "162.159.0.1", "104.21.0.1",
+        "104.22.0.1", "104.24.0.1", "104.25.0.1",
+        "104.26.0.1"
+    )
 
     @Volatile
     private var testingGroupId: String? = null
@@ -197,6 +208,8 @@ class MainViewModel(
                 _uiState.update { it.copy(shareQRCodeBitmap = bitmap) }
             }
 
+            MainAction.StartCFScan -> startCFScan()
+            MainAction.CancelCFScan -> cancelCFScan()
             MainAction.DismissQRCodeDialog -> {
                 _uiState.update { it.copy(shareQRCodeBitmap = null) }
             }
@@ -766,6 +779,43 @@ class MainViewModel(
                 else if (running) MainStatus.Connected else MainStatus.Disconnected
             )
         }
+    }
+
+    // ---------- CF Scanner ----------
+    private fun startCFScan() {
+        val guid = uiState.value.selectedGuid ?: run {
+            toastError(R.string.toast_failure)
+            return
+        }
+        _uiState.update { it.copy(isScanning = true, scanDone = 0, scanTotal = cfCandidates.size, scanBestIp = null) }
+        CloudflareScanner.scan(
+            context = getApplication(),
+            guid = guid,
+            candidates = cfCandidates,
+            callback = object : ScanCallback {
+                override fun onProgress(result: CandidateResult, done: Int, total: Int) {
+                    _uiState.update { it.copy(scanDone = done, scanTotal = total) }
+                }
+                override fun onFinish(best: CandidateResult?) {
+                    _uiState.update { it.copy(isScanning = false) }
+                    if (best != null) {
+                        CloudflareScanner.applyBestIp(guid, best.ip)
+                        _uiState.update { it.copy(scanBestIp = best.ip) }
+                        LogUtil.i("CFScan", "Best IP applied: ${best.ip} @ ${best.latencyMs}ms")
+                    } else {
+                        toastError(R.string.toast_failure)
+                    }
+                }
+                override fun onCancelled() {
+                    _uiState.update { it.copy(isScanning = false) }
+                }
+            }
+        )
+    }
+
+    private fun cancelCFScan() {
+        CloudflareScanner.cancel()
+        _uiState.update { it.copy(isScanning = false) }
     }
 
     override fun onCleared() {
