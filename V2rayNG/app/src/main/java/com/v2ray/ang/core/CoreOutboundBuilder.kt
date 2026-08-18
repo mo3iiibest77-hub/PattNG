@@ -575,14 +575,15 @@ object CoreOutboundBuilder {
         }
 
         if (profileItem.finalMask.isNullOrEmpty()) {
-    val defaultFinalMask = """{"tcp":[{"type":"fragment","settings":{"packets":"tlshello","lengths":["5","94","1"],"delays":["0"],"maxSplit":"0"}},{"type":"fragment","settings":{"packets":"1-1","lengths":["109","1"],"delays":["1"],"maxSplit":"355"}}]}"""
-    val parsedDefault = JsonUtil.parseString(defaultFinalMask)
-    if (parsedDefault != null) {
-        streamSettings.finalmask = parsedDefault
-    } else {
-        updateOutboundFragment(streamSettings)
+            val defaultFinalMask = """{"tcp":[{"type":"fragment","settings":{"packets":"tlshello","lengths":["5","94","1"],"delays":["0"],"maxSplit":"0"}},{"type":"fragment","settings":{"packets":"1-1","lengths":["109","1"],"delays":["1"],"maxSplit":"355"}}]}"""
+            val parsedDefault = JsonUtil.parseString(defaultFinalMask)
+            if (parsedDefault != null) {
+                streamSettings.finalmask = parsedDefault
+            } else {
+                updateOutboundFragment(streamSettings)
+            }
+        }
     }
-}
 
     /**
      * Updates the outbound with fragment settings for traffic optimization.
