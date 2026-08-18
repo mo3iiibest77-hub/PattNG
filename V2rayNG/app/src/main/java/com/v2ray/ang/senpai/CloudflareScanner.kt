@@ -188,7 +188,6 @@ object CloudflareScanner {
                 obfsPassword               = base.obfsPassword,
                 portHopping                = base.portHopping,
                 portHoppingInterval        = base.portHoppingInterval,
-                @Suppress("DEPRECATION")
                 pinSHA256                  = base.pinSHA256,
                 bandwidthDown              = base.bandwidthDown,
                 bandwidthUp                = base.bandwidthUp,
