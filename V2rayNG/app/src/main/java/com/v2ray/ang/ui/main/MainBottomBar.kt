@@ -97,7 +97,7 @@ fun MainBottomBar(
             Icon(
                 painter = painterResource(
                     if (isScanning) R.drawable.ic_stop_24dp
-                    else R.drawable.ic_star_24dp
+                    else R.drawable.ic_scan_24dp
                 ),
                 contentDescription = if (isScanning) "Cancel scan" else "Find Best IP",
                 tint = Color.White,
