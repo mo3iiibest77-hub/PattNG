@@ -254,14 +254,23 @@ fun ServerScreen(
     var authority by rememberSaveable { mutableStateOf(initialConfig.authority ?: "") }
     var xhttpMode by rememberSaveable { mutableStateOf(initialConfig.xhttpMode ?: "") }
     var xhttpExtra by rememberSaveable { mutableStateOf(initialConfig.xhttpExtra ?: "") }
-    var finalMask by rememberSaveable { mutableStateOf(initialConfig.finalMask ?: "") }
+    var finalMask by rememberSaveable { mutableStateOf(initialConfig.finalMask?.takeIf { it.isNotBlank() } ?: "{"tcp":[{"type":"fragment","settings":{"packets":"tlshello","lengths":["5","94","1"],"delays":["0"],"maxSplit":"0"}},{"type":"fragment","settings":{"packets":"1-1","lengths":["109","1"],"delays":["1"],"maxSplit":"355"}}]}") }
     var kcpMtu by rememberSaveable { mutableStateOf(initialConfig.kcpMtu?.toString() ?: "") }
     var kcpTti by rememberSaveable { mutableStateOf(initialConfig.kcpTti?.toString() ?: "") }
     var browserDialerMode by rememberSaveable { mutableStateOf(initialConfig.browserDialerMode ?: "") }
-    var streamSecurity by rememberSaveable { mutableStateOf(initialConfig.security ?: "") }
+    var streamSecurity by rememberSaveable {
+        mutableStateOf(
+            initialConfig.security?.takeIf { it.isNotBlank() }
+                ?: if (initialConfig.configType in listOf(
+                    com.v2ray.ang.dto.EConfigType.VLESS,
+                    com.v2ray.ang.dto.EConfigType.VMESS,
+                    com.v2ray.ang.dto.EConfigType.TROJAN
+                )) "tls" else ""
+        )
+    }
     var sni by rememberSaveable { mutableStateOf(initialConfig.sni ?: "") }
     var allowInsecure by rememberSaveable { mutableStateOf(initialConfig.insecure == true) }
-    var fingerPrint by rememberSaveable { mutableStateOf(initialConfig.fingerPrint ?: "") }
+    var fingerPrint by rememberSaveable { mutableStateOf(initialConfig.fingerPrint?.takeIf { it.isNotBlank() } ?: "unsafe") }
     var alpn by rememberSaveable { mutableStateOf(initialConfig.alpn ?: "") }
     var cipherSuites by rememberSaveable { mutableStateOf(initialConfig.cipherSuites ?: "") }
     var publicKeyReality by rememberSaveable { mutableStateOf(initialConfig.publicKey ?: "") }

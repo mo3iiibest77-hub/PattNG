@@ -1,5 +1,7 @@
 package com.v2ray.ang.ui.main
 
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -15,18 +17,22 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.v2ray.ang.R
@@ -36,7 +42,9 @@ import com.v2ray.ang.ui.compose.colorFabInactiveDark
 import com.v2ray.ang.ui.compose.colorFabInactiveLight
 
 private val colorGold = Color(0xFFC9A84C)
-private val colorDark = Color(0xFF1A1A1A)
+private val colorGoldDim = Color(0xFF8B6914)
+private val colorScanBg = Color(0xFF1A1A1A)
+private val colorScanCancel = Color(0xFF8B0000)
 
 @Composable
 fun MainBottomBar(
@@ -53,14 +61,20 @@ fun MainBottomBar(
             modifier = Modifier
                 .fillMaxWidth()
                 .background(MaterialTheme.colorScheme.surface)
-                .clickable(onClick = { onAction(MainAction.TestCurrentServer) })
                 .windowInsetsPadding(WindowInsets.navigationBars)
         ) {
             AppDivider()
+
+            // اگه داره اسکن می‌کنه، progress bar نشون بده
+            if (isScanning && scanTotal > 0) {
+                ScanProgressBar(done = scanDone, total = scanTotal)
+            }
+
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(64.dp)
+                    .clickable { onAction(MainAction.TestCurrentServer) }
                     .padding(horizontal = 16.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
@@ -70,38 +84,42 @@ fun MainBottomBar(
                     style = MaterialTheme.typography.bodyMedium,
                     modifier = Modifier.semantics { contentDescription = displayText }
                 )
-                if (isScanning && scanTotal > 0) {
-                    Text(
-                        text = "$scanDone/$scanTotal",
-                        fontSize = 12.sp,
-                        color = colorGold
-                    )
-                }
             }
         }
 
-        // دکمه‌ی "Find Best IP" — سمت چپ FAB اصلی
-        FloatingActionButton(
-            onClick = {
-                if (isScanning) onAction(MainAction.CancelCFScan)
-                else onAction(MainAction.StartCFScan)
-            },
+        // Scanner FAB — سمت چپ FAB اصلی
+        Column(
             modifier = Modifier
                 .align(Alignment.TopEnd)
-                .padding(end = 88.dp)   // کنار FAB اصلی
-                .offset(y = (-28).dp)
-                .navigationBarsPadding()
-                .size(44.dp),
-            containerColor = if (isScanning) Color(0xFF8B0000) else colorGold
+                .padding(end = 96.dp)
+                .offset(y = (-36).dp)
+                .navigationBarsPadding(),
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Icon(
-                painter = painterResource(
-                    if (isScanning) R.drawable.ic_stop_24dp
-                    else R.drawable.ic_scan_24dp
-                ),
-                contentDescription = if (isScanning) "Cancel scan" else "Find Best IP",
-                tint = Color.White,
-                modifier = Modifier.size(20.dp)
+            FloatingActionButton(
+                onClick = {
+                    if (isScanning) onAction(MainAction.CancelCFScan)
+                    else onAction(MainAction.StartCFScan)
+                },
+                modifier = Modifier.size(52.dp),
+                containerColor = if (isScanning) colorScanCancel else colorGold
+            ) {
+                Icon(
+                    painter = painterResource(
+                        if (isScanning) R.drawable.ic_stop_24dp
+                        else R.drawable.ic_scan_24dp
+                    ),
+                    contentDescription = if (isScanning) "Cancel scan" else "Scan IPs",
+                    tint = Color.White,
+                    modifier = Modifier.size(22.dp)
+                )
+            }
+            Text(
+                text = if (isScanning) "$scanDone/$scanTotal" else "IP Scan",
+                fontSize = 10.sp,
+                color = if (isScanning) colorGold else colorGoldDim,
+                fontWeight = FontWeight.Medium,
+                modifier = Modifier.padding(top = 2.dp)
             )
         }
 
@@ -125,6 +143,34 @@ fun MainBottomBar(
                 ),
                 tint = Color.White,
                 modifier = Modifier.size(24.dp)
+            )
+        }
+    }
+}
+
+@Composable
+private fun ScanProgressBar(done: Int, total: Int) {
+    val fraction = if (total > 0) done.toFloat() / total else 0f
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        repeat(total) { index ->
+            val filled = index < done
+            val dotColor by animateColorAsState(
+                targetValue = if (filled) Color(0xFF4CAF50) else Color(0xFF2A2A2A),
+                animationSpec = tween(300),
+                label = "dot_$index"
+            )
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .height(6.dp)
+                    .clip(RoundedCornerShape(3.dp))
+                    .background(dotColor)
             )
         }
     }

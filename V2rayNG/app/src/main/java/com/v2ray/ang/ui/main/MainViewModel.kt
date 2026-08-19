@@ -801,7 +801,12 @@ class MainViewModel(
                     if (best != null) {
                         CloudflareScanner.applyBestIp(guid, best.ip)
                         _uiState.update { it.copy(scanBestIp = best.ip) }
-                        LogUtil.i("CFScan", "Best IP applied: ${best.ip} @ ${best.latencyMs}ms")
+                        LogUtil.i("CFScan", "Best IP applied: \${best.ip} @ \${best.latencyMs}ms")
+                        // sync UI
+                        viewModelScope.launch(ioDispatcher) {
+                            cacheMutex.withLock { groupDataCache.clear() }
+                            setupGroupTab(forceRefresh = true)
+                        }
                     } else {
                         toastError(R.string.toast_failure)
                     }
