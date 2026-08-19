@@ -92,7 +92,7 @@ fun MainBottomBar(
             modifier = Modifier
                 .align(Alignment.TopEnd)
                 .padding(end = 96.dp)
-                .offset(y = (-36).dp)
+                .offset(y = (-52).dp)
                 .navigationBarsPadding(),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
@@ -161,7 +161,7 @@ private fun ScanProgressBar(done: Int, total: Int) {
         repeat(total) { index ->
             val filled = index < done
             val dotColor by animateColorAsState(
-                targetValue = if (filled) Color(0xFF4CAF50) else Color(0xFF2A2A2A),
+                targetValue = if (filled) Color(0xFF2196F3) else Color(0xFF2A2A2A),
                 animationSpec = tween(300),
                 label = "dot_$index"
             )
