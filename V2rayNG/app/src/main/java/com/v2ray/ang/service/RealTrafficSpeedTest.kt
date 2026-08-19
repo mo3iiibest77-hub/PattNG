@@ -25,8 +25,8 @@ internal data class RealTrafficSpeedResult(
 
 internal object RealTrafficSpeedTest {
 
-    private const val TEST_SIZE_BYTES = 8L * 1024L * 1024L
-    private const val MIN_UPLOAD_BYTES_PER_SECOND = 700L * 1024L
+    private const val TEST_SIZE_BYTES = 1L * 1024L * 1024L
+    private const val MIN_UPLOAD_BYTES_PER_SECOND = 50L * 1024L
 
     private const val UPLOAD_URL = "https://speed.cloudflare.com/__up"
     private const val DOWNLOAD_URL = "https://speed.cloudflare.com/__down?bytes=$TEST_SIZE_BYTES"
