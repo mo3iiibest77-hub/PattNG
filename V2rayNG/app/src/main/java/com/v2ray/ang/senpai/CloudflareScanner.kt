@@ -35,7 +35,7 @@ object CloudflareScanner {
     private const val TEST_URL = "https://cp.cloudflare.com/cdn-cgi/trace"
     private const val DEFAULT_CONCURRENCY = 4
     private const val IPS_PER_CIDR = 2
-    private const val MAX_CANDIDATES = 60
+    private const val MAX_CANDIDATES = 30
 
     private val PRODUCTION_FINALMASK = buildString {
         append("""{"tcp":[""")

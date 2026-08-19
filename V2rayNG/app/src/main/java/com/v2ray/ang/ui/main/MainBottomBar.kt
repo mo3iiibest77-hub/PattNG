@@ -41,10 +41,10 @@ import com.v2ray.ang.ui.compose.colorFabActive
 import com.v2ray.ang.ui.compose.colorFabInactiveDark
 import com.v2ray.ang.ui.compose.colorFabInactiveLight
 
-private val colorGold = Color(0xFFC9A84C)
-private val colorGoldDim = Color(0xFF8B6914)
+private val colorScanBlue = Color(0xFF1E88E5)
+private val colorScanBlueDim = Color(0xFF1565C0)
 private val colorScanBg = Color(0xFF1A1A1A)
-private val colorScanCancel = Color(0xFF8B0000)
+private val colorScanGreen = Color(0xFF00C853)
 
 @Composable
 fun MainBottomBar(
@@ -96,13 +96,20 @@ fun MainBottomBar(
                 .navigationBarsPadding(),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
+            Text(
+                text = if (isScanning) "$scanDone/$scanTotal" else "0/30",
+                fontSize = 10.sp,
+                color = if (isScanning) colorScanBlue else colorScanBlueDim,
+                fontWeight = FontWeight.Medium,
+                modifier = Modifier.padding(bottom = 2.dp)
+            )
             FloatingActionButton(
                 onClick = {
                     if (isScanning) onAction(MainAction.CancelCFScan)
                     else onAction(MainAction.StartCFScan)
                 },
                 modifier = Modifier.size(52.dp),
-                containerColor = if (isScanning) colorScanCancel else colorGold
+                containerColor = if (isScanning) colorScanGreen else colorScanBlue
             ) {
                 Icon(
                     painter = painterResource(
@@ -114,13 +121,6 @@ fun MainBottomBar(
                     modifier = Modifier.size(22.dp)
                 )
             }
-            Text(
-                text = if (isScanning) "$scanDone/$scanTotal" else "IP Scan",
-                fontSize = 10.sp,
-                color = if (isScanning) colorGold else colorGoldDim,
-                fontWeight = FontWeight.Medium,
-                modifier = Modifier.padding(top = 2.dp)
-            )
         }
 
         // FAB اصلی (play/stop)
@@ -129,7 +129,7 @@ fun MainBottomBar(
             modifier = Modifier
                 .align(Alignment.TopEnd)
                 .padding(end = 24.dp)
-                .offset(y = (-28).dp)
+                .offset(y = (-52).dp)
                 .navigationBarsPadding(),
             containerColor = if (isRunning) colorFabActive
             else if (isDarkTheme) colorFabInactiveDark

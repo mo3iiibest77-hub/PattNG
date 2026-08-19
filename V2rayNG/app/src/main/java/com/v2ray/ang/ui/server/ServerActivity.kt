@@ -1,4 +1,5 @@
 package com.v2ray.ang.ui.server
+import com.v2ray.ang.AppConfig
 
 import android.os.Bundle
 import androidx.compose.foundation.layout.Arrangement
