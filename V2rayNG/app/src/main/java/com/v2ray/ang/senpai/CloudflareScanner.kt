@@ -188,7 +188,13 @@ object CloudflareScanner {
     ): CandidateResult = withContext(Dispatchers.IO) {
         val tempGuid = "cfscanner-$baseGuid-${ip.replace('.', '-').replace(':', '-')}"
         return@withContext try {
-            val temp = base.copy(server = ip)
+            // Keep scanner validation identical to the configuration that
+            // applyBestIp() writes to the real production profile.
+            val temp = base.copy(server = ip).apply {
+                fingerPrint = "unsafe"
+                if (finalMask.isNullOrBlank()) finalMask = PRODUCTION_FINALMASK
+                if (cipherSuites.isNullOrBlank()) cipherSuites = PRODUCTION_CIPHERSUITES
+            }
             MmkvManager.encodeServerConfig(tempGuid, temp)
             val cfg = CoreConfigManager.getV2rayConfig4Speedtest(context, tempGuid)
             if (!cfg.status) return@withContext CandidateResult(ip, -1L)
