@@ -5,6 +5,7 @@ import com.v2ray.ang.core.CoreConfigManager
 import com.v2ray.ang.core.CoreNativeManager
 import com.v2ray.ang.dto.entities.ProfileItem
 import com.v2ray.ang.handler.MmkvManager
+import com.v2ray.ang.AppConfig
 import com.v2ray.ang.util.LogUtil
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -154,10 +155,10 @@ object CloudflareScanner {
         // enforce production TLS defaults — بدون اینا upload کار نمیکنه
         profile.fingerPrint = "unsafe"
         if (profile.finalMask.isNullOrBlank()) {
-            profile.finalMask = com.v2ray.ang.AppConfig.DEFAULT_FINALMASK
+            profile.finalMask = AppConfig.DEFAULT_FINALMASK
         }
         if (profile.cipherSuites.isNullOrBlank()) {
-            profile.cipherSuites = com.v2ray.ang.AppConfig.DEFAULT_CIPHERSUITES
+            profile.cipherSuites = AppConfig.DEFAULT_CIPHERSUITES
         }
         MmkvManager.encodeServerConfig(guid, profile)
         LogUtil.i(TAG, "applyBestIp: $guid -> server=$bestIp fp=unsafe")
