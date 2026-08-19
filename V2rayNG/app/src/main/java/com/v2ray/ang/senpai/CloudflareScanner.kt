@@ -151,8 +151,16 @@ object CloudflareScanner {
             return false
         }
         profile.server = bestIp
+        // enforce production TLS defaults — بدون اینا upload کار نمیکنه
+        profile.fingerPrint = "unsafe"
+        if (profile.finalMask.isNullOrBlank()) {
+            profile.finalMask = com.v2ray.ang.AppConfig.DEFAULT_FINALMASK
+        }
+        if (profile.cipherSuites.isNullOrBlank()) {
+            profile.cipherSuites = com.v2ray.ang.AppConfig.DEFAULT_CIPHERSUITES
+        }
         MmkvManager.encodeServerConfig(guid, profile)
-        LogUtil.i(TAG, "applyBestIp: $guid -> server=$bestIp")
+        LogUtil.i(TAG, "applyBestIp: $guid -> server=$bestIp fp=unsafe")
         return true
     }
 
