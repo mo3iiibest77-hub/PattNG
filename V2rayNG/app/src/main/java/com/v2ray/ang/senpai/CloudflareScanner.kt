@@ -15,6 +15,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
+import java.net.InetAddress
+import kotlin.random.Random
 
 data class CandidateResult(
     val ip: String,
@@ -29,37 +31,113 @@ interface ScanCallback {
     fun onCancelled()
 }
 
-/**
- * Scans Cloudflare candidate IPs using the xray-core already in PattNG.
- *
- * For each IP: clones the base profile, swaps only `server`, builds a
- * speedtest config, runs a real xray tunnel test via CoreNativeManager,
- * then removes the temp profile. Returns the lowest-latency IP.
- *
- * All TLS settings (sni, alpn, fingerPrint, cipherSuites, finalMask, security)
- * are inherited from the base profile unchanged — exactly what real users connect with.
- */
 object CloudflareScanner {
-
     private const val TAG = "CloudflareScanner"
     private const val TEST_URL = "https://www.gstatic.com/generate_204"
-    private const val DEFAULT_CONCURRENCY = 3
+    private const val DEFAULT_CONCURRENCY = 4
+    private const val IPS_PER_CIDR = 2      // از هر CIDR چند IP بگیر
+    private const val MAX_CANDIDATES = 60   // حداکثر تعداد IP برای تست
 
     private var scanJob = SupervisorJob()
     private var scanScope = CoroutineScope(scanJob + Dispatchers.IO)
 
+    /**
+     * بارگذاری CIDR ها از assets و تولید IP های random
+     */
+    private fun generateCandidates(context: Context): List<String> {
+        val candidates = mutableListOf<String>()
+        try {
+            val lines = context.assets.open("cf_ranges_v4.txt")
+                .bufferedReader()
+                .readLines()
+                .filter { it.isNotBlank() && !it.startsWith("#") }
+                .shuffled() // ترتیب random
+
+            for (cidr in lines) {
+                if (candidates.size >= MAX_CANDIDATES) break
+                try {
+                    val parts = cidr.trim().split("/")
+                    if (parts.size != 2) continue
+                    val baseIp = parts[0]
+                    val prefix = parts[1].toInt()
+                    val ips = randomIpsFromCidr(baseIp, prefix, IPS_PER_CIDR)
+                    candidates.addAll(ips)
+                } catch (e: Exception) {
+                    LogUtil.d(TAG, "Skip invalid CIDR: $cidr")
+                }
+            }
+        } catch (e: Exception) {
+            LogUtil.e(TAG, "Failed to load cf_ranges_v4.txt: ${e.message}")
+            // fallback به چند IP ثابت
+            candidates.addAll(listOf(
+                "104.16.0.1", "104.17.0.1", "104.18.0.1",
+                "172.64.0.1", "162.159.0.1", "104.21.0.1"
+            ))
+        }
+        return candidates.take(MAX_CANDIDATES)
+    }
+
+    /**
+     * تولید IP های random از یک CIDR
+     */
+    private fun randomIpsFromCidr(baseIp: String, prefix: Int, count: Int): List<String> {
+        val result = mutableListOf<String>()
+        try {
+            val base = ipToLong(baseIp)
+            val hostBits = 32 - prefix
+            if (hostBits <= 0) {
+                result.add(baseIp)
+                return result
+            }
+            val maxHosts = (1L shl hostBits) - 2
+            if (maxHosts <= 0) {
+                result.add(baseIp)
+                return result
+            }
+            val seen = mutableSetOf<Long>()
+            repeat(count * 3) { // چند بار تلاش برای پیدا کردن unique
+                if (result.size >= count) return result
+                val offset = (Random.nextLong() and Long.MAX_VALUE) % maxHosts + 1
+                if (seen.add(offset)) {
+                    result.add(longToIp(base + offset))
+                }
+            }
+        } catch (e: Exception) {
+            LogUtil.d(TAG, "randomIpsFromCidr error: ${e.message}")
+        }
+        return result
+    }
+
+    private fun ipToLong(ip: String): Long {
+        val parts = ip.split(".")
+        return (parts[0].toLong() shl 24) or
+               (parts[1].toLong() shl 16) or
+               (parts[2].toLong() shl 8) or
+               parts[3].toLong()
+    }
+
+    private fun longToIp(n: Long): String {
+        return "${(n shr 24) and 0xFF}.${(n shr 16) and 0xFF}.${(n shr 8) and 0xFF}.${n and 0xFF}"
+    }
+
     fun scan(
         context: Context,
         guid: String,
-        candidates: List<String>,
+        candidates: List<String> = emptyList(), // اگه خالی بود از CIDR می‌سازه
         concurrency: Int = DEFAULT_CONCURRENCY,
         callback: ScanCallback,
     ) {
         cancel()
         scanJob = SupervisorJob()
         scanScope = CoroutineScope(scanJob + Dispatchers.IO)
+
         scanScope.launch {
-            runScan(context, guid, candidates, concurrency, callback)
+            val actualCandidates = if (candidates.isEmpty())
+                generateCandidates(context)
+            else candidates
+
+            LogUtil.i(TAG, "Starting scan with ${actualCandidates.size} candidates")
+            runScan(context, guid, actualCandidates, concurrency, callback)
         }
     }
 
@@ -67,10 +145,6 @@ object CloudflareScanner {
         scanJob.cancel()
     }
 
-    /**
-     * Write the winning IP back onto the original profile.
-     * Call from onFinish() when best != null, then connect VPN normally.
-     */
     fun applyBestIp(guid: String, bestIp: String): Boolean {
         val profile = MmkvManager.decodeServerConfig(guid) ?: run {
             LogUtil.e(TAG, "applyBestIp: profile not found for guid=$guid")
@@ -78,7 +152,7 @@ object CloudflareScanner {
         }
         profile.server = bestIp
         MmkvManager.encodeServerConfig(guid, profile)
-        LogUtil.i(TAG, "applyBestIp: $guid → server=$bestIp")
+        LogUtil.i(TAG, "applyBestIp: $guid -> server=$bestIp")
         return true
     }
 
@@ -134,85 +208,17 @@ object CloudflareScanner {
         ip: String,
     ): CandidateResult = withContext(Dispatchers.IO) {
         val tempGuid = "cfscanner-$baseGuid-${ip.replace('.', '-').replace(':', '-')}"
-
         return@withContext try {
-            // Full copy of all ProfileItem fields — only server is swapped.
-            // This ensures sni, alpn, fingerPrint, cipherSuites, finalMask,
-            // security, flow, wsPath/host, etc. are identical to the real config.
-            val temp = ProfileItem(
-                configVersion              = base.configVersion,
-                configType                 = base.configType,
-                subscriptionId             = base.subscriptionId,
-                addedTime                  = base.addedTime,
-                remarks                    = base.remarks,
-                description                = base.description,
-                server                     = ip,              // ← only change
-                serverPort                 = base.serverPort,
-                password                   = base.password,
-                method                     = base.method,
-                flow                       = base.flow,
-                username                   = base.username,
-                network                    = base.network,
-                headerType                 = base.headerType,
-                host                       = base.host,
-                path                       = base.path,
-                seed                       = base.seed,
-                kcpMtu                     = base.kcpMtu,
-                kcpTti                     = base.kcpTti,
-                quicSecurity               = base.quicSecurity,
-                quicKey                    = base.quicKey,
-                mode                       = base.mode,
-                serviceName                = base.serviceName,
-                authority                  = base.authority,
-                xhttpMode                  = base.xhttpMode,
-                xhttpExtra                 = base.xhttpExtra,
-                finalMask                  = base.finalMask,
-                security                   = base.security,
-                sni                        = base.sni,
-                alpn                       = base.alpn,
-                fingerPrint                = base.fingerPrint,
-                cipherSuites               = base.cipherSuites,
-                insecure                   = base.insecure,
-                echConfigList              = base.echConfigList,
-                verifyPeerCertByName       = base.verifyPeerCertByName,
-                pinnedCA256                = base.pinnedCA256,
-                publicKey                  = base.publicKey,
-                shortId                    = base.shortId,
-                spiderX                    = base.spiderX,
-                mldsa65Verify              = base.mldsa65Verify,
-                secretKey                  = base.secretKey,
-                preSharedKey               = base.preSharedKey,
-                localAddress               = base.localAddress,
-                reserved                   = base.reserved,
-                mtu                        = base.mtu,
-                obfsPassword               = base.obfsPassword,
-                portHopping                = base.portHopping,
-                portHoppingInterval        = base.portHoppingInterval,
-                pinSHA256                  = base.pinSHA256,
-                bandwidthDown              = base.bandwidthDown,
-                bandwidthUp                = base.bandwidthUp,
-                policyGroupType            = base.policyGroupType,
-                policyGroupSubscriptionId  = base.policyGroupSubscriptionId,
-                policyGroupFilter          = base.policyGroupFilter,
-                policyGroupTestOutbounds   = base.policyGroupTestOutbounds,
-                policyGroupFallbackTag     = base.policyGroupFallbackTag,
-                proxyChainProfiles         = base.proxyChainProfiles,
-                browserDialerMode          = base.browserDialerMode,
-            )
-
+            val temp = base.copy(server = ip)
             MmkvManager.encodeServerConfig(tempGuid, temp)
-
             val configResult = CoreConfigManager.getV2rayConfig4Speedtest(context, tempGuid)
             if (!configResult.status) {
-                LogUtil.d(TAG, "Config build failed for $ip: ${configResult.errorMessage}")
+                LogUtil.d(TAG, "Config build failed for $ip")
                 return@withContext CandidateResult(ip, -1L)
             }
-
             val latency = CoreNativeManager.measureOutboundDelay(configResult.content, TEST_URL)
-            LogUtil.d(TAG, "  $ip → ${if (latency >= 0) "${latency}ms" else "FAILED"}")
-
+            LogUtil.d(TAG, "  $ip -> ${if (latency >= 0) "${latency}ms" else "FAILED"}")
             CandidateResult(ip, latency)
-
         } catch (e: Exception) {
             LogUtil.e(TAG, "Error testing $ip: ${e.message}", e)
             CandidateResult(ip, -1L)
