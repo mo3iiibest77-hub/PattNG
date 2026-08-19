@@ -254,7 +254,7 @@ fun ServerScreen(
     var authority by rememberSaveable { mutableStateOf(initialConfig.authority ?: "") }
     var xhttpMode by rememberSaveable { mutableStateOf(initialConfig.xhttpMode ?: "") }
     var xhttpExtra by rememberSaveable { mutableStateOf(initialConfig.xhttpExtra ?: "") }
-    var finalMask by rememberSaveable { mutableStateOf(initialConfig.finalMask?.takeIf { it.isNotBlank() } ?: "{"tcp":[{"type":"fragment","settings":{"packets":"tlshello","lengths":["5","94","1"],"delays":["0"],"maxSplit":"0"}},{"type":"fragment","settings":{"packets":"1-1","lengths":["109","1"],"delays":["1"],"maxSplit":"355"}}]}") }
+    var finalMask by rememberSaveable { mutableStateOf(initialConfig.finalMask ?: "") }
     var kcpMtu by rememberSaveable { mutableStateOf(initialConfig.kcpMtu?.toString() ?: "") }
     var kcpTti by rememberSaveable { mutableStateOf(initialConfig.kcpTti?.toString() ?: "") }
     var browserDialerMode by rememberSaveable { mutableStateOf(initialConfig.browserDialerMode ?: "") }
