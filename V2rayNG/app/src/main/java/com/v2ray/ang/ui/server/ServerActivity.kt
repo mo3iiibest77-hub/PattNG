@@ -254,7 +254,7 @@ fun ServerScreen(
     var authority by rememberSaveable { mutableStateOf(initialConfig.authority ?: "") }
     var xhttpMode by rememberSaveable { mutableStateOf(initialConfig.xhttpMode ?: "") }
     var xhttpExtra by rememberSaveable { mutableStateOf(initialConfig.xhttpExtra ?: "") }
-    var finalMask by rememberSaveable { mutableStateOf(initialConfig.finalMask ?: "") }
+    var finalMask by rememberSaveable { mutableStateOf(initialConfig.finalMask?.takeIf { it.isNotBlank() } ?: AppConfig.DEFAULT_FINALMASK) }
     var kcpMtu by rememberSaveable { mutableStateOf(initialConfig.kcpMtu?.toString() ?: "") }
     var kcpTti by rememberSaveable { mutableStateOf(initialConfig.kcpTti?.toString() ?: "") }
     var browserDialerMode by rememberSaveable { mutableStateOf(initialConfig.browserDialerMode ?: "") }

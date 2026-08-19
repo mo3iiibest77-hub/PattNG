@@ -127,9 +127,28 @@ class RealPingWorkerService(
         if (!configResult.status) {
             return retFailure
         }
-        return RealPingExecutionLimiter.run(config.configType) {
-            CoreNativeManager.measureOutboundDelay(configResult.content, SettingsManager.getDelayTestUrl())
+        val delay = RealPingExecutionLimiter.run(config.configType) {
+            CoreNativeManager.measureOutboundDelay(
+                configResult.content,
+                SettingsManager.getDelayTestUrl()
+            )
         }
+
+        if (delay < 0) {
+            return retFailure
+        }
+
+        val trafficResult = RealTrafficSpeedTest.run(configResult.content)
+            ?: return retFailure
+
+        LogUtil.i(
+            com.v2ray.ang.AppConfig.TAG,
+            "RealPing: $guid delay=${delay}ms " +
+                "upload=${trafficResult.uploadBytesPerSecond / 1024}KB/s " +
+                "download=${trafficResult.downloadBytesPerSecond / 1024}KB/s"
+        )
+
+        return delay
     }
 
     private fun startTcping(guid: String): Long {
