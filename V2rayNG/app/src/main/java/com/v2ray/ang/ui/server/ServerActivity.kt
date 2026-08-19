@@ -258,16 +258,7 @@ fun ServerScreen(
     var kcpMtu by rememberSaveable { mutableStateOf(initialConfig.kcpMtu?.toString() ?: "") }
     var kcpTti by rememberSaveable { mutableStateOf(initialConfig.kcpTti?.toString() ?: "") }
     var browserDialerMode by rememberSaveable { mutableStateOf(initialConfig.browserDialerMode ?: "") }
-    var streamSecurity by rememberSaveable {
-        mutableStateOf(
-            initialConfig.security?.takeIf { it.isNotBlank() }
-                ?: if (initialConfig.configType in listOf(
-                    com.v2ray.ang.dto.EConfigType.VLESS,
-                    com.v2ray.ang.dto.EConfigType.VMESS,
-                    com.v2ray.ang.dto.EConfigType.TROJAN
-                )) "tls" else ""
-        )
-    }
+    var streamSecurity by rememberSaveable { mutableStateOf(initialConfig.security ?: "") }
     var sni by rememberSaveable { mutableStateOf(initialConfig.sni ?: "") }
     var allowInsecure by rememberSaveable { mutableStateOf(initialConfig.insecure == true) }
     var fingerPrint by rememberSaveable { mutableStateOf(initialConfig.fingerPrint?.takeIf { it.isNotBlank() } ?: "unsafe") }
