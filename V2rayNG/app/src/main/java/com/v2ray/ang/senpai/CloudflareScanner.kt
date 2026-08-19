@@ -32,7 +32,7 @@ interface ScanCallback {
 
 object CloudflareScanner {
     private const val TAG = "CloudflareScanner"
-    private const val TEST_URL = "https://www.gstatic.com/generate_204"
+    private const val TEST_URL = "https://cp.cloudflare.com/cdn-cgi/trace"
     private const val DEFAULT_CONCURRENCY = 4
     private const val IPS_PER_CIDR = 2
     private const val MAX_CANDIDATES = 60

@@ -801,6 +801,9 @@ class MainViewModel(
                         viewModelScope.launch(ioDispatcher) {
                             cacheMutex.withLock { groupDataCache.clear() }
                             setupGroupTab(forceRefresh = true)
+                            withContext(Dispatchers.Main) {
+                                refreshSelectedGuid()
+                            }
                         }
                     } else {
                         toastError(R.string.toast_failure)
