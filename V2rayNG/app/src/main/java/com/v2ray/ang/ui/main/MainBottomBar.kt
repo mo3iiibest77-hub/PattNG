@@ -92,13 +92,13 @@ fun MainBottomBar(
             modifier = Modifier
                 .align(Alignment.TopEnd)
                 .padding(end = 96.dp)
-                .offset(y = (-52).dp)
+                .offset(y = (-72).dp)
                 .navigationBarsPadding(),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Text(
                 text = if (isScanning) "$scanDone/$scanTotal" else "0/30",
-                fontSize = 10.sp,
+                fontSize = 14.sp,
                 color = if (isScanning) colorScanBlue else colorScanBlueDim,
                 fontWeight = FontWeight.Medium,
                 modifier = Modifier.padding(bottom = 2.dp)
