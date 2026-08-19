@@ -782,7 +782,7 @@ class MainViewModel(
             toastError(R.string.toast_failure)
             return
         }
-        _uiState.update { it.copy(isScanning = true, scanDone = 0, scanTotal = cfCandidates.size, scanBestIp = null) }
+        _uiState.update { it.copy(isScanning = true, scanDone = 0, scanTotal = 60, scanBestIp = null) }
         CloudflareScanner.scan(
             context = getApplication(),
             guid = guid,
