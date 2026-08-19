@@ -20,6 +20,8 @@ import kotlin.random.Random
 data class CandidateResult(
     val ip: String,
     val latencyMs: Long,
+    val uploadKBps: Long = 0L,
+    val downloadKBps: Long = 0L,
 ) {
     val isSuccess: Boolean get() = latencyMs >= 0
 }
@@ -169,8 +171,8 @@ object CloudflareScanner {
         }
         try {
             joinAll(*jobs.toTypedArray())
-            val best = results.filter { it.isSuccess }.minByOrNull { it.latencyMs }
-            LogUtil.i(TAG, "Done. Best: ${best?.ip} @ ${best?.latencyMs}ms")
+            val best = results.filter { it.isSuccess }.maxByOrNull { it.uploadKBps }
+            LogUtil.i(TAG, "Done. Best: ${best?.ip} @ ${best?.latencyMs}ms up=${best?.uploadKBps}KB/s")
             callback.onFinish(best)
         } catch (_: CancellationException) {
             callback.onCancelled()
@@ -199,8 +201,19 @@ object CloudflareScanner {
             val cfg = CoreConfigManager.getV2rayConfig4Speedtest(context, tempGuid)
             if (!cfg.status) return@withContext CandidateResult(ip, -1L)
             val latency = CoreNativeManager.measureOutboundDelay(cfg.content, TEST_URL)
-            LogUtil.d(TAG, "$ip -> ${if (latency >= 0) "${latency}ms" else "FAIL"}")
-            CandidateResult(ip, latency)
+            if (latency < 0) {
+                LogUtil.d(TAG, "$ip -> FAIL (latency)")
+                return@withContext CandidateResult(ip, -1L)
+            }
+            val traffic = com.v2ray.ang.service.RealTrafficSpeedTest.run(cfg.content)
+            if (traffic == null) {
+                LogUtil.d(TAG, "$ip -> FAIL (upload too slow)")
+                return@withContext CandidateResult(ip, -1L)
+            }
+            val uploadKBps = traffic.uploadBytesPerSecond / 1024
+            val downloadKBps = traffic.downloadBytesPerSecond / 1024
+            LogUtil.i(TAG, "$ip -> ${latency}ms up=${uploadKBps}KB/s dn=${downloadKBps}KB/s")
+            CandidateResult(ip, latency, uploadKBps, downloadKBps)
         } catch (e: Exception) {
             CandidateResult(ip, -1L)
         } finally {
