@@ -83,7 +83,13 @@ private fun CfScanScreen(
     var total    by remember { mutableIntStateOf(30) }
     var scanning by remember { mutableStateOf(false) }
     var bestIp   by remember { mutableStateOf<String?>(null) }
+    var showWelcome by remember { mutableStateOf(true) }
     val ctx      = androidx.compose.ui.platform.LocalContext.current
+
+    LaunchedEffect(Unit) {
+        kotlinx.coroutines.delay(10_000)
+        showWelcome = false
+    }
 
     LaunchedEffect(guid) {
         scanning = true
@@ -141,14 +147,14 @@ private fun CfScanScreen(
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                     Text(
-                        "QuietStorm Scanner",
+                    "🌩️ QuietStorm Scanner",
                         color = GoldGlow,
                         fontSize = 18.sp,
                         fontWeight = FontWeight.Bold,
                         letterSpacing = 1.sp,
                     )
                     Text(
-                        "Cloudflare IP Optimizer",
+                    "⚡ Cloudflare IP Scanner",
                         color = TextSecond,
                         fontSize = 11.sp,
                         letterSpacing = 2.sp,
@@ -164,6 +170,32 @@ private fun CfScanScreen(
                 }
             }
 
+            // ── Welcome Banner ───────────────────────────────────────────────
+            AnimatedVisibility(
+                visible = showWelcome,
+                enter   = fadeIn(tween(400)),
+                exit    = fadeOut(tween(600))
+            ) {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 6.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(Color(0xFF0D1117))
+                        .border(1.dp, Gold.copy(alpha = .3f), RoundedCornerShape(10.dp))
+                        .padding(12.dp),
+                    verticalAlignment     = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Text("✨ ☁️", fontSize = 16.sp)
+                    Text(
+                    "✨ ☁️ این کلاینت برای کانفیگ‌های پشت Cloudflare طراحی شده",
+                        color    = Gold,
+                        fontSize = 12.sp,
+                        lineHeight = 18.sp,
+                    )
+                }
+            }
             // ── Progress ──────────────────────────────────────────────────────
             AnimatedVisibility(scanning) {
                 Column(
@@ -175,7 +207,7 @@ private fun CfScanScreen(
                         Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Text("Scanning IPs...", color = TextSecond, fontSize = 12.sp)
+                    Text("🔍 Scanning...", color = TextSecond, fontSize = 12.sp)
                         Text(
                             "$done / $total",
                             color = Gold,
@@ -211,10 +243,10 @@ private fun CfScanScreen(
                     label         = "alpha"
                 )
                 val messages = listOf(
-                    "در حال جستجوی بهترین مسیر...",
-                    "اسکن رنج‌های Cloudflare...",
-                    "تست کیفیت اتصال...",
-                    "بهینه‌سازی برای ISP ایران..."
+                    "🌏 Scanning best routes...",
+                    "☁️ Testing Cloudflare ranges...",
+                    "📶 Checking connection quality...",
+                    "🚀 Optimizing for your ISP..."
                 )
                 val messageIndex by infiniteTransition.animateValue(
                     initialValue  = 0,
@@ -256,7 +288,7 @@ private fun CfScanScreen(
                         modifier = Modifier.size(18.dp)
                     )
                     Text(
-                        "Found $successCount usable IPs out of ${results.size} tested",
+                        "✅ Found $successCount clean IPs out of ${results.size} tested",
                         color      = GreenGood,
                         fontSize   = 13.sp,
                         fontWeight = FontWeight.Medium,
@@ -298,7 +330,7 @@ private fun CfScanScreen(
                         colors = ButtonDefaults.buttonColors(containerColor = Gold),
                     ) {
                         Text(
-                            "⚡   Apply Best IP & Connect",
+                        "⚡ Apply Best IP",
                             color      = BgDark,
                             fontWeight = FontWeight.Bold,
                             fontSize   = 15.sp,
@@ -391,7 +423,7 @@ private fun IpCard(
                     onClick  = onSelect,
                     modifier = Modifier.align(Alignment.End),
                 ) {
-                    Text("Use this IP", color = GoldDim, fontSize = 12.sp)
+                    Text("📌 Use this IP", color = GoldDim, fontSize = 12.sp)
                 }
             } else {
                 Row(
@@ -405,7 +437,7 @@ private fun IpCard(
                         tint     = Gold,
                         modifier = Modifier.size(14.dp)
                     )
-                    Text("Best IP", color = Gold, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    Text("🥇 Best", color = Gold, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                 }
             }
         }
