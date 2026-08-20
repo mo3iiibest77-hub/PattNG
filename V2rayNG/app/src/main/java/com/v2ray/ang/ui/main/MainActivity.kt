@@ -119,7 +119,15 @@ class MainActivity : HelperBaseComponentActivity() {
                     is MainAction.ShareFullContent -> shareFullContentAsync(action.guid)
                     MainAction.StartCFScan -> {
                         val guid = mainViewModel.uiState.value.selectedGuid
-                        if (guid != null) CfScanActivity.start(this@MainActivity, guid)
+                        if (guid != null) {
+                            CfScanActivity.start(this@MainActivity, guid)
+                        } else {
+                            android.widget.Toast.makeText(
+                                this@MainActivity,
+                                "ابتدا یک کانفیگ انتخاب کن",
+                                android.widget.Toast.LENGTH_SHORT
+                            ).show()
+                        }
                     }
                     else -> mainViewModel.onAction(action)
                 }
