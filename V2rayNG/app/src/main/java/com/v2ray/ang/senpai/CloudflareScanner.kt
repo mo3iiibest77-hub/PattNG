@@ -147,21 +147,29 @@ object CloudflareScanner {
         scanJob = SupervisorJob()
         scanScope = CoroutineScope(scanJob + Dispatchers.IO)
         scanScope.launch {
-            val lines = try {
+            val allLines = try {
                 context.assets.open("cf_ranges_v4.txt")
                     .bufferedReader().readLines()
                     .filter { it.isNotBlank() && !it.startsWith("#") }
             } catch (e: Exception) { emptyList() }
+
+            val existing     = IspManager.getProfile(context, ispName)
+            val startFrom    = existing?.lastScannedIndex ?: 0
+            val alreadyFound = existing?.goodCidrs?.toMutableList() ?: mutableListOf()
+            val lines = if (startFrom > 0 && startFrom < allLines.size) {
+                LogUtil.i(TAG, "Discovery resuming from $startFrom for $ispName")
+                allLines.drop(startFrom)
+            } else allLines
 
             val baseProfile = MmkvManager.decodeServerConfig(guid) ?: run {
                 withContext(Dispatchers.Main) { onFinish(emptyList()) }
                 return@launch
             }
 
-            val total = lines.size
-            var done = 0
-            val goodCidrs = mutableListOf<Pair<String, Long>>() // cidr -> best uploadKBps
-            val semaphore = Semaphore(3)
+            val total = allLines.size
+            var done  = startFrom
+            val newGoodCidrs = mutableListOf<Pair<String, Long>>()
+            val semaphore = Semaphore(6)
             val lock = Any()
 
             val jobs = lines.map { cidr ->
@@ -169,11 +177,11 @@ object CloudflareScanner {
                     semaphore.withPermit {
                         val parts = cidr.trim().split("/")
                         var bestUpload = 0L
-                        var hasGoodIp = false
+                        var hasGoodIp  = false
                         if (parts.size == 2) {
                             try {
-                                val sampleIps = randomIpsFromCidr(parts[0], parts[1].toInt(), 2)
-                                for (ip in sampleIps) {
+                                val ips = randomIpsFromCidr(parts[0], parts[1].toInt(), 2)
+                                for (ip in ips) {
                                     val r = testCandidate(context, guid, baseProfile, ip)
                                     if (r.isSuccess && r.uploadKBps >= 20L) {
                                         hasGoodIp = true
@@ -186,7 +194,11 @@ object CloudflareScanner {
                         }
                         synchronized(lock) {
                             done++
-                            if (hasGoodIp) goodCidrs.add(cidr.trim() to bestUpload)
+                            if (hasGoodIp) newGoodCidrs.add(cidr.trim() to bestUpload)
+                            if (done % 20 == 0) {
+                                val partial = (alreadyFound + newGoodCidrs.map { it.first }).distinct()
+                                IspManager.savePartialProgress(context, ispName, partial, done)
+                            }
                         }
                         withContext(Dispatchers.Main) {
                             onProgress(done, total, cidr.trim(), hasGoodIp)
@@ -196,19 +208,17 @@ object CloudflareScanner {
             }
             try {
                 joinAll(*jobs.toTypedArray())
-                val topCidrs = goodCidrs.sortedByDescending { it.second }.take(20).map { it.first }
-                LogUtil.i(TAG, "Discovery done $ispName: ${topCidrs.size}/${total} good ranges")
-                IspManager.saveProfile(context, IspProfile(ispName, topCidrs))
-                withContext(Dispatchers.Main) { onFinish(topCidrs) }
+                val allGood = (alreadyFound + newGoodCidrs.sortedByDescending { it.second }.map { it.first }).distinct().take(30)
+                IspManager.saveProfile(context, IspProfile(ispName, allGood, lastScannedIndex = 0))
+                withContext(Dispatchers.Main) { onFinish(allGood) }
             } catch (_: CancellationException) {
-                val partial = goodCidrs.sortedByDescending { it.second }.take(20).map { it.first }
-                if (partial.isNotEmpty()) IspManager.saveProfile(context, IspProfile(ispName, partial))
+                val partial = (alreadyFound + newGoodCidrs.map { it.first }).distinct()
+                IspManager.savePartialProgress(context, ispName, partial, done)
                 withContext(Dispatchers.Main) { onFinish(partial) }
             }
         }
     }
 
-        // ── Targeted scan: only from saved ISP ranges ─────────────────────────────
     fun scanForIsp(
         context: Context,
         guid: String,

@@ -412,10 +412,14 @@ private fun IspSelectScreen(
                     fontSize = 12.sp, fontWeight = FontWeight.Bold)
             }
             items(profiles) { p ->
-                SavedIspCard(p,
-                    onScan       = { onStartScan(p.name) },
+                SavedIspCard(
+                    profile = p,
+                    onScan = { onStartScan(p.name) },
                     onRediscover = { onStartDiscovery(p.name) },
-                    onDelete     = { onDelete(p.name) }
+                    onDelete = { onDelete(p.name) },
+                    onAddManualCidr = { cidr -> IspManager.addManualCidr(ctx, p.name, cidr); refreshProfiles() },
+                    onRemoveManualCidr = { cidr -> IspManager.removeManualCidr(ctx, p.name, cidr); refreshProfiles() }
+                ) }
                 )
             }
             item { HorizontalDivider(color = S_Border, modifier = Modifier.padding(vertical = 4.dp)) }
@@ -463,39 +467,117 @@ private fun SavedIspCard(
     onScan: () -> Unit,
     onRediscover: () -> Unit,
     onDelete: () -> Unit,
+    onAddManualCidr: (String) -> Unit,
+    onRemoveManualCidr: (String) -> Unit,
 ) {
-    Row(
+    var expanded by remember { mutableStateOf(false) }
+    var showAddCidr by remember { mutableStateOf(false) }
+    var cidrInput by remember { mutableStateOf("") }
+    val hasPartial = profile.lastScannedIndex > 0
+
+    Column(
         Modifier.fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
-            .background(S_Card)
-            .border(1.dp, S_Border, RoundedCornerShape(12.dp))
-            .padding(12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp)
+            .background(BgCard)
+            .border(1.dp, CardBorder, RoundedCornerShape(12.dp))
     ) {
-        Column(Modifier.weight(1f)) {
-            Text(profile.name, color = S_TextPri, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-            Text("${profile.goodCidrs.size} رنج کشف‌شده", color = S_TextSec, fontSize = 11.sp)
-        }
-        TextButton(onClick = onDelete) {
-            Text("حذف", color = S_Red, fontSize = 11.sp)
-        }
-        TextButton(onClick = onRediscover) {
-            Text("Discovery مجدد", color = S_GoldDim, fontSize = 11.sp)
-        }
-        Button(
-            onClick = onScan,
-            shape  = RoundedCornerShape(8.dp),
-            colors = ButtonDefaults.buttonColors(containerColor = S_Gold)
+        Row(
+            Modifier.fillMaxWidth().padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Text("اسکن", color = S_Bg, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+            Column(Modifier.weight(1f)) {
+                Text(profile.name, color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("${profile.goodCidrs.size} رنج", color = GreenGood, fontSize = 11.sp)
+                    if (profile.manualCidrs.isNotEmpty())
+                        Text("+${profile.manualCidrs.size} دستی", color = Gold, fontSize = 11.sp)
+                    if (hasPartial)
+                        Text("(ناتمام ${profile.lastScannedIndex})", color = YellowMid, fontSize = 10.sp)
+                }
+            }
+            IconButton(onClick = { expanded = !expanded }, Modifier.size(32.dp)) {
+                Icon(
+                    painterResource(if (expanded) R.drawable.ic_expand_less_24dp else R.drawable.ic_expand_more_24dp),
+                    null, tint = TextSecond, modifier = Modifier.size(18.dp)
+                )
+            }
+            TextButton(onClick = onDelete) { Text("حذف", color = RedBad, fontSize = 11.sp) }
+        }
+        Row(
+            Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, bottom = 10.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            TextButton(
+                onClick = onRediscover,
+                modifier = Modifier.weight(1f),
+                colors = ButtonDefaults.textButtonColors(contentColor = GoldDim)
+            ) { Text(if (hasPartial) "ادامه Discovery" else "Discovery مجدد", fontSize = 11.sp) }
+            Button(
+                onClick = onScan,
+                modifier = Modifier.weight(1f),
+                shape = RoundedCornerShape(8.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = Gold)
+            ) { Text("اسکن IP", color = BgDark, fontWeight = FontWeight.Bold, fontSize = 12.sp) }
+        }
+        AnimatedVisibility(expanded) {
+            Column(Modifier.padding(horizontal = 12.dp).padding(bottom = 12.dp)) {
+                HorizontalDivider(color = CardBorder, modifier = Modifier.padding(bottom = 8.dp))
+                if (profile.manualCidrs.isNotEmpty()) {
+                    Text("رنج‌های دستی:", color = Gold, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.height(4.dp))
+                    profile.manualCidrs.forEach { cidr ->
+                        Row(Modifier.fillMaxWidth().padding(vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Text("• $cidr", color = Gold, fontSize = 11.sp, modifier = Modifier.weight(1f))
+                            IconButton(onClick = { onRemoveManualCidr(cidr) }, Modifier.size(24.dp)) {
+                                Icon(painterResource(R.drawable.ic_delete_24dp), null, tint = RedBad, modifier = Modifier.size(14.dp))
+                            }
+                        }
+                    }
+                    Spacer(Modifier.height(6.dp))
+                }
+                if (profile.goodCidrs.isNotEmpty()) {
+                    Text("رنج‌های کشف‌شده (${profile.goodCidrs.size}):", color = GreenGood, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.height(4.dp))
+                    profile.goodCidrs.take(10).forEach { cidr ->
+                        Text("• $cidr", color = TextSecond, fontSize = 11.sp, modifier = Modifier.padding(vertical = 1.dp))
+                    }
+                    if (profile.goodCidrs.size > 10)
+                        Text("... و ${profile.goodCidrs.size - 10} رنج دیگه", color = TextSecond.copy(.5f), fontSize = 10.sp)
+                }
+                Spacer(Modifier.height(8.dp))
+                if (showAddCidr) {
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        OutlinedTextField(
+                            value = cidrInput,
+                            onValueChange = { cidrInput = it },
+                            placeholder = { Text("104.16.0.0/12", color = TextSecond.copy(.4f), fontSize = 11.sp) },
+                            singleLine = true,
+                            modifier = Modifier.weight(1f),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = Gold, unfocusedBorderColor = CardBorder,
+                                focusedTextColor = TextPrimary, unfocusedTextColor = TextPrimary, cursorColor = Gold,
+                            ),
+                        )
+                        Button(
+                            onClick = {
+                                if (cidrInput.isNotBlank()) { onAddManualCidr(cidrInput.trim()); cidrInput = ""; showAddCidr = false }
+                            },
+                            shape = RoundedCornerShape(8.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = Gold),
+                        ) { Text("اضافه", color = BgDark, fontSize = 12.sp) }
+                    }
+                } else {
+                    TextButton(onClick = { showAddCidr = true }, colors = ButtonDefaults.textButtonColors(contentColor = Gold)) {
+                        Text("+ اضافه کردن رنج دستی", fontSize = 12.sp)
+                    }
+                }
+            }
         }
     }
 }
 
-// ══════════════════════════════════════════════════════════════════════════════
-// ── Discovery Screen  (تم ماتریکس سبز)
-// ══════════════════════════════════════════════════════════════════════════════
+
 @Composable
 private fun DiscoveryScreen(
     discRows: List<DiscoveryRow>,
