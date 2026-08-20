@@ -1,38 +1,29 @@
 package com.v2ray.ang.ui.main
 
 import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.navigationBars
-import androidx.compose.foundation.layout.navigationBarsPadding
-import androidx.compose.foundation.layout.offset
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.v2ray.ang.R
@@ -41,10 +32,10 @@ import com.v2ray.ang.ui.compose.colorFabActive
 import com.v2ray.ang.ui.compose.colorFabInactiveDark
 import com.v2ray.ang.ui.compose.colorFabInactiveLight
 
-private val colorScanBlue = Color(0xFF1E88E5)
-private val colorScanBlueDim = Color(0xFF1565C0)
-private val colorScanBg = Color(0xFF1A1A1A)
-private val colorScanGreen = Color(0xFF00C853)
+private val Gold       = Color(0xFFC9A84C)
+private val GoldDim    = Color(0xFF8A6B2A)
+private val GoldGlow   = Color(0xFFE8C96A)
+private val ScanCancel = Color(0xFFCF4848)
 
 @Composable
 fun MainBottomBar(
@@ -56,6 +47,27 @@ fun MainBottomBar(
     scanTotal: Int,
     onAction: (MainAction) -> Unit
 ) {
+    // انیمیشن pulse برای دکمه اسکن
+    val infiniteTransition = rememberInfiniteTransition(label = "pulse")
+    val pulseAlpha by infiniteTransition.animateFloat(
+        initialValue = 0.6f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(900, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "pulseAlpha"
+    )
+    val labelAlpha by infiniteTransition.animateFloat(
+        initialValue = 0.7f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1200, easing = EaseInOut),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "labelAlpha"
+    )
+
     Box(modifier = Modifier.fillMaxWidth()) {
         Column(
             modifier = Modifier
@@ -64,12 +76,9 @@ fun MainBottomBar(
                 .windowInsetsPadding(WindowInsets.navigationBars)
         ) {
             AppDivider()
-
-            // اگه داره اسکن می‌کنه، progress bar نشون بده
             if (isScanning && scanTotal > 0) {
                 ScanProgressBar(done = scanDone, total = scanTotal)
             }
-
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -77,7 +86,6 @@ fun MainBottomBar(
                     .clickable { onAction(MainAction.TestCurrentServer) }
                     .padding(horizontal = 16.dp),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 Text(
                     text = displayText,
@@ -87,43 +95,61 @@ fun MainBottomBar(
             }
         }
 
-        // Scanner FAB — سمت چپ FAB اصلی
+        // Scanner FAB + label
         Column(
             modifier = Modifier
                 .align(Alignment.TopEnd)
                 .padding(end = 96.dp)
-                .offset(y = (-72).dp)
+                .offset(y = (-84).dp)
                 .navigationBarsPadding(),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
+            // متن بالای دکمه
             Text(
-                text = if (isScanning) "$scanDone/$scanTotal" else "0/30",
-                fontSize = 14.sp,
-                color = if (isScanning) colorScanBlue else colorScanBlueDim,
+                text = if (isScanning) "در حال اسکن..." else "بهترین IP را\nپیدا کن",
+                fontSize = 10.sp,
+                color = if (isScanning) GoldGlow else Gold,
                 fontWeight = FontWeight.Medium,
-                modifier = Modifier.padding(bottom = 2.dp)
+                fontStyle = FontStyle.Italic,
+                textAlign = TextAlign.Center,
+                lineHeight = 13.sp,
+                modifier = Modifier
+                    .alpha(if (isScanning) pulseAlpha else labelAlpha)
+                    .padding(bottom = 4.dp)
             )
+
             FloatingActionButton(
                 onClick = {
                     if (isScanning) onAction(MainAction.CancelCFScan)
                     else onAction(MainAction.StartCFScan)
                 },
-                modifier = Modifier.size(52.dp),
-                containerColor = if (isScanning) colorScanGreen else colorScanBlue
+                modifier = Modifier
+                    .size(52.dp)
+                    .alpha(if (isScanning) pulseAlpha else 1f),
+                containerColor = if (isScanning) ScanCancel else Gold,
             ) {
                 Icon(
                     painter = painterResource(
                         if (isScanning) R.drawable.ic_stop_24dp
                         else R.drawable.ic_scan_24dp
                     ),
-                    contentDescription = if (isScanning) "Cancel scan" else "Scan IPs",
-                    tint = Color.White,
+                    contentDescription = if (isScanning) "Cancel" else "IP Scan",
+                    tint = Color(0xFF0D0D0F),
                     modifier = Modifier.size(22.dp)
                 )
             }
+
+            Text(
+                text = "IP Scan",
+                fontSize = 9.sp,
+                color = GoldDim,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 1.sp,
+                modifier = Modifier.padding(top = 3.dp)
+            )
         }
 
-        // FAB اصلی (play/stop)
+        // FAB اصلی
         FloatingActionButton(
             onClick = { onAction(MainAction.ToggleService) },
             modifier = Modifier
@@ -150,26 +176,25 @@ fun MainBottomBar(
 
 @Composable
 private fun ScanProgressBar(done: Int, total: Int) {
-    val fraction = if (total > 0) done.toFloat() / total else 0f
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(4.dp)
+        horizontalArrangement = Arrangement.spacedBy(3.dp)
     ) {
         repeat(total) { index ->
             val filled = index < done
             val dotColor by animateColorAsState(
-                targetValue = if (filled) Color(0xFF2196F3) else Color(0xFF2A2A2A),
+                targetValue = if (filled) Gold else Color(0xFF252530),
                 animationSpec = tween(300),
                 label = "dot_$index"
             )
             Box(
                 modifier = Modifier
                     .weight(1f)
-                    .height(6.dp)
-                    .clip(RoundedCornerShape(3.dp))
+                    .height(4.dp)
+                    .clip(RoundedCornerShape(2.dp))
                     .background(dotColor)
             )
         }

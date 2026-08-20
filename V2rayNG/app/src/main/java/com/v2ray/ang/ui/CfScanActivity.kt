@@ -5,6 +5,7 @@ import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import com.v2ray.ang.ui.compose.AppTheme
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.*
@@ -15,6 +16,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.painterResource
@@ -55,6 +59,7 @@ class CfScanActivity : ComponentActivity() {
         val guid = intent.getStringExtra("guid") ?: run { finish(); return }
 
         setContent {
+            AppTheme {
             CfScanScreen(
                 guid        = guid,
                 onBack      = { finish() },
@@ -64,6 +69,7 @@ class CfScanActivity : ComponentActivity() {
                     finish()
                 }
             )
+            }
         }
     }
 }
@@ -180,6 +186,40 @@ private fun CfScanScreen(
                         trackColor = CardBorder,
                     )
                 }
+            }
+
+            // ── Animated scanning message ─────────────────────────────────
+            AnimatedVisibility(
+                visible = scanning,
+                enter = fadeIn(tween(500)),
+                exit = fadeOut(tween(300))
+            ) {
+                val infiniteTransition = rememberInfiniteTransition(label = "scan_pulse")
+                val alpha by infiniteTransition.animateFloat(
+                    initialValue = 0.4f, targetValue = 1f,
+                    animationSpec = infiniteRepeatable(tween(800), RepeatMode.Reverse),
+                    label = "alpha"
+                )
+                val messages = listOf(
+                    "در حال جستجوی بهترین مسیر...",
+                    "اسکن رنج‌های Cloudflare...",
+                    "تست کیفیت اتصال...",
+                    "بهینه‌سازی برای ISP ایران..."
+                )
+                val messageIndex by infiniteTransition.animateValue(
+                    initialValue = 0, targetValue = messages.size - 1,
+                    typeConverter = Int.VectorConverter,
+                    animationSpec = infiniteRepeatable(tween(2000), RepeatMode.Restart),
+                    label = "msg"
+                )
+                Text(
+                    text = messages[messageIndex],
+                    color = Gold.copy(alpha = alpha),
+                    fontSize = 12.sp,
+                    fontStyle = FontStyle.Italic,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 4.dp)
+                )
             }
 
             // ── Status banner (after scan) ────────────────────────────────
