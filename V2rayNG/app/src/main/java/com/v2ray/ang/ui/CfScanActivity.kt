@@ -12,15 +12,13 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.res.painterResource
+import com.v2ray.ang.R
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
@@ -135,7 +133,7 @@ private fun CfScanScreen(
                     .padding(top = 48.dp, bottom = 16.dp, start = 16.dp, end = 16.dp)
             ) {
                 IconButton(onClick = onBack, Modifier.align(Alignment.CenterStart)) {
-                    Icon(Icons.Default.ArrowBack, null, tint = Gold)
+                    Icon(painterResource(R.drawable.ic_arrow_back_24dp), null, tint = Gold)
                 }
                 Column(Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally) {
                     Text(
@@ -154,7 +152,7 @@ private fun CfScanScreen(
                 }
                 if (scanning) {
                     IconButton(onClick = { CloudflareScanner.cancel() }, Modifier.align(Alignment.CenterEnd)) {
-                        Icon(Icons.Default.Close, null, tint = RedBad)
+                        Icon(painterResource(R.drawable.ic_stop_24dp), null, tint = RedBad)
                     }
                 }
             }
@@ -198,7 +196,7 @@ private fun CfScanScreen(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    Icon(Icons.Default.CheckCircle, null, tint = GreenGood, modifier = Modifier.size(18.dp))
+                    Icon(painterResource(R.drawable.ic_action_done), null, tint = GreenGood, modifier = Modifier.size(18.dp))
                     Text(
                         "Found $successCount usable IPs out of ${results.size} tested",
                         color = GreenGood,
@@ -347,7 +345,7 @@ private fun IpCard(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
-                        Icon(Icons.Default.CheckCircle, null, tint = Gold, modifier = Modifier.size(14.dp))
+                        Icon(painterResource(R.drawable.ic_action_done), null, tint = Gold, modifier = Modifier.size(14.dp))
                         Text("Best IP", color = Gold, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                     }
                 }
