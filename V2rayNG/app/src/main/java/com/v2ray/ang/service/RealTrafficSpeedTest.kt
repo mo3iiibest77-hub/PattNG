@@ -121,13 +121,7 @@ internal object RealTrafficSpeedTest {
             val uploadElapsed = (System.nanoTime() - uploadStart).coerceAtLeast(1L)
             val uploadBytesPerSecond = TEST_SIZE_BYTES * 1_000_000_000L / uploadElapsed
 
-            if (uploadBytesPerSecond < MIN_UPLOAD_BYTES_PER_SECOND) {
-                LogUtil.w(
-                    AppConfig.TAG,
-                    "RealTrafficSpeedTest: upload too slow: ${uploadBytesPerSecond / 1024} KB/s"
-                )
-                return@withContext null
-            }
+            // Upload recorded for display/ranking only — not a rejection gate
 
             // ── DOWNLOAD ─────────────────────────────────────────────────────
             val downloadRequest = Request.Builder()
