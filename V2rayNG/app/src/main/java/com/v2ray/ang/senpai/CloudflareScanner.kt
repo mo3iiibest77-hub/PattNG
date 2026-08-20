@@ -15,6 +15,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
+import com.v2ray.ang.senpai.IspManager
+import com.v2ray.ang.senpai.IspProfile
 import kotlin.random.Random
 
 data class CandidateResult(
@@ -130,6 +132,100 @@ object CloudflareScanner {
     }
 
     fun cancel() { scanJob.cancel() }
+
+    // ── Discovery: ping all CIDRs, find which ranges respond ─────────────────
+    fun discoverGoodCidrs(
+        context: Context,
+        ispName: String,
+        onProgress: (done: Int, total: Int, cidr: String, responded: Boolean) -> Unit,
+        onFinish: (goodCidrs: List<String>) -> Unit,
+    ) {
+        cancel()
+        scanJob = SupervisorJob()
+        scanScope = CoroutineScope(scanJob + Dispatchers.IO)
+        scanScope.launch {
+            val lines = try {
+                context.assets.open("cf_ranges_v4.txt")
+                    .bufferedReader().readLines()
+                    .filter { it.isNotBlank() && !it.startsWith("#") }
+            } catch (e: Exception) { emptyList() }
+
+            val total = lines.size
+            var done = 0
+            val goodCidrs = mutableListOf<String>()
+            val semaphore = Semaphore(8)
+            val lock = Any()
+
+            val jobs = lines.map { cidr ->
+                scanScope.launch {
+                    semaphore.withPermit {
+                        val parts = cidr.trim().split("/")
+                        val responded = if (parts.size == 2) {
+                            try {
+                                val ips = randomIpsFromCidr(parts[0], parts[1].toInt(), 1)
+                                val ip = ips.firstOrNull() ?: ""
+                                pingIp(ip)
+                            } catch (e: Exception) { false }
+                        } else false
+                        synchronized(lock) {
+                            done++
+                            if (responded) goodCidrs.add(cidr.trim())
+                        }
+                        withContext(Dispatchers.Main) {
+                            onProgress(done, total, cidr.trim(), responded)
+                        }
+                    }
+                }
+            }
+            try {
+                joinAll(*jobs.toTypedArray())
+                IspManager.saveProfile(context, IspProfile(ispName, goodCidrs))
+                withContext(Dispatchers.Main) { onFinish(goodCidrs) }
+            } catch (_: CancellationException) {
+                withContext(Dispatchers.Main) { onFinish(goodCidrs) }
+            }
+        }
+    }
+
+    // ── Targeted scan: only from saved ISP ranges ─────────────────────────────
+    fun scanForIsp(
+        context: Context,
+        guid: String,
+        ispName: String,
+        concurrency: Int = DEFAULT_CONCURRENCY,
+        callback: ScanCallback,
+    ) {
+        val profile = IspManager.getProfile(context, ispName)
+        if (profile == null || profile.goodCidrs.isEmpty()) {
+            // هنوز discovery نشده — fallback به اسکن معمولی
+            scan(context, guid, emptyList(), concurrency, callback)
+            return
+        }
+        cancel()
+        scanJob = SupervisorJob()
+        scanScope = CoroutineScope(scanJob + Dispatchers.IO)
+        scanScope.launch {
+            val candidates = mutableListOf<String>()
+            val shuffled = profile.goodCidrs.shuffled()
+            for (cidr in shuffled) {
+                if (candidates.size >= MAX_CANDIDATES) break
+                try {
+                    val parts = cidr.trim().split("/")
+                    if (parts.size != 2) continue
+                    candidates.addAll(randomIpsFromCidr(parts[0], parts[1].toInt(), IPS_PER_CIDR))
+                } catch (_: Exception) {}
+            }
+            LogUtil.i(TAG, "ISP=$ispName targeted scan: ${candidates.size} candidates from ${profile.goodCidrs.size} ranges")
+            runScan(context, guid, candidates.take(MAX_CANDIDATES), concurrency, callback)
+        }
+    }
+
+    private fun pingIp(ip: String): Boolean {
+        return try {
+            val proc = Runtime.getRuntime().exec(arrayOf("ping", "-c", "1", "-W", "1", ip))
+            proc.waitFor() == 0
+        } catch (e: Exception) { false }
+    }
 
     fun applyBestIp(guid: String, bestIp: String): Boolean {
         val profile = MmkvManager.decodeServerConfig(guid) ?: run {
