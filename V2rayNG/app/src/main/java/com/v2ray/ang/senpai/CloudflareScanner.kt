@@ -133,7 +133,7 @@ object CloudflareScanner {
 
     fun cancel() { scanJob.cancel() }
 
-    // ── Discovery: ping all CIDRs, find which ranges respond ─────────────────
+    // ── Discovery: real quality test on sample IPs from each CIDR ─────────────────
     fun discoverGoodCidrs(
         context: Context,
         ispName: String,
@@ -143,46 +143,94 @@ object CloudflareScanner {
         cancel()
         scanJob = SupervisorJob()
         scanScope = CoroutineScope(scanJob + Dispatchers.IO)
+
         scanScope.launch {
             val lines = try {
                 context.assets.open("cf_ranges_v4.txt")
                     .bufferedReader().readLines()
                     .filter { it.isNotBlank() && !it.startsWith("#") }
-            } catch (e: Exception) { emptyList() }
+            } catch (e: Exception) {
+                emptyList()
+            }
 
             val total = lines.size
             var done = 0
-            val goodCidrs = mutableListOf<String>()
-            val semaphore = Semaphore(8)
+            val scoredCidrs = mutableListOf<Pair<String, Long>>() // CIDR to avg uploadKBps
+            val semaphore = Semaphore(3) // concurrency پایین‌تر برای Discovery
             val lock = Any()
+
+            // یک profile پایه برای تست لازم است
+            val anyGuid = MmkvManager.decodeServerList()?.firstOrNull()
+                ?: run {
+                    withContext(Dispatchers.Main) { onFinish(emptyList()) }
+                    return@launch
+                }
+            val baseProfile = MmkvManager.decodeServerConfig(anyGuid) ?: run {
+                withContext(Dispatchers.Main) { onFinish(emptyList()) }
+                return@launch
+            }
 
             val jobs = lines.map { cidr ->
                 scanScope.launch {
                     semaphore.withPermit {
                         val parts = cidr.trim().split("/")
-                        val responded = if (parts.size == 2) {
+                        var avgUpload = 0L
+                        var hasGoodIp = false
+
+                        if (parts.size == 2) {
                             try {
-                                val ips = randomIpsFromCidr(parts[0], parts[1].toInt(), 1)
-                                val ip = ips.firstOrNull() ?: ""
-                                pingIp(ip)
-                            } catch (e: Exception) { false }
-                        } else false
+                                val sampleIps = randomIpsFromCidr(parts[0], parts[1].toInt(), 3)
+                                val successfulUploads = mutableListOf<Long>()
+
+                                for (ip in sampleIps) {
+                                    val result = testCandidate(context, anyGuid, baseProfile, ip)
+                                    if (result.isSuccess && result.uploadKBps >= 15) { // threshold نرم
+                                        successfulUploads.add(result.uploadKBps)
+                                    }
+                                }
+
+                                if (successfulUploads.isNotEmpty()) {
+                                    avgUpload = successfulUploads.average().toLong()
+                                    hasGoodIp = true
+                                }
+                            } catch (e: Exception) {
+                                LogUtil.d(TAG, "Discovery error on $cidr: ${e.message}")
+                            }
+                        }
+
                         synchronized(lock) {
                             done++
-                            if (responded) goodCidrs.add(cidr.trim())
+                            if (hasGoodIp) {
+                                scoredCidrs.add(cidr.trim() to avgUpload)
+                            }
                         }
+
                         withContext(Dispatchers.Main) {
-                            onProgress(done, total, cidr.trim(), responded)
+                            onProgress(done, total, cidr.trim(), hasGoodIp)
                         }
                     }
                 }
             }
+
             try {
                 joinAll(*jobs.toTypedArray())
-                IspManager.saveProfile(context, IspProfile(ispName, goodCidrs))
-                withContext(Dispatchers.Main) { onFinish(goodCidrs) }
+
+                // فقط ۱۰ رنج برتر بر اساس میانگین آپلود
+                val topCidrs = scoredCidrs
+                    .sortedByDescending { it.second }
+                    .take(10)
+                    .map { it.first }
+
+                LogUtil.i(TAG, "Discovery finished for $ispName: ${topCidrs.size} good ranges saved")
+                IspManager.saveProfile(context, IspProfile(ispName, topCidrs))
+
+                withContext(Dispatchers.Main) {
+                    onFinish(topCidrs)
+                }
             } catch (_: CancellationException) {
-                withContext(Dispatchers.Main) { onFinish(goodCidrs) }
+                withContext(Dispatchers.Main) {
+                    onFinish(scoredCidrs.map { it.first })
+                }
             }
         }
     }
