@@ -211,6 +211,12 @@
             android:exported="false" />
 
         <service
+            android:name=".service.CfScanService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="specialUse" />
+
+        <service
             android:name=".service.CoreVpnService"
             android:enabled="true"
             android:exported="false"
