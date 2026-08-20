@@ -56,16 +56,16 @@ private val S_Border    = Color(0xFF252530)
 // ══════════════════════════════════════════════════════════════════════════════
 // ── DISCOVERY palette  (سبز-ماتریکس — کاملاً متضاد)
 // ══════════════════════════════════════════════════════════════════════════════
-private val D_Bg        = Color(0xFF020F05)   // تقریباً مشکی سبز
-private val D_Card      = Color(0xFF061209)
-private val D_Bright    = Color(0xFF00FF41)   // سبز روشن ماتریکس
-private val D_Mid       = Color(0xFF00C030)
-private val D_Dim       = Color(0xFF1A4D22)
-private val D_TextPri   = Color(0xFF00FF41)
-private val D_TextSec   = Color(0xFF2A7A35)
-private val D_Border    = Color(0xFF0A2E12)
-private val D_Fail      = Color(0xFF0F1F10)
-private val D_FailBrd   = Color(0xFF0D1A0D)
+private val D_Bg        = Color(0xFF0D0000)   // تقریباً مشکی سبز
+private val D_Card      = Color(0xFF1A0A0A)
+private val D_Bright    = Color(0xFFC0392B)   // سبز روشن ماتریکس
+private val D_Mid       = Color(0xFF922B21)
+private val D_Dim       = Color(0xFF4A1010)
+private val D_TextPri   = Color(0xFFF1C40F)
+private val D_TextSec   = Color(0xFF8A7A30)
+private val D_Border    = Color(0xFF3A1010)
+private val D_Fail      = Color(0xFF120505)
+private val D_FailBrd   = Color(0xFF1A0808)
 
 // ══════════════════════════════════════════════════════════════════════════════
 
@@ -559,7 +559,7 @@ private fun DiscoveryScreen(
 private fun DiscoveryRowCard(row: DiscoveryRow) {
     val (bg, brdColor, txt, prefix) = when (row.state) {
         DiscState.SCANNING -> listOf(Color(0xFF041209), D_Dim, D_Mid, ">")
-        DiscState.GOOD     -> listOf(Color(0xFF061A0A), D_Mid, D_Bright, "OK")
+        DiscState.GOOD     -> listOf(Color(0xFF0A1A08), Color(0xFF27AE60), Color(0xFF27AE60), "OK")
         DiscState.FAIL     -> listOf(D_Fail, D_FailBrd, D_TextSec.copy(alpha = .4f), "··")
     }
     Row(
