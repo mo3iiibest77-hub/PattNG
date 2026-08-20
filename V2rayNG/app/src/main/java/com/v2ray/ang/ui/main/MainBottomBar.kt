@@ -140,7 +140,7 @@ fun MainBottomBar(
             }
 
             Text(
-                text = "IP Scan",
+                text = "🌐 اسکن IP",
                 fontSize = 9.sp,
                 color = GoldDim,
                 fontWeight = FontWeight.Bold,
