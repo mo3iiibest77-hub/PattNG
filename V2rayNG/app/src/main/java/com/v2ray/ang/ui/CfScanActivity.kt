@@ -66,6 +66,7 @@ private val D_TextSec   = Color(0xFF607090)
 private val D_Border    = Color(0xFF1A2A4A)
 private val D_Fail      = Color(0xFF080C18)
 private val D_FailBrd   = Color(0xFF0D1530)
+private val D_Accent2   = Color(0xFF00E5A0)
 
 // ══════════════════════════════════════════════════════════════════════════════
 
