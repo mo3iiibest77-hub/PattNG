@@ -359,6 +359,10 @@
                 android:resource="@xml/cache_paths" />
         </provider>
 
+            <activity
+            android:name=".ui.CfScanActivity"
+            android:exported="false"
+            android:theme="@style/Theme.AppCompat.NoActionBar" />
     </application>
 
 </manifest>

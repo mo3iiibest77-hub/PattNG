@@ -116,6 +116,10 @@ class MainActivity : HelperBaseComponentActivity() {
                     is MainAction.EditServer -> editServer(action.guid, action.profile)
                     is MainAction.ShareClipboard -> shareToClipboard(action.guid)
                     is MainAction.ShareFullContent -> shareFullContentAsync(action.guid)
+                    MainAction.StartCFScan -> {
+                        val guid = mainViewModel.uiState.value.selectedGuid
+                        if (guid != null) CfScanActivity.start(this@MainActivity, guid)
+                    }
                     else -> mainViewModel.onAction(action)
                 }
             },
