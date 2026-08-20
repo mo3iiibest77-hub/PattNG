@@ -133,109 +133,82 @@ object CloudflareScanner {
 
     fun cancel() { scanJob.cancel() }
 
-    // ── Discovery: real quality test on sample IPs from each CIDR ─────────────────
+    // ── Discovery: تست کامل با threshold نرم — فقط رنج‌هایی که واقعاً کار می‌کنن ────
+    // لایه ۱: از هر CIDR یه IP تست کامل می‌زنه (latency + upload)
+    // threshold: upload >= 20 KB/s — نرمه، هر رنجی که حداقل یه IP خوب داشت ذخیره میشه
     fun discoverGoodCidrs(
         context: Context,
         ispName: String,
+        guid: String,
         onProgress: (done: Int, total: Int, cidr: String, responded: Boolean) -> Unit,
         onFinish: (goodCidrs: List<String>) -> Unit,
     ) {
         cancel()
         scanJob = SupervisorJob()
         scanScope = CoroutineScope(scanJob + Dispatchers.IO)
-
         scanScope.launch {
             val lines = try {
                 context.assets.open("cf_ranges_v4.txt")
                     .bufferedReader().readLines()
                     .filter { it.isNotBlank() && !it.startsWith("#") }
-            } catch (e: Exception) {
-                emptyList()
+            } catch (e: Exception) { emptyList() }
+
+            val baseProfile = MmkvManager.decodeServerConfig(guid) ?: run {
+                withContext(Dispatchers.Main) { onFinish(emptyList()) }
+                return@launch
             }
 
             val total = lines.size
             var done = 0
-            val scoredCidrs = mutableListOf<Pair<String, Long>>() // CIDR to avg uploadKBps
-            val semaphore = Semaphore(3) // concurrency پایین‌تر برای Discovery
+            val goodCidrs = mutableListOf<Pair<String, Long>>() // cidr -> best uploadKBps
+            val semaphore = Semaphore(3)
             val lock = Any()
-
-            // یک profile پایه برای تست لازم است
-            val anyGuid = MmkvManager.decodeServerList()?.firstOrNull()
-                ?: run {
-                    withContext(Dispatchers.Main) { onFinish(emptyList()) }
-                    return@launch
-                }
-            val baseProfile = MmkvManager.decodeServerConfig(anyGuid) ?: run {
-                withContext(Dispatchers.Main) { onFinish(emptyList()) }
-                return@launch
-            }
 
             val jobs = lines.map { cidr ->
                 scanScope.launch {
                     semaphore.withPermit {
                         val parts = cidr.trim().split("/")
-                        var avgUpload = 0L
+                        var bestUpload = 0L
                         var hasGoodIp = false
-
                         if (parts.size == 2) {
                             try {
-                                val sampleIps = randomIpsFromCidr(parts[0], parts[1].toInt(), 3)
-                                val successfulUploads = mutableListOf<Long>()
-
+                                val sampleIps = randomIpsFromCidr(parts[0], parts[1].toInt(), 2)
                                 for (ip in sampleIps) {
-                                    val result = testCandidate(context, anyGuid, baseProfile, ip)
-                                    if (result.isSuccess && result.uploadKBps >= 15) { // threshold نرم
-                                        successfulUploads.add(result.uploadKBps)
+                                    val r = testCandidate(context, guid, baseProfile, ip)
+                                    if (r.isSuccess && r.uploadKBps >= 20L) {
+                                        hasGoodIp = true
+                                        if (r.uploadKBps > bestUpload) bestUpload = r.uploadKBps
                                     }
                                 }
-
-                                if (successfulUploads.isNotEmpty()) {
-                                    avgUpload = successfulUploads.average().toLong()
-                                    hasGoodIp = true
-                                }
                             } catch (e: Exception) {
-                                LogUtil.d(TAG, "Discovery error on $cidr: ${e.message}")
+                                LogUtil.d(TAG, "Discovery error $cidr: ${e.message}")
                             }
                         }
-
                         synchronized(lock) {
                             done++
-                            if (hasGoodIp) {
-                                scoredCidrs.add(cidr.trim() to avgUpload)
-                            }
+                            if (hasGoodIp) goodCidrs.add(cidr.trim() to bestUpload)
                         }
-
                         withContext(Dispatchers.Main) {
                             onProgress(done, total, cidr.trim(), hasGoodIp)
                         }
                     }
                 }
             }
-
             try {
                 joinAll(*jobs.toTypedArray())
-
-                // فقط ۱۰ رنج برتر بر اساس میانگین آپلود
-                val topCidrs = scoredCidrs
-                    .sortedByDescending { it.second }
-                    .take(10)
-                    .map { it.first }
-
-                LogUtil.i(TAG, "Discovery finished for $ispName: ${topCidrs.size} good ranges saved")
+                val topCidrs = goodCidrs.sortedByDescending { it.second }.take(20).map { it.first }
+                LogUtil.i(TAG, "Discovery done $ispName: ${topCidrs.size}/${total} good ranges")
                 IspManager.saveProfile(context, IspProfile(ispName, topCidrs))
-
-                withContext(Dispatchers.Main) {
-                    onFinish(topCidrs)
-                }
+                withContext(Dispatchers.Main) { onFinish(topCidrs) }
             } catch (_: CancellationException) {
-                withContext(Dispatchers.Main) {
-                    onFinish(scoredCidrs.map { it.first })
-                }
+                val partial = goodCidrs.sortedByDescending { it.second }.take(20).map { it.first }
+                if (partial.isNotEmpty()) IspManager.saveProfile(context, IspProfile(ispName, partial))
+                withContext(Dispatchers.Main) { onFinish(partial) }
             }
         }
     }
 
-    // ── Targeted scan: only from saved ISP ranges ─────────────────────────────
+        // ── Targeted scan: only from saved ISP ranges ─────────────────────────────
     fun scanForIsp(
         context: Context,
         guid: String,

@@ -241,6 +241,7 @@ private fun CfScanScreen(
                                         CloudflareScanner.discoverGoodCidrs(
                                             context = ctx,
                                             ispName = name,
+                                            guid = guid,
                                             onProgress = { d, t, _, responded ->
                                                 discDone = d; discTotal = t
                                                 if (responded) discGoodCount++
