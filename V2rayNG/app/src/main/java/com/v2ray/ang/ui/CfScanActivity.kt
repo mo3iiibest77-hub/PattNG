@@ -229,7 +229,15 @@ class CfScanActivity : ComponentActivity() {
                     onDeleteIsp = { name ->
                         IspManager.deleteProfile(this, name)
                         refreshProfiles()
-                    }
+                    },
+                    onAddManualCidr = { ispName, cidr ->
+                        IspManager.addManualCidr(this, ispName, cidr)
+                        refreshProfiles()
+                    },
+                    onRemoveManualCidr = { ispName, cidr ->
+                        IspManager.removeManualCidr(this, ispName, cidr)
+                        refreshProfiles()
+                    },
                 )
             }
         }
@@ -286,6 +294,8 @@ private fun CfScanScreen(
     onStartScan: (String) -> Unit,
     onApply: (String) -> Unit,
     onDeleteIsp: (String) -> Unit,
+    onAddManualCidr: (String, String) -> Unit,
+    onRemoveManualCidr: (String, String) -> Unit,
 ) {
     val isDiscovery = phase == ScanPhase.DISCOVERY
     val isRunning   = phase == ScanPhase.DISCOVERY || phase == ScanPhase.SCANNING
@@ -309,10 +319,12 @@ private fun CfScanScreen(
 
             when (phase) {
                 ScanPhase.ISP_SELECT -> IspSelectScreen(
-                    profiles         = ispProfiles,
-                    onStartDiscovery = onStartDiscovery,
-                    onStartScan      = onStartScan,
-                    onDelete         = onDeleteIsp,
+                    profiles           = ispProfiles,
+                    onStartDiscovery   = onStartDiscovery,
+                    onStartScan        = onStartScan,
+                    onDelete           = onDeleteIsp,
+                    onAddManualCidr    = onAddManualCidr,
+                    onRemoveManualCidr = onRemoveManualCidr,
                 )
                 ScanPhase.DISCOVERY  -> DiscoveryScreen(
                     discRows  = discRows,
@@ -390,6 +402,8 @@ private fun IspSelectScreen(
     onStartDiscovery: (String) -> Unit,
     onStartScan: (String) -> Unit,
     onDelete: (String) -> Unit,
+    onAddManualCidr: (String, String) -> Unit,
+    onRemoveManualCidr: (String, String) -> Unit,
 ) {
     var input by remember { mutableStateOf("") }
 
@@ -417,8 +431,8 @@ private fun IspSelectScreen(
                     onScan = { onStartScan(p.name) },
                     onRediscover = { onStartDiscovery(p.name) },
                     onDelete = { onDelete(p.name) },
-                    onAddManualCidr = { cidr -> IspManager.addManualCidr(ctx, p.name, cidr); refreshProfiles() },
-                    onRemoveManualCidr = { cidr -> IspManager.removeManualCidr(ctx, p.name, cidr); refreshProfiles() }
+                    onAddManualCidr = { cidr -> onAddManualCidr(p.name, cidr) },
+                    onRemoveManualCidr = { cidr -> onRemoveManualCidr(p.name, cidr) }
                 )
             }
             item { HorizontalDivider(color = S_Border, modifier = Modifier.padding(vertical = 4.dp)) }
@@ -497,7 +511,7 @@ private fun SavedIspCard(
             }
             IconButton(onClick = { expanded = !expanded }, Modifier.size(32.dp)) {
                 Icon(
-                    painterResource(if (expanded) R.drawable.ic_expand_less_24dp else R.drawable.ic_expand_more_24dp),
+                    painterResource(R.drawable.ic_expand_more_24dp),
                     null, tint = S_TextSec, modifier = Modifier.size(18.dp)
                 )
             }
