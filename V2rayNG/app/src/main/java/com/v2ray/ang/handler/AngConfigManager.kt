@@ -426,6 +426,12 @@ object AngConfigManager {
                 config.policyGroupSubscriptionId = subid
             }
 
+            // QSN: inject finalMask for xHTTP+TLS and WS+TLS
+            if (config.finalMask.isNullOrBlank() &&
+                (config.network == "xhttp" || config.network == "ws") &&
+                config.security == "tls") {
+                config.finalMask = """{"tcp":[{"settings":{"delays":["0"],"lengths":["5","94","1"],"maxSplit":"0","packets":"tlshello"},"type":"fragment"},{"settings":{"delays":["1"],"lengths":["109","1"],"maxSplit":"355","packets":"1-1"},"type":"fragment"}]}"""
+            }
             return config
         } catch (e: Exception) {
             LogUtil.e(AppConfig.TAG, "Failed to parse config", e)
