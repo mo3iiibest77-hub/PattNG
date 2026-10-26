@@ -283,3 +283,94 @@ States are a sealed interface (`AutoConnectState`) so Phase 3 UI can render them
   - Option C: Temporarily add `feature/minimal-cloudflare-vpn` to the `build.yml` branches list (requires separate authorization — not done in this task).
 - Build result: **PENDING** — awaiting manual trigger on GitHub.
 
+
+---
+
+## 10. Corrective Phase — Code Fixes, Architecture, Security, GitHub Actions
+
+> Branch: `feature/minimal-cloudflare-vpn` (same branch, no new branch, no history rewrite).
+> Scope: limited corrective fixes on Phase 2 code. No UI, no Phase 3.
+
+### 10.1 Files Changed and Reasons
+
+| File | Change | Reason |
+|---|---|---|
+| `ui/connect/AutoConfigFilter.kt` | Removed HTTP ports (2052, 2082, 2086, 2095) from `HTTPS_PORTS`. Added `HTTP_ONLY_PORTS` set. | These are Cloudflare HTTP-edge ports, not HTTPS. Auto-connect requires TLS. They were in the set despite the comment saying excluded. |
+| `ui/connect/ConnectionOrchestrator.kt` | Full rewrite of internal logic. See 10.2. | Fix Mutex import, GUID pairing, scan wait, CoreServiceManager native-lib risk, subscription security, cancel cleanup. |
+| `senpai/CloudflareScanner.kt` | `applyBestIp`: fingerPrint now only set if blank (was unconditional). Log sanitized. | `CoreOutboundBuilder.populateTlsSettings` line 558 already hardcodes `fingerprint="unsafe"` for all TLS configs. Profile value is not load-bearing. Overwriting was unnecessary mutation. |
+| `handler/AngConfigManager.kt` | `updateConfigViaSub`: replaced `LogUtil.i(TAG, url)` with `LogUtil.i(TAG, "Updating subscription: " + remarks)`. | Full subscription URL was logged. May contain auth tokens. Now logs only remarks name. |
+| `test/.../AutoConfigFilterTest.kt` | Rewritten: 27 tests. Fixed configType val assignment. Added 4 HTTP port rejection tests + disjoint-set test. | configType is a val — apply{} does not compile. HTTP ports were in HTTPS_PORTS. |
+| `test/.../ConnectionOrchestratorTest.kt` | Rewritten: 10 tests. Removed sealed-interface instantiation tests. Added: error sanitization, cancel safety, GUID-Profile pairing, single-flight. | Previous tests proved nothing about behavior. |
+| `test/.../CloudflareScannerPreservationTest.kt` | New: 18 tests. Regression tests for TLS/transport preservation. | Verifies SNI/Host/Path/XHTTP/Network/Security/auth/ALPN/insecure/pinnedCA preserved. |
+| `.github/workflows/main.yml` | **Deleted.** | Empty file (1 byte). Caused failed runs #1-#5 on every push. |
+| `.github/workflows/build.yml` | Added `feature/minimal-cloudflare-vpn` to push branches. | Build now triggers on feature branch push. |
+| `.github/workflows/fastlane.yml` | Added `feature/minimal-cloudflare-vpn` to push and PR branches. | Fastlane validation now runs on feature branch. |
+
+### 10.2 ConnectionOrchestrator Fixes
+
+| Issue | Root Cause | Fix |
+|---|---|---|
+| Mutex import | `kotlinx.coroutines.Mutex` — wrong package. | `kotlinx.coroutines.sync.Mutex` (matches MainViewModel). |
+| GUID misalignment | `allGuids[allConfigs.indexOf(selected)]` — mapNotNull shifts indices. Duplicates return first match. | `mapNotNull { guid -> decodeServerConfig(guid)?.let { guid to it } }` producing `List<Pair<String, ProfileItem>>`. GUID always belongs to selected profile. |
+| Scan wait race | Polling loop with delay(500). onFinish(null) left bestResult as null (same as initial) — loop continued until timeout. | `CompletableDeferred<CandidateResult?>`. onFinish(best) completes with best. onCancelled completes with null. No polling. |
+| waitJob unused | Declared as Job? but never assigned. | Removed. Replaced with CompletableDeferred fields. |
+| CoreServiceManager native risk | `isRunning()` accesses `coreController` which is eagerly initialized via `newCoreController()` at singleton load. Loads native libs in UI process. | `waitForCoreRunningBroadcast()`: registers BroadcastReceiver for BROADCAST_ACTION_ACTIVITY, awaits MSG_STATE_RUNNING (11) or MSG_STATE_START_FAILURE (32) from daemon. No native-lib loading in UI process. |
+| Subscription URL in errors | `Failure("... ${e.message}")` — e.message may contain URL. | Removed e.message from failure messages. All messages are static strings. |
+| Cancel cleanup | cancel() only called CloudflareScanner.cancel() and waitJob?.cancel() (no-op). Receiver could leak. | cancel() sets flag, completes deferreds, cleanup() in finally unregisters receiver. |
+
+### 10.3 CoreServiceManager Architecture Finding
+
+**Risk confirmed:** `CoreServiceManager` object singleton has:
+```kotlin
+private val coreController: CoreController = CoreNativeManager.newCoreController(CoreCallback())
+```
+This is **eager initialization** — referencing CoreServiceManager for the first time triggers newCoreController(), loading native libraries via JNI.
+
+`LauncherManager.startContextService()` comment: "Note: isRunning check is removed here to avoid loading Native libraries in the UI process."
+
+**Fix:** Orchestrator now uses `waitForCoreRunningBroadcast()` — registers BroadcastReceiver for BROADCAST_ACTION_ACTIVITY, awaits MSG_STATE_RUNNING from daemon. Matches existing architecture. No new path, no native-core disruption.
+
+### 10.4 Fingerprint/Transport Finding
+
+**`applyBestIp` previously set `fingerPrint = "unsafe"` unconditionally.**
+
+**Finding:** `CoreOutboundBuilder.populateTlsSettings` (line 558) already hardcodes:
+```kotlin
+fingerprint = "unsafe", // QuietStormNG: always force unsafe fingerprint for CF configs
+```
+Applied to all TLS configs regardless of profileItem.fingerPrint. Profile value is not load-bearing.
+
+**Fix:** `applyBestIp` now only sets fingerPrint if blank. No functional change to outbound config. 18 regression tests verify preservation.
+
+**Preserved fields:** SNI, Host, Path, network, security, serverPort, password, username, method, publicKey, ALPN, xhttpMode, xhttpExtra, insecure, pinnedCA256, configType.
+
+### 10.5 GitHub Actions — Failed Runs Root Cause
+
+**Root cause:** `.github/workflows/main.yml` was empty (1 byte). GitHub Actions parsed it as a workflow and failed on every push.
+
+**Failed runs due to main.yml:**
+- #1 (d6b7f02, master, Oct 23) — Failure
+- #2 (7e7fe27, master, Oct 26) — Failure
+- #3 (a52f20c, master, Oct 26) — Failure
+- #4 (e02796a, feature branch, Oct 26) — Failure
+- #5 (1bc51b6, feature branch, Oct 26) — Failure
+
+**Successful Build APK runs (master only):**
+- #61 (d6b7f02) — 9m 6s — Success
+- #62 (7e7fe27) — 6m 48s — Success
+- #63 (a52f20c) — 5m 46s — Success
+
+**Fix:** Deleted main.yml. Added feature/minimal-cloudflare-vpn to build.yml and fastlane.yml.
+
+### 10.6 Test Summary
+
+| Test File | Tests | Coverage |
+|---|---|---|
+| `AutoConfigFilterTest.kt` | 27 | HTTPS port acceptance, HTTP port rejection (4+collective), disjoint sets, transport rejection, security rejection, port rejection, server rejection, protocol auth rejection, order preservation, empty input. |
+| `ConnectionOrchestratorTest.kt` | 10 | Error sanitization, cancel safety, GUID-Profile pairing, single-flight contract. |
+| `CloudflareScannerPreservationTest.kt` | 18 | SNI/Host/Path/XHTTP/Network/Security/Port/Auth/ALPN/insecure/pinnedCA/configType preserved. fingerPrint/finalMask/cipherSuites only filled if blank. |
+| **Total** | **55** | |
+
+### 10.7 Verification block
+
+- *To be filled after push and GitHub Actions run.*

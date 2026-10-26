@@ -38,9 +38,11 @@ object AutoConfigFilter {
         "443",   // standard HTTPS
         "2053", "2083", "2087", "2096",  // Cloudflare HTTPS edge ports
         "8443",  // standard alt HTTPS
-        "2052", "2082", "2086", "2095",  // Cloudflare HTTP-edge ports are
-        // intentionally NOT included here because auto-connect requires TLS.
     )
+
+    /** Cloudflare CDN HTTP-only edge ports. These are NOT in [HTTPS_PORTS]
+     *  because the automatic flow requires TLS. Exposed for test clarity. */
+    val HTTP_ONLY_PORTS: Set<String> = setOf("2052", "2082", "2086", "2095")
 
     /** Network types eligible for automatic Cloudflare connection. */
     private val ELIGIBLE_NETWORKS = setOf("ws", "xhttp")

@@ -269,15 +269,20 @@ object CloudflareScanner {
 
     fun applyBestIp(guid: String, bestIp: String): Boolean {
         val profile = MmkvManager.decodeServerConfig(guid) ?: run {
-            LogUtil.e(TAG, "applyBestIp: not found guid=$guid")
+            LogUtil.e(TAG, "applyBestIp: not found guid")
             return false
         }
         profile.server = bestIp
-        profile.fingerPrint = "unsafe"
+        // fingerPrint: only fill if blank. CoreOutboundBuilder.populateTlsSettings
+        // already hardcodes fingerprint="unsafe" for all TLS configs at build
+        // time (line 558), so the profile value is not load-bearing for the
+        // outbound config. We do not overwrite a non-blank value to respect
+        // user intent and avoid unnecessary mutation of TLS settings.
+        if (profile.fingerPrint.isNullOrBlank()) profile.fingerPrint = "unsafe"
         if (profile.finalMask.isNullOrBlank()) profile.finalMask = PRODUCTION_FINALMASK
         if (profile.cipherSuites.isNullOrBlank()) profile.cipherSuites = PRODUCTION_CIPHERSUITES
         MmkvManager.encodeServerConfig(guid, profile)
-        LogUtil.i(TAG, "applyBestIp: $guid -> $bestIp")
+        LogUtil.i(TAG, "applyBestIp: applied best IP to profile")
         return true
     }
 

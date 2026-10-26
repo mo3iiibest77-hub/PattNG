@@ -13,6 +13,10 @@ import org.junit.Test
  *
  * Each test exercises a single eligibility criterion in isolation so a
  * regression in any one rule is immediately identifiable.
+ *
+ * Note: [ProfileItem.configType] is a `val`, so tests that need a different
+ * protocol type create a new [ProfileItem.create] rather than using `apply`
+ * to reassign it.
  */
 class AutoConfigFilterTest {
 
@@ -50,8 +54,20 @@ class AutoConfigFilterTest {
     }
 
     @Test
+    fun `null network is not eligible`() {
+        val config = eligibleVless().apply { network = null }
+        assertFalse(AutoConfigFilter.isEligible(config))
+    }
+
+    @Test
     fun `none security is not eligible`() {
         val config = eligibleVless().apply { security = "" }
+        assertFalse(AutoConfigFilter.isEligible(config))
+    }
+
+    @Test
+    fun `null security is not eligible`() {
+        val config = eligibleVless().apply { security = null }
         assertFalse(AutoConfigFilter.isEligible(config))
     }
 
@@ -62,12 +78,43 @@ class AutoConfigFilterTest {
     }
 
     @Test
-    fun `http-only cf port 2082 is not eligible without tls`() {
-        val config = eligibleVless().apply {
-            security = ""
-            serverPort = "2082"
-        }
+    fun `random port 12345 is not eligible`() {
+        val config = eligibleVless().apply { serverPort = "12345" }
         assertFalse(AutoConfigFilter.isEligible(config))
+    }
+
+    // ── HTTP-only CF port rejection (2052, 2082, 2086, 2095) ──
+
+    @Test
+    fun `cf http port 2052 is not eligible even with tls`() {
+        val config = eligibleVless().apply { serverPort = "2052" }
+        assertFalse(AutoConfigFilter.isEligible(config))
+    }
+
+    @Test
+    fun `cf http port 2082 is not eligible even with tls`() {
+        val config = eligibleVless().apply { serverPort = "2082" }
+        assertFalse(AutoConfigFilter.isEligible(config))
+    }
+
+    @Test
+    fun `cf http port 2086 is not eligible even with tls`() {
+        val config = eligibleVless().apply { serverPort = "2086" }
+        assertFalse(AutoConfigFilter.isEligible(config))
+    }
+
+    @Test
+    fun `cf http port 2095 is not eligible even with tls`() {
+        val config = eligibleVless().apply { serverPort = "2095" }
+        assertFalse(AutoConfigFilter.isEligible(config))
+    }
+
+    @Test
+    fun `all cf http ports are rejected`() {
+        for (port in AutoConfigFilter.HTTP_ONLY_PORTS) {
+            val config = eligibleVless().apply { serverPort = port }
+            assertFalse("Port $port should NOT be eligible (HTTP-only)", AutoConfigFilter.isEligible(config))
+        }
     }
 
     @Test
@@ -76,6 +123,13 @@ class AutoConfigFilterTest {
             val config = eligibleVless().apply { serverPort = port }
             assertTrue("Port $port should be eligible", AutoConfigFilter.isEligible(config))
         }
+    }
+
+    @Test
+    fun `https ports and http ports are disjoint`() {
+        // No port should appear in both sets.
+        val intersection = AutoConfigFilter.HTTPS_PORTS.intersect(AutoConfigFilter.HTTP_ONLY_PORTS)
+        assertTrue("Ports $intersection appear in both HTTPS and HTTP sets", intersection.isEmpty())
     }
 
     @Test
@@ -98,17 +152,13 @@ class AutoConfigFilterTest {
 
     @Test
     fun `trojan without password is not eligible`() {
-        val config = eligibleVless().apply {
-            configType = EConfigType.TROJAN
-            password = null
-        }
+        val config = eligibleProfile(EConfigType.TROJAN).apply { password = null }
         assertFalse(AutoConfigFilter.isEligible(config))
     }
 
     @Test
     fun `shadowsocks without method is not eligible`() {
-        val config = eligibleVless().apply {
-            configType = EConfigType.SHADOWSOCKS
+        val config = eligibleProfile(EConfigType.SHADOWSOCKS).apply {
             method = null
             password = "pass"
         }
@@ -117,7 +167,7 @@ class AutoConfigFilterTest {
 
     @Test
     fun `custom config type is not eligible`() {
-        val config = eligibleVless().apply { configType = EConfigType.CUSTOM }
+        val config = eligibleProfile(EConfigType.CUSTOM)
         assertFalse(AutoConfigFilter.isEligible(config))
     }
 
@@ -135,37 +185,41 @@ class AutoConfigFilterTest {
 
     @Test
     fun `wireguard without public key is not eligible`() {
-        val config = eligibleVless().apply {
-            configType = EConfigType.WIREGUARD
-            publicKey = null
-        }
+        val config = eligibleProfile(EConfigType.WIREGUARD).apply { publicKey = null }
         assertFalse(AutoConfigFilter.isEligible(config))
     }
 
     @Test
     fun `hysteria2 without password is not eligible`() {
-        val config = eligibleVless().apply {
-            configType = EConfigType.HYSTERIA2
-            password = null
-        }
+        val config = eligibleProfile(EConfigType.HYSTERIA2).apply { password = null }
         assertFalse(AutoConfigFilter.isEligible(config))
     }
 
     @Test
     fun `http proxy without username is not eligible`() {
-        val config = eligibleVless().apply {
-            configType = EConfigType.HTTP
-            username = null
-        }
+        val config = eligibleProfile(EConfigType.HTTP).apply { username = null }
         assertFalse(AutoConfigFilter.isEligible(config))
     }
 
-    private fun eligibleVless() = ProfileItem.create(EConfigType.VLESS).apply {
+    /** Creates a VLESS profile that passes all eligibility criteria. */
+    private fun eligibleVless() = eligibleProfile(EConfigType.VLESS)
+
+    /**
+     * Creates a profile of the given [type] that passes all eligibility
+     * criteria except the protocol-specific auth field (which tests then
+     * clear as needed).
+     *
+     * [ProfileItem.configType] is a `val` set at construction time.
+     */
+    private fun eligibleProfile(type: EConfigType) = ProfileItem.create(type).apply {
         server = "example.com"
         serverPort = "443"
         network = "ws"
         security = AppConfig.TLS
         password = "uuid-1234"
+        username = "user1"
+        method = "aes-256-gcm"
+        publicKey = "wg-key"
         sni = "example.com"
         host = "example.com"
         path = "/ws"
