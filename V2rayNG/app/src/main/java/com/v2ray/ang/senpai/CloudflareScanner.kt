@@ -48,6 +48,11 @@ object CloudflareScanner {
         append("""]}""")
     }
 
+    /** Public alias for [PRODUCTION_FINALMASK] so external callers (e.g. the
+     *  auto-connect orchestrator) can fill blank finalMask fields without
+     *  duplicating the value. */
+    val PRODUCTION_FINALMASK_VALUE: String get() = PRODUCTION_FINALMASK
+
     private const val PRODUCTION_CIPHERSUITES =
         "TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256:TLS_AES_128_GCM_SHA256:" +
         "TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384:TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384:" +
@@ -55,6 +60,10 @@ object CloudflareScanner {
         "TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256:TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256:" +
         "TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA:TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA:" +
         "TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA256:TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256"
+
+    /** Public alias for [PRODUCTION_CIPHERSUITES] so external callers can fill
+     *  blank cipherSuites fields without duplicating the value. */
+    const val PRODUCTION_CIPHERSUITES_VALUE: String = PRODUCTION_CIPHERSUITES
 
     private var scanJob = SupervisorJob()
     private var scanScope = CoroutineScope(scanJob + Dispatchers.IO)

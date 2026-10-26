@@ -209,3 +209,70 @@ confirmed above; correctness is not). Each should be a separately authorized tas
    to establish a green/red baseline before any implementation task. Record results as PASS/FAIL.
 
 > None of the above authorizes implementation work. Each requires a separate explicit task.
+---
+
+## 9. Phase 2 — Automatic Connection Logic (feature/minimal-cloudflare-vpn)
+
+> Branch `feature/minimal-cloudflare-vpn` (created from `a52f20c2` on `master`).
+> Scope: implement auto-connect logic and essential technical components only — no UI changes,
+> no builds on server. Build validation deferred to GitHub Actions on push.
+
+| Field | Value |
+|---|---|
+| Task start (UTC) | 2026-10-26 23:06 |
+| Branch | `feature/minimal-cloudflare-vpn` |
+| Branch base | `a52f20c2` (master) |
+| Phase scope | Automatic connection logic, config filter, scanner integration, unit tests |
+| UI changes | None |
+| Server-side builds | None — builds only via GitHub Actions `build.yml` |
+
+### 9.1 Files Created
+
+| File | Purpose |
+|---|---|
+| `V2rayNG/app/src/main/java/com/v2ray/ang/ui/connect/AutoConfigFilter.kt` | Protocol-independent eligibility filter: ws/xhttp + TLS + CF HTTPS port. Does NOT remove ineligible configs from storage. |
+| `V2rayNG/app/src/main/java/com/v2ray/ang/ui/connect/ConnectionOrchestrator.kt` | Full auto-connect flow: sub fetch → parse → filter → ensure settings → CF scan → apply IP → start VPN → await core confirmation. Single-flight via Mutex, cancellable. No fake success — polls `CoreServiceManager.isRunning()`. |
+| `V2rayNG/app/src/test/java/com/v2ray/ang/ui/connect/AutoConfigFilterTest.kt` | 19 unit tests covering all eligibility criteria (network, security, port, protocol params, edge cases). |
+| `V2rayNG/app/src/test/java/com/v2ray/ang/ui/connect/ConnectionOrchestratorTest.kt` | 8 unit tests covering state/result sealed interface contracts and cancel safety. |
+
+### 9.2 Files Modified
+
+| File | Change |
+|---|---|
+| `V2rayNG/app/src/main/java/com/v2ray/ang/senpai/CloudflareScanner.kt` | Added public aliases `PRODUCTION_FINALMASK_VALUE` and `PRODUCTION_CIPHERSUITES_VALUE` so the orchestrator can fill blank settings without duplicating the hardcoded values. Private originals remain the single source of truth. No behavioral change to scanner logic. |
+
+### 9.3 Design Decisions
+
+- **Config filtering is protocol-independent**: Any of VLESS, VMess, Trojan, SS, SOCKS, WireGuard, Hysteria2, HTTP that meets ws/xhttp + TLS + CF HTTPS port criteria is eligible. Parsers and existing protocol support are untouched.
+- **HTTPS ports**: `{443, 2053, 2083, 2087, 2096, 8443}` — Cloudflare CDN HTTPS edge ports (documented standard, not guessed). HTTP-edge ports (2052, 2082, 2086, 2095) are excluded because auto-connect requires TLS.
+- **Transport preservation**: The orchestrator only writes `server`, `fingerPrint`, and blank `finalMask`/`cipherSuites` — exactly what `CloudflareScanner.applyBestIp` already does. SNI, Host, Path, network, security, and all protocol params are never touched.
+- **No fake success**: `waitForCoreRunning()` polls `CoreServiceManager.isRunning()` (which reads `coreController.isRunning`) with a 30s timeout. If the core does not report running, the result is `AutoConnectResult.Failure`.
+- **Single-flight**: A `Mutex` ensures only one `autoConnect()` call runs at a time. Concurrent calls return `Failure("Already running")`.
+- **Cancellation**: `cancel()` calls `CloudflareScanner.cancel()` and cancels any pending wait job. Safe to call when idle.
+
+### 9.4 Connection State Machine
+
+```
+WaitingForSubscription
+  → FetchingSubscription
+  → ParsingConfigurations
+  → FilteringConfigurations
+  → ApplyingConnectionSettings
+  → ScanningCloudflareIps
+  → SelectingBestIp(bestIp)
+  → StartingVpn
+  → Connected(guid) | Failed(reason)
+```
+
+States are a sealed interface (`AutoConnectState`) so Phase 3 UI can render them with an exhaustive `when`.
+
+### 9.5 Build/Test Status
+
+- **Server-side build**: NOT RUN (per AGENTS.md — builds only via GitHub Actions).
+- **Unit tests**: NOT RUN on server. Will be validated by GitHub Actions `build.yml` on push to `feature/minimal-cloudflare-vpn`.
+- **GitHub Actions build result**: Pending — will be reported here after push.
+
+### 9.6 Verification block (populated after push)
+
+- *To be filled after push to `feature/minimal-cloudflare-vpn`.*
+
