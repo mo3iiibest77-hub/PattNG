@@ -49,7 +49,7 @@ class CloudflareScannerPreservationTest {
 
     @Test
     fun `server is replaced with best IP`() {
-        val original = fullProfile(server = "old.example.com")
+        val original = fullProfile().apply { server = "old.example.com" }
         val result = simulateApplyBestIp(original, "104.16.123.45")
         assertEquals("104.16.123.45", result.server)
     }
