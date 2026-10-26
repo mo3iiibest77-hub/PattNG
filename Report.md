@@ -173,11 +173,14 @@ source was changed and no Gradle build, unit test, or instrumented test was exec
 
 **Verification block (populated after the push in this task):**
 
-- Commit SHA(s) pushed: `<filled after push>`
-- `git push origin master` exit code: `<filled after push>`
-- Remote `origin/master` after push: `<filled after push>`
-- `AGENTS.md` present on remote: `<filled after push>`
-- `Report.md` present on remote: `<filled after push>`
+- Commit SHA(s) pushed (this task): `7e7fe27cc8d68da8673a4e0b4426dac2ea99d219` (plus preserved prior commits `77d188f9`, `36ad9da6`).
+- `git push origin master` exit code: `0`. Remote updated: `d6b7f027..7e7fe27c  master -> master` (fast-forward, no force).
+- Remote `origin/master` after push: `7e7fe27cc8d68da8673a4e0b4426dac2ea99d219` (matches local `master`; ahead 0, behind 0).
+- `AGENTS.md` present on remote: Yes (blob `76d8d6ef8d8bcbedc05c6e7d4e52d98bebb2a3ce`).
+- `Report.md` present on remote: Yes (blob `418befd72f980fc221e02043dc5314821d479ce4`).
+- Direct GitHub commit URL: https://github.com/mo3iiibest77-hub/PattNG/commit/7e7fe27cc8d68da8673a4e0b4426dac2ea99d219
+- Direct GitHub URL to AGENTS.md: https://github.com/mo3iiibest77-hub/PattNG/blob/master/AGENTS.md
+- Direct GitHub URL to Report.md: https://github.com/mo3iiibest77-hub/PattNG/blob/master/Report.md
 
 ## 8. Next Audit Tasks
 
