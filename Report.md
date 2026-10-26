@@ -373,4 +373,41 @@ Applied to all TLS configs regardless of profileItem.fingerPrint. Profile value 
 
 ### 10.7 Verification block
 
-- *To be filled after push and GitHub Actions run.*
+- Commits pushed (this corrective phase):
+  - `76b87df5` — primary corrective commit (11 files, +668/-161)
+  - `4db90f95` — follow-up: broadcast extra key (`key` not `what`), `Utils.receiverFlags()`, register-before-start race, `Stopping` state on cancel, exception-class-only logging
+- Push method: SSH. No force push. No master push. Only related files staged explicitly.
+
+**GitHub Actions — verified results:**
+
+| Run | Workflow | Commit | Branch | Status | Duration |
+|---|---|---|---|---|---|
+| #65 | Build APK | `4db90f9` | feature/minimal-cloudflare-vpn | **Success** | 6m 51s |
+| #64 | Build APK | `76b87df` | feature/minimal-cloudflare-vpn | **Success** | 6m 45s |
+| #65 | Validate Fastlane metadata | `4db90f9` | feature/minimal-cloudflare-vpn | **Success** | 9s |
+| #64 | Validate Fastlane metadata | `76b87df` | feature/minimal-cloudflare-vpn | **Success** | 12s |
+
+- Build APK run #65 URL: https://github.com/mo3iiibest77-hub/PattNG/actions/runs/40420680113
+- Build APK run #64 URL: https://github.com/mo3iiibest77-hub/PattNG/actions/runs/40419937803
+- Fastlane run #65 URL: https://github.com/mo3iiibest77-hub/PattNG/actions/runs/40420680103
+
+**Artifacts (Build APK #65):**
+
+| Artifact | Size | SHA-256 |
+|---|---|---|
+| arm64-v8a | 60.7 MB | `062440ae16b7452cb3d844793d6b2b31ed328bba1dee2b655456031379a8fa33` |
+| armeabi-v7a | 61.4 MB | `0f36def9ceb2a99bd47d54ecf2a6116669e92fe9707b723944c8a79ae5ce0ff0` |
+| universal-apk | 136 MB | `c39430e49b1a8a19ee3bd1110e85127847737210520d8a375dc846b41606a5e9` |
+| x86-apk | 126 MB | `b7dd0f412d18e584b9cf5ab23261c7822ba38acc5867478f337ff2b885fd7576` |
+
+- `sign-and-release` job: skipped (runs only on `workflow_dispatch` with a `release_tag` input) — expected.
+- The APK build is now triggered automatically on push to `feature/minimal-cloudflare-vpn` (previously master-only).
+- **Note:** these artifacts prove the code **compiles and packages**; they do not prove runtime behavior of the auto-connect flow (see remaining risks).
+
+### 10.8 Remaining Risks / Tests Not Run
+
+- **Unit tests were not executed locally or on the server** (no Gradle build on the server per AGENTS.md; the `build.yml` workflow runs `assembleRelease`, which does **not** run unit tests). The 55 unit tests compile as part of the build only if `test` is invoked — it is not. **The unit tests have not been executed.** Running them requires a separate `./gradlew test` job (not added here, to avoid scope creep) or a local run by the maintainer.
+- **Runtime behavior of auto-connect is unverified** — no device/emulator run. Specifically unverified at runtime: subscription refresh, CF scan result handling, `MSG_STATE_RUNNING` broadcast reception timing, and VPN start confirmation.
+- **Already-running-core edge case:** if the VPN core is already running when `autoConnect` is called, the daemon may not emit a fresh `MSG_STATE_RUNNING`, so `awaitCoreRunning` could time out. Not handled in this phase (no explicit status-query broadcast added).
+- **`ensureSettings` / `applyBestIp` preservation** is verified by simulation tests (pure logic), not against real MMKV storage.
+- **`Utils.receiverFlags()` returns `RECEIVER_EXPORTED` on API 33+** — this matches the existing project pattern (MainRepository), but it does mean the receiver is technically exportable. This is pre-existing project behavior, not introduced here.
