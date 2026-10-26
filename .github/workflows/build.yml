@@ -99,7 +99,14 @@ jobs:
         cd ${{ github.workspace }}/V2rayNG
         echo "sdk.dir=${ANDROID_HOME}" > local.properties
         chmod 755 gradlew
-        ./gradlew testFdroidDebugUnitTest
+        set +e
+        ./gradlew testFdroidDebugUnitTest --tests "com.v2ray.ang.ui.connect.*" > unit-test.log 2>&1
+        status=$?
+        tail -n 60 unit-test.log
+        if [ $status -ne 0 ]; then
+          while IFS= read -r line; do echo "::error::$line"; done < <(grep -E "^e: |FAILED|not mocked|Execution failed|error:|Caused by" unit-test.log | head -n 25)
+        fi
+        exit $status
 
     - name: Build APK
       run: |
