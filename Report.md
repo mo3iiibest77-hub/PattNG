@@ -274,5 +274,12 @@ States are a sealed interface (`AutoConnectState`) so Phase 3 UI can render them
 
 ### 9.6 Verification block (populated after push)
 
-- *To be filled after push to `feature/minimal-cloudflare-vpn`.*
+- Commit SHA pushed: `e02796a1` (6 files, 777 insertions)
+- `git push origin feature/minimal-cloudflare-vpn` exit code: `0`. New branch created on remote.
+- GitHub PR URL: https://github.com/mo3iiibest77-hub/PattNG/pull/new/feature/minimal-cloudflare-vpn
+- **GitHub Actions build**: `build.yml` triggers only on `push: branches: [master]` and `workflow_dispatch`. It did **not** auto-trigger for this feature branch. The build must be triggered manually:
+  - Option A: Open the PR on GitHub (URL above) and run the workflow via Actions tab → "Build APK" → "Run workflow" → select `feature/minimal-cloudflare-vpn`.
+  - Option B: Merge the PR to `master` (auto-triggers build).
+  - Option C: Temporarily add `feature/minimal-cloudflare-vpn` to the `build.yml` branches list (requires separate authorization — not done in this task).
+- Build result: **PENDING** — awaiting manual trigger on GitHub.
 
