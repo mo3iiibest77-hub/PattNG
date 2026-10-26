@@ -14,6 +14,7 @@ import com.v2ray.ang.senpai.CandidateResult
 import com.v2ray.ang.senpai.CloudflareScanner
 import com.v2ray.ang.senpai.ScanCallback
 import com.v2ray.ang.util.LogUtil
+import com.v2ray.ang.util.Utils
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.withTimeoutOrNull
@@ -166,15 +167,16 @@ class ConnectionOrchestrator {
         val updateResult = try {
             AngConfigManager.updateConfigViaSub(targetSub)
         } catch (e: Exception) {
-            // Sanitize: do not propagate exception messages that may contain
-            // the subscription URL, auth tokens, or response data.
-            LogUtil.e(TAG, "Subscription fetch failed", e)
+            // Sanitize: log only the exception type. The message or stack trace
+            // of a network/parse exception may embed the subscription URL,
+            // auth tokens, or response body — none of which belong in logs.
+            LogUtil.e(TAG, "Subscription fetch failed: " + e.javaClass.simpleName)
             return AutoConnectResult.Failure("Subscription fetch failed")
         }
         if (updateResult.configCount <= 0) {
             return AutoConnectResult.Failure("Subscription returned 0 configs")
         }
-        if (cancelled) return cancelResult()
+        if (cancelled) return cancelResult(onState)
 
         // 3. Parse configs from storage — pair GUID with Profile to avoid
         //    index misalignment from mapNotNull.
@@ -202,7 +204,7 @@ class ConnectionOrchestrator {
         // 5. Select first eligible config
         val (selectedGuid, selected) = eligible.first()
         MmkvManager.setSelectServer(selectedGuid)
-        if (cancelled) return cancelResult()
+        if (cancelled) return cancelResult(onState)
 
         // 6. Ensure settings (fill blanks only — no overwrite)
         onState(AutoConnectState.ApplyingConnectionSettings)
@@ -211,7 +213,7 @@ class ConnectionOrchestrator {
         // 7. Scan Cloudflare IPs
         onState(AutoConnectState.ScanningCloudflareIps)
         val bestIp = scanForBestIp(context, selectedGuid)
-        if (cancelled) return cancelResult()
+        if (cancelled) return cancelResult(onState)
         if (bestIp == null) {
             return AutoConnectResult.Failure("Cloudflare scan found no working IP")
         }
@@ -222,13 +224,16 @@ class ConnectionOrchestrator {
             return AutoConnectResult.Failure("Failed to apply best IP to profile")
         }
 
-        // 9. Start VPN
+        // 9. Register the running-signal listener BEFORE starting the service.
+        //    startService is asynchronous, but registering first removes any
+        //    window in which a fast MSG_STATE_RUNNING could be missed.
         onState(AutoConnectState.StartingVpn)
+        val runningSignal = registerCoreRunningReceiver(context)
         LauncherManager.startService(context, selectedGuid)
 
-        // 10. Wait for core confirmation via broadcast — no native lib loading
-        val connected = waitForCoreRunningBroadcast(context)
-        if (cancelled) return cancelResult()
+        // 10. Await core confirmation via broadcast — no native lib loading
+        val connected = awaitCoreRunning(context, runningSignal)
+        if (cancelled) return cancelResult(onState)
         if (connected) {
             onState(AutoConnectState.Connected(selectedGuid))
             return AutoConnectResult.Success(selectedGuid)
@@ -307,26 +312,28 @@ class ConnectionOrchestrator {
 
     /**
      * Registers a [BroadcastReceiver] for the daemon's state broadcasts
-     * (MSG_STATE_RUNNING / MSG_STATE_START_FAILURE) and awaits the result.
+     * (MSG_STATE_RUNNING / MSG_STATE_START_FAILURE) and returns the deferred
+     * that will be completed when a signal arrives.
+     *
+     * Registering is deliberately separate from awaiting so the caller can
+     * register BEFORE starting the service — closing the window in which a
+     * fast broadcast could be missed.
      *
      * This avoids calling [CoreServiceManager.isRunning] directly, which would
      * eagerly initialize the native coreController (and thus load native
      * libraries) in the UI process. The daemon service sends these broadcasts
      * from its own process where the native core is already loaded.
-     *
-     * Returns true if MSG_STATE_RUNNING was received, false on
-     * MSG_STATE_START_FAILURE or timeout.
      */
-    private suspend fun waitForCoreRunningBroadcast(
-        context: Context,
-        timeoutMs: Long = 30_000L,
-    ): Boolean {
+    private fun registerCoreRunningReceiver(context: Context): CompletableDeferred<Boolean> {
         val deferred = CompletableDeferred<Boolean>()
         coreRunningDeferred = deferred
 
         val receiver = object : BroadcastReceiver() {
             override fun onReceive(ctx: Context?, intent: Intent?) {
-                val what = intent?.getIntExtra("what", -1) ?: -1
+                // MessageHelper.messageIntent() puts the message id under the
+                // "key" extra (see MessageHelper.messageIntent). This matches
+                // MainRepository's receiver exactly.
+                val what = intent?.getIntExtra("key", 0) ?: 0
                 when (what) {
                     AppConfig.MSG_STATE_RUNNING -> deferred.complete(true)
                     AppConfig.MSG_STATE_START_FAILURE -> deferred.complete(false)
@@ -337,24 +344,41 @@ class ConnectionOrchestrator {
         runningReceiver = receiver
 
         val filter = IntentFilter(AppConfig.BROADCAST_ACTION_ACTIVITY)
-        ContextCompat.registerReceiver(context, receiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
+        ContextCompat.registerReceiver(context, receiver, filter, Utils.receiverFlags())
+        return deferred
+    }
 
+    /**
+     * Awaits the deferred returned by [registerCoreRunningReceiver], then
+     * unregisters the receiver. Returns true only if MSG_STATE_RUNNING was
+     * received; false on MSG_STATE_START_FAILURE, stop, cancel, or timeout.
+     */
+    private suspend fun awaitCoreRunning(
+        context: Context,
+        deferred: CompletableDeferred<Boolean>,
+        timeoutMs: Long = 30_000L,
+    ): Boolean {
         val result = withTimeoutOrNull(timeoutMs) { deferred.await() }
-        // Unregister happens in cleanup() via finally block, but we clear
-        // the reference here so cancel() doesn't double-unregister.
-        try {
-            context.unregisterReceiver(receiver)
-        } catch (_: Exception) {
-            // Already unregistered or context invalid — safe to ignore.
+        // Unregister here; cleanup() also guards against a second attempt.
+        runningReceiver?.let { receiver ->
+            try {
+                context.unregisterReceiver(receiver)
+            } catch (_: Exception) {
+                // Already unregistered or context invalid — safe to ignore.
+            }
         }
         runningReceiver = null
         coreRunningDeferred = null
         return result == true
     }
 
-    /** Returns a [AutoConnectResult.Cancelled] and emits the Stopping state. */
-    private fun cancelResult(): AutoConnectResult {
-        // onState(Stopping) is emitted by the caller via cleanup
+    /**
+     * Emits [AutoConnectState.Stopping] and returns [AutoConnectResult.Cancelled].
+     * Called at each cancellation checkpoint so the emitted state matches the
+     * real outcome (the flow was cancelled, not disconnected normally).
+     */
+    private fun cancelResult(onState: (AutoConnectState) -> Unit): AutoConnectResult {
+        onState(AutoConnectState.Stopping)
         return AutoConnectResult.Cancelled
     }
 
