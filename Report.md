@@ -446,6 +446,7 @@ a green step proves the tests ran).
 | 6 | Medium | `ConnectionOrchestrator.kt` | Unexpected exceptions from MMKV/scanner/service escaped `autoConnect` instead of producing a result. | Catch `Exception` (rethrow `CancellationException`) and return a sanitized `Failure`. |
 | 7 | Medium | `ConnectionOrchestratorTest.kt` | GUID-pairing tests re-implemented the logic instead of testing production code — they would pass even if the orchestrator regressed. | Extracted `pairGuidsWithProfiles()` and the tests now call the real function, plus a selection test that runs the real `AutoConfigFilter.isEligible`. |
 | 8 | Low | `AutoConfigFilter.kt` | Case-sensitivity of `network`/`security` was undocumented and looked like an oversight. | Documented that it is intentional and matches `NetworkType.fromString` / `CoreOutboundBuilder`, which are also case-sensitive; accepting "TLS"/"WS" would only produce a broken outbound. |
+| 9 | Medium (product) | `res/values*/strings.xml` | `app_name` was `QuietStormNG` in the default locale and still `v2rayNG` in 8 locales, so the launcher label was the upstream name on those devices. | Set `app_name` to `Quiet Storm NG` in all 9 files (`ac93a7c3`). |
 
 ### 11.3 Verified non-issues (checked, no change made)
 
@@ -485,4 +486,25 @@ CI execution: `build.yml` runs `./gradlew testFdroidDebugUnitTest --tests "com.v
 
 ### 11.7 CI evidence for this pass
 
-- *To be filled after push.*
+Both commits of this pass were built exclusively on GitHub Actions. No Gradle/APK build was run on the SSH server or locally.
+
+| Commit | Workflow run | Conclusion | `build` job | `Run unit tests` step | Artifacts |
+|---|---|---|---|---|---|
+| `34b3710c` fix(audit) | [Build APK run 40424887098](https://github.com/mo3iiibest77-hub/PattNG/actions/runs/40424887098) | **success** | success | success | arm64-v8a 60.7 MB, armeabi-v7a 61.4 MB, universal-apk 136.0 MB, x86-apk 126.0 MB |
+| `ac93a7c3` fix(branding) | [Build APK run 40425712096](https://github.com/mo3iiibest77-hub/PattNG/actions/runs/40425712096) | **success** | success (5.7 min) | success | arm64-v8a 60.7 MB, armeabi-v7a 61.4 MB, universal-apk 136.0 MB, x86-apk 126.0 MB |
+
+Evidence details:
+
+- Step list of run `40425712096`: `Checkout code`, `Setup Android SDK`, `Install NDK`, `Copy libhevtun`, `Fetch AndroidLibXrayLite tag`, `Download libv2ray`, `Run unit tests`, `Build APK`, `Upload arm64-v8a/armeabi-v7a/x86/universal APK` — all `success`.
+- The only check annotation on `34b3710c` is a `notice`: "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026" (runner-image deprecation). It is not a build warning or failure.
+- `Run unit tests` runs `./gradlew testFdroidDebugUnitTest --tests "com.v2ray.ang.ui.connect.*"`. Gradle fails that task with "No tests found for given includes" when the filter matches nothing, so a green step proves the 58 tests in section 11.4 actually executed.
+- `sign-and-release` is `skipped` by design for non-tag pushes; `Validate Fastlane metadata` is `success`.
+
+### 11.8 Product identity (found during this pass)
+
+| Severity | File(s) | Defect | Fix |
+|---|---|---|---|
+| Medium (product) | `res/values/strings.xml` + 8 locales | `app_name` was `QuietStormNG` (no spaces) in the default locale and still literally `v2rayNG` in `values-ar`, `values-bn`, `values-bqi-rIR`, `values-fa`, `values-ru`, `values-vi`, `values-zh-rCN`, `values-zh-rTW` — the launcher label would have been the upstream name on those devices. | Set `app_name` to `Quiet Storm NG` in all 9 files (commit `ac93a7c3`). |
+
+Deliberately **not** changed: `applicationId` (`com.quietstorm.ng`), `namespace` (`com.v2ray.ang`), and `app_tile_name` (the quick-settings tile label, a functional string, not the launcher name).
+
