@@ -167,7 +167,9 @@ object HttpUtil {
 
             val headersMap = JsonUtil.parseHeadersToMap(request.requestHeaders)
             for ((key, value) in headersMap) {
-                LogUtil.d(AppConfig.TAG, "Adding custom header: $key = $value")
+                // Log the header name only: values commonly carry
+                // Authorization / API tokens for subscriptions.
+                LogUtil.d(AppConfig.TAG, "Adding custom header: $key")
                 try {
                     requestBuilder.header(key, value)
                 } catch (_: IllegalArgumentException) {
@@ -286,7 +288,7 @@ object HttpUtil {
         return try {
             client.newCall(requestBuilder.build()).execute().use { response ->
                 if (!response.isSuccessful) {
-                    LogUtil.w(AppConfig.TAG, "Failed to download file, code=${response.code}, url=$url")
+                    LogUtil.w(AppConfig.TAG, "Failed to download file, code=${response.code}, url=${redactUrl(url)}")
                     return false
                 }
                 val body = response.body ?: return false
@@ -298,8 +300,22 @@ object HttpUtil {
                 true
             }
         } catch (e: Exception) {
-            LogUtil.e(AppConfig.TAG, "Failed to download file: $url", e)
+            LogUtil.e(AppConfig.TAG, "Failed to download file: ${redactUrl(url)}", e)
             false
         }
+    }
+
+    /**
+     * Log-safe form of [url]: scheme and host only.
+     *
+     * Subscription and asset URLs frequently embed credentials in the user-info
+     * or a token in the path/query. Those must never reach the log, so only the
+     * scheme and host are kept — enough to identify the failing endpoint.
+     */
+    private fun redactUrl(url: String): String = try {
+        val uri = java.net.URI(url)
+        "${uri.scheme ?: "?"}://${uri.host ?: "?"}/<redacted>"
+    } catch (_: Exception) {
+        "<redacted-url>"
     }
 }

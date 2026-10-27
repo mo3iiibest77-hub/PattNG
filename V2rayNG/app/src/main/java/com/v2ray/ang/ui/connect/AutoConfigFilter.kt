@@ -44,7 +44,18 @@ object AutoConfigFilter {
      *  because the automatic flow requires TLS. Exposed for test clarity. */
     val HTTP_ONLY_PORTS: Set<String> = setOf("2052", "2082", "2086", "2095")
 
-    /** Network types eligible for automatic Cloudflare connection. */
+    /**
+     * Network types eligible for automatic Cloudflare connection.
+     *
+     * Compared case-sensitively on purpose. Parsers store the raw `type`
+     * query value (FmtBase) and the core resolves it via
+     * NetworkType.fromString, which is also case-sensitive and falls back to
+     * TCP. A value such as "WS" would therefore never be built as a WebSocket
+     * outbound, so accepting it here would only produce a broken connection.
+     * The same reasoning applies to [ProfileItem.security]: the core compares
+     * it against "tls" exactly, so "TLS" is rejected here rather than silently
+     * producing a plaintext outbound.
+     */
     private val ELIGIBLE_NETWORKS = setOf("ws", "xhttp")
 
     /**

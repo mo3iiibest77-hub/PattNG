@@ -1,59 +1,136 @@
 package com.v2ray.ang.ui.connect
 
+import com.v2ray.ang.AppConfig
+import com.v2ray.ang.dto.entities.ProfileItem
+import com.v2ray.ang.enums.EConfigType
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * Unit tests for [ConnectionOrchestrator] pure-logic contracts.
+ * Unit tests for [ConnectionOrchestrator]'s pure logic.
  *
- * The full auto-connect flow depends on Android [android.content.Context],
- * MMKV storage, and the native Xray core — all requiring an instrumented
- * environment. These tests cover the testable pure-logic contracts:
- *
- *  - Error messages do not leak subscription URLs or sensitive data.
- *  - Cancel is safe when nothing is running.
- *  - The AutoConnectResult types carry the right data.
- *
- * Tests that merely instantiate sealed-interface subtypes are NOT included
- * here — they prove nothing about connection behavior.
+ * These exercise the real production functions - [pairGuidsWithProfiles] and
+ * [AutoConfigFilter.isEligible] - not re-implementations of them. The
+ * Android-dependent parts (MMKV, the VPN service, the broadcast wait) need an
+ * instrumented environment and are recorded as NOT RUN in Report.md.
  */
 class ConnectionOrchestratorTest {
 
-    // ── AutoConnectResult contracts ──
+    // -- GUID / profile pairing (real function) ----------------------
 
     @Test
-    fun `Success result carries the guid`() {
-        val result = AutoConnectResult.Success("guid-abc")
-        assertEquals("guid-abc", result.guid)
+    fun pairingKeepsOrderAndDropsUndecodableGuids() {
+        val profiles = mapOf(
+            "g1" to profile("server1"),
+            "g3" to profile("server3"),
+        )
+        val pairs = pairGuidsWithProfiles(listOf("g1", "g2", "g3")) { profiles[it] }
+
+        assertEquals(2, pairs.size)
+        assertEquals("g1", pairs[0].first)
+        assertEquals("server1", pairs[0].second.server)
+        assertEquals("g3", pairs[1].first)
+        assertEquals("server3", pairs[1].second.server)
     }
 
     @Test
-    fun `Failure result carries a sanitized reason`() {
-        val result = AutoConnectResult.Failure("Core did not confirm running within timeout")
-        assertNotNull(result.reason)
-        // The reason must not contain a URL or token.
-        assertFalse("Reason must not contain http", result.reason.contains("http"))
-        assertFalse("Reason must not contain token", result.reason.contains("token="))
+    fun pairingReturnsEmptyWhenNothingDecodes() {
+        val pairs = pairGuidsWithProfiles(listOf("g1", "g2")) { null }
+        assertTrue(pairs.isEmpty())
     }
 
     @Test
-    fun `Cancelled result is a singleton`() {
-        val a: AutoConnectResult = AutoConnectResult.Cancelled
-        val b: AutoConnectResult = AutoConnectResult.Cancelled
-        assertEquals(a, b)
+    fun pairingReturnsEmptyForEmptyInput() {
+        assertTrue(pairGuidsWithProfiles(emptyList()) { profile("x") }.isEmpty())
     }
 
-    // ── Error message sanitization ──
+    @Test
+    fun pairingKeepsDuplicateProfilesUnderDistinctGuids() {
+        // Same endpoint stored twice: the two GUIDs must stay separate and
+        // must not collapse into a single entry.
+        val same = profile("shared-host")
+        val profiles = mapOf("g1" to same, "g2" to same)
+        val pairs = pairGuidsWithProfiles(listOf("g1", "g2")) { profiles[it] }
+
+        assertEquals(2, pairs.size)
+        assertEquals("g1", pairs[0].first)
+        assertEquals("g2", pairs[1].first)
+    }
 
     @Test
-    fun `failure messages never contain subscription urls`() {
-        // These are the exact failure messages used in runFlow().
-        // None should contain a URL, token, or credential.
-        val failureMessages = listOf(
+    fun everyPairedGuidBelongsToItsDecodedProfile() {
+        val profiles = mapOf(
+            "alpha" to profile("host-a"),
+            "beta" to profile("host-b"),
+            "gamma" to profile("host-c"),
+        )
+        val pairs = pairGuidsWithProfiles(profiles.keys.toList()) { profiles[it] }
+
+        assertEquals(3, pairs.size)
+        for ((guid, item) in pairs) {
+            assertEquals(profiles.getValue(guid).server, item.server)
+        }
+    }
+
+    // -- Selection over the real pairing plus the real filter --------
+
+    @Test
+    fun selectedGuidMatchesTheSelectedEligibleProfile() {
+        // g1 is ineligible (tcp); g2 and g3 are eligible.
+        val g1 = eligible().apply { network = "tcp" }
+        val g2 = eligible()
+        val g3 = eligible().apply { serverPort = "8443" }
+        val profiles = mapOf("g1" to g1, "g2" to g2, "g3" to g3)
+
+        val pairs = pairGuidsWithProfiles(listOf("g1", "g2", "g3")) { profiles[it] }
+        val eligiblePairs = pairs.filter { AutoConfigFilter.isEligible(it.second) }
+
+        assertEquals(2, eligiblePairs.size)
+        val (guid, item) = eligiblePairs.first()
+        assertEquals("g2", guid)
+        assertEquals(g2, item)
+    }
+
+    @Test
+    fun selectionSkipsUndecodableGuidWithoutShiftingMapping() {
+        // g1 is missing from storage; g2 must still map to its own profile.
+        val g2 = eligible()
+        val profiles = mapOf("g2" to g2)
+
+        val pairs = pairGuidsWithProfiles(listOf("g1", "g2")) { profiles[it] }
+        val selected = pairs.filter { AutoConfigFilter.isEligible(it.second) }.first()
+
+        assertEquals("g2", selected.first)
+        assertEquals(g2, selected.second)
+    }
+
+    // -- Result contracts -------------------------------------------
+
+    @Test
+    fun successCarriesTheGuid() {
+        assertEquals("guid-abc", AutoConnectResult.Success("guid-abc").guid)
+    }
+
+    @Test
+    fun cancelledIsASingleton() {
+        assertEquals(AutoConnectResult.Cancelled, AutoConnectResult.Cancelled)
+    }
+
+    @Test
+    fun failureReasonIsCarriedVerbatim() {
+        val reason = "Core did not confirm running within timeout"
+        assertEquals(reason, AutoConnectResult.Failure(reason).reason)
+    }
+
+    // -- Error text must not leak secrets ---------------------------
+
+    @Test
+    fun failureMessagesContainNoUrlOrCredentialMaterial() {
+        val messages = listOf(
             "No subscription configured",
+            "No enabled subscription configured",
             "Subscription fetch failed",
             "Subscription returned 0 configs",
             "No configs in subscription storage",
@@ -63,106 +140,44 @@ class ConnectionOrchestratorTest {
             "Failed to apply best IP to profile",
             "Core did not confirm running within timeout",
             "Another auto-connect is already running",
+            "Unexpected error",
         )
-        for (msg in failureMessages) {
-            assertFalse("Message contains URL: $msg", msg.contains("http://") || msg.contains("https://"))
-            assertFalse("Message contains token: $msg", msg.contains("token=") || msg.contains("password="))
-            assertFalse("Message contains uuid: $msg", msg.contains("uuid="))
+        for (message in messages) {
+            assertFalse("leaks scheme: " + message, message.contains("://"))
+            assertFalse("leaks token: " + message, message.contains("token="))
+            assertFalse("leaks password: " + message, message.contains("password="))
+            assertFalse("leaks uuid: " + message, message.contains("uuid="))
         }
     }
 
-    // ── Cancel safety ──
+    // -- Cancel safety ---------------------------------------------
 
     @Test
-    fun `cancel is safe to call when no flow is running`() {
+    fun cancelIsSafeWhenNoFlowIsRunning() {
+        ConnectionOrchestrator().cancel()
+    }
+
+    @Test
+    fun cancelIsIdempotent() {
         val orchestrator = ConnectionOrchestrator()
-        // Must not throw — no scan in progress, no deferred, no receiver.
-        orchestrator.cancel()
-    }
-
-    @Test
-    fun `cancel can be called multiple times safely`() {
-        val orchestrator = ConnectionOrchestrator()
         orchestrator.cancel()
         orchestrator.cancel()
-        // No exception thrown = pass.
     }
 
-    // ── GUID-Profile pairing logic ──
+    // -- Helpers ----------------------------------------------------
 
-    /**
-     * Tests that the pairing strategy used in runFlow (mapNotNull producing
-     * GUID↔Profile pairs) correctly handles:
-     *  - Undecodable configs (null from decodeServerConfig)
-     *  - Duplicate profiles (same server but different GUIDs)
-     *
-     * This mirrors the exact logic without needing MMKV.
-     */
-    @Test
-    fun `guid profile pairing skips nulls and preserves order`() {
-        // Simulate: guids with some profiles undecodable (null)
-        val guids = listOf("g1", "g2", "g3", "g4")
-        val profiles = mapOf(
-            "g1" to "server1",
-            "g3" to "server3",
-            "g4" to "server3", // duplicate server, different guid
-        )
-        // g2 is missing → mapNotNull skips it
-        val pairs = guids.mapNotNull { guid ->
-            profiles[guid]?.let { guid to it }
-        }
-        assertEquals(3, pairs.size)
-        assertEquals("g1", pairs[0].first)
-        assertEquals("server1", pairs[0].second)
-        assertEquals("g3", pairs[1].first)
-        assertEquals("server3", pairs[1].second)
-        assertEquals("g4", pairs[2].first)
-        assertEquals("server3", pairs[2].second)
+    private fun profile(server: String) = ProfileItem.create(EConfigType.VLESS).apply {
+        this.server = server
     }
 
-    @Test
-    fun `guid profile pairing with all nulls returns empty`() {
-        val guids = listOf("g1", "g2", "g3")
-        val profiles = emptyMap<String, String>()
-        val pairs = guids.mapNotNull { guid ->
-            profiles[guid]?.let { guid to it }
-        }
-        assertTrue(pairs.isEmpty())
-    }
-
-    @Test
-    fun `first eligible pair always has matching guid and profile`() {
-        // Simulate the selection logic: filter eligible, take first.
-        val pairs = listOf(
-            "g1" to "ineligible",
-            "g2" to "eligible",
-            "g3" to "eligible",
-        )
-        // "eligible" here is a stand-in for passing AutoConfigFilter
-        val eligible = pairs.filter { it.second == "eligible" }
-        assertEquals(2, eligible.size)
-        val (selectedGuid, selectedProfile) = eligible.first()
-        assertEquals("g2", selectedGuid)
-        assertEquals("eligible", selectedProfile)
-        // The GUID belongs to the selected profile — not shifted by the
-        // ineligible g1 entry that was filtered out.
-    }
-
-    // ── Transport preservation contract ──
-
-    @Test
-    fun `ensureSettings only fills blanks and never overwrites`() {
-        // This documents the contract: ensureSettings must not overwrite
-        // existing finalMask, cipherSuites, or fingerPrint values.
-        // The actual test with ProfileItem requires MMKV, but the contract
-        // is verified by reading the source (see ConnectionOrchestrator.kt
-        // ensureSettings: each field is guarded by isNullOrBlank()).
-        // This test serves as a regression guard for the contract.
-        val fields = listOf("finalMask", "cipherSuites", "fingerPrint")
-        for (field in fields) {
-            // Each field must be guarded by isNullOrBlank() — if not blank,
-            // it is preserved. This is the documented contract.
-            assertTrue("Field $field must be guarded by isNullOrBlank", true)
-        }
+    private fun eligible() = ProfileItem.create(EConfigType.VLESS).apply {
+        server = "example.com"
+        serverPort = "443"
+        network = "ws"
+        security = AppConfig.TLS
+        password = "uuid-1234"
+        sni = "example.com"
+        host = "example.com"
+        path = "/ws"
     }
 }

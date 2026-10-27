@@ -411,3 +411,78 @@ Applied to all TLS configs regardless of profileItem.fingerPrint. Profile value 
 - **Already-running-core edge case:** if the VPN core is already running when `autoConnect` is called, the daemon may not emit a fresh `MSG_STATE_RUNNING`, so `awaitCoreRunning` could time out. Not handled in this phase (no explicit status-query broadcast added).
 - **`ensureSettings` / `applyBestIp` preservation** is verified by simulation tests (pure logic), not against real MMKV storage.
 - **`Utils.receiverFlags()` returns `RECEIVER_EXPORTED` on API 33+** — this matches the existing project pattern (MainRepository), but it does mean the receiver is technically exportable. This is pre-existing project behavior, not introduced here.
+
+---
+
+## 11. Independent Re-audit — Quiet Storm NG (corrective pass 2)
+
+> Branch: `feature/minimal-cloudflare-vpn`. `master` untouched at `a52f20c2`.
+> No new branch, no history rewrite, no force push, no local/server Gradle build.
+
+### 11.1 Verified baseline before this pass
+
+| Item | Value |
+|---|---|
+| Branch / HEAD | `feature/minimal-cloudflare-vpn` / `fbfcc16a` |
+| `master` | `a52f20c2` (unchanged) |
+| Working tree | clean |
+| Commits ahead of master | 7 |
+| Last green CI | Build APK #68 (`fbfcc16`) — **success**, 7m 15s, 4 artifacts |
+
+Build APK #68 also ran the `Run unit tests` step successfully, so the 55 tests
+present at that commit genuinely executed and passed on CI (Gradle fails with
+"No tests found for given includes" when a `--tests` filter matches nothing, so
+a green step proves the tests ran).
+
+### 11.2 Defects found in this pass
+
+| # | Severity | File | Defect | Fix |
+|---|---|---|---|---|
+| 1 | **Critical** | `ConnectionOrchestrator.kt` | Waited only for `MSG_STATE_RUNNING`, but the daemon announces a successful start with `MSG_STATE_START_SUCCESS`; `MSG_STATE_RUNNING` is sent **only** as a reply to `MSG_REGISTER_CLIENT` (`CoreServiceManager.kt:175` vs `:458`). Every fresh connect would have timed out and reported failure while the VPN was actually up. | Treat `START_SUCCESS` and `RUNNING` both as "core is up". |
+| 2 | **High** | `ConnectionOrchestrator.kt` | Already-connected case: no new `RUNNING` broadcast is emitted, so the wait timed out; worse, the newly selected config and freshly applied best IP would never take effect. | Probe with `MSG_REGISTER_CLIENT`; if already running, `LauncherManager.restartService()` so the selected config/IP is actually loaded. `STOP_SUCCESS` is ignored during the wait because restart emits it legitimately. |
+| 3 | **Critical (security)** | `HttpUtil.kt` | `LogUtil.d("Adding custom header: $key = $value")` logged subscription header **values** (commonly `Authorization`/`X-API-Key`), and `downloadToFile` logged the full URL on failure. | Log header name only; added `redactUrl()` (scheme + host + `<redacted>`) for download failures. |
+| 4 | High | `ConnectionOrchestrator.kt` | The 180 s scan safety timeout returned null but left `CloudflareScanner` running in its own scope: orphaned CPU/network work and temp MMKV profiles. | Cancel the scanner when the deferred is still incomplete after the timeout. |
+| 5 | High | `ConnectionOrchestrator.kt` | `decodeSubscriptions().first()` could pick a **disabled** subscription, yielding `configCount == 0` and a misleading "Subscription returned 0 configs" failure. | Select the first **enabled** subscription; explicit "No enabled subscription configured" otherwise. |
+| 6 | Medium | `ConnectionOrchestrator.kt` | Unexpected exceptions from MMKV/scanner/service escaped `autoConnect` instead of producing a result. | Catch `Exception` (rethrow `CancellationException`) and return a sanitized `Failure`. |
+| 7 | Medium | `ConnectionOrchestratorTest.kt` | GUID-pairing tests re-implemented the logic instead of testing production code — they would pass even if the orchestrator regressed. | Extracted `pairGuidsWithProfiles()` and the tests now call the real function, plus a selection test that runs the real `AutoConfigFilter.isEligible`. |
+| 8 | Low | `AutoConfigFilter.kt` | Case-sensitivity of `network`/`security` was undocumented and looked like an oversight. | Documented that it is intentional and matches `NetworkType.fromString` / `CoreOutboundBuilder`, which are also case-sensitive; accepting "TLS"/"WS" would only produce a broken outbound. |
+
+### 11.3 Verified non-issues (checked, no change made)
+
+- **finalMask injection is not duplicated**: `AngConfigManager.parseConfig` guards with `config.finalMask.isNullOrBlank()`.
+- **`applyBestIp` preserves transport**: it writes only `server`, plus `fingerPrint`/`finalMask`/`cipherSuites` **only when blank**. `CoreOutboundBuilder.populateTlsSettings` hardcodes `fingerprint = "unsafe"` for all TLS configs (line 558), so the stored value is not load-bearing; the previously unconditional overwrite was unnecessary mutation.
+- **Filter never deletes configs**: `AutoConfigFilter` is referenced only by `ConnectionOrchestrator`; parsers and manual paths are untouched.
+- **HTTPS port set is correct**: `{443, 2053, 2083, 2087, 2096, 8443}`; HTTP-only `{2052, 2082, 2086, 2095}` are excluded and asserted disjoint by test.
+- **Cipher suites**: `cs` query param is parsed in `FmtBase` and preserved; the orchestrator only fills blanks.
+- **Broadcast contract**: the message id lives in the `key` extra (`MessageHelper.messageIntent`), and `Utils.receiverFlags()` matches `MainRepository`.
+- **No native core in the UI process**: `CoreServiceManager` eagerly builds `coreController` in its object initializer, so `isRunning()` is never called from the orchestrator.
+
+### 11.4 Tests
+
+| File | Tests | What it proves |
+|---|---|---|
+| `AutoConfigFilterTest.kt` | 27 | Accepted HTTPS ports, rejected HTTP-only ports (individually and as a set), disjointness, transport/security/port/server/auth rejection, order preservation, empty input. |
+| `ConnectionOrchestratorTest.kt` | 13 | Real `pairGuidsWithProfiles` (order, dropped nulls, duplicate profiles, GUID↔profile identity), selection over the real filter, result contracts, no URL/credential material in failure text, cancel safety. |
+| `CloudflareScannerPreservationTest.kt` | 18 | SNI/Host/Path/xhttpMode/xhttpExtra/network/security/port/auth/ALPN/insecure/pinnedCA/configType preserved; fingerPrint/finalMask/cipherSuites only filled when blank. |
+| **Total** | **58** | |
+
+CI execution: `build.yml` runs `./gradlew testFdroidDebugUnitTest --tests "com.v2ray.ang.ui.connect.*"`.
+
+### 11.5 NOT RUN
+
+- Instrumented / on-device tests: **NOT RUN** (no emulator or device).
+- Real end-to-end connect (subscription → scan → tunnel up): **NOT RUN**.
+- `applyBestIp` against real MMKV: covered only by a pure-logic simulation test.
+
+### 11.6 Remaining risks
+
+- `Utils.receiverFlags()` returns `RECEIVER_EXPORTED` on API 33+. A hostile app could spoof `MSG_STATE_RUNNING`/`MSG_STATE_START_SUCCESS`. This matches the existing project-wide pattern (`MainRepository`), so it was not changed here.
+- The `MSG_REGISTER_CLIENT` probe adds ~1.5 s before the first start when no daemon is running.
+- When the core is already up, the flow restarts it so the new config/best IP applies — a brief tunnel drop.
+- No automatic retry/reconnect loop; a failure returns to the caller.
+- `CloudflareScanner` temp profiles (`cfscanner-*`) are removed in `finally`, but a process kill mid-scan can leave orphans.
+- Unit tests are JVM-only; they cannot catch Android lifecycle or process-boundary regressions.
+
+### 11.7 CI evidence for this pass
+
+- *To be filled after push.*
