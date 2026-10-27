@@ -1290,7 +1290,7 @@ The report itself is committed after the build, so the documentation commit is n
 ## 16. Next build — Save-and-update, the Connect crash, Connect from Configurations, original GIF background
 
 This section covers the four changes requested for the next build. Every claim below is tied to a
-file in this commit; the CI evidence is added in §16.8 after the run, not before it.
+file in this commit; the CI evidence is in §16.7, after the run, not before it.
 
 ### 16.1 Subscription Save now also updates
 
@@ -1427,4 +1427,44 @@ rectangle in Cloudflare orange `#F6821F` — drawn, not shipped as an extra asse
 |---|---|---|
 | `CrashReportTest` | 5 | exception line + first frame extraction, header lines ignored, empty input, fallback, 400-char cap |
 | `ConnectFromConfigTest` | 9 | the six `ConfigActionRules` cases (ignore while connecting/disconnecting, disconnect on the running config, connect for another config, unknown running config, stopped selection), `connectedGuid` set on `Connected`, cleared on `Stopping`, `lastCrash` empty by default |
+
+
+### 16.7 CI evidence
+
+Build of record: [run 40454835999](https://github.com/mo3iiibest77-hub/PattNG/actions/runs/40454835999),
+commit `4060691eec4bf2e62a0008ff938c129b14da91e5` on `feature/minimal-cloudflare-vpn`.
+Job `build`: 05:21:19Z → 05:27:34Z (6 m 15 s), conclusion `success`, first attempt, no retry.
+
+| Step | Result |
+|---|---|
+| Run unit tests (`testPlaystoreDebugUnitTest`) | PASS |
+| Build APK (`assemblePlaystoreRelease`) | PASS |
+| Verify APK identity, signature and features | PASS |
+| Upload arm64-v8a APK | PASS |
+| Upload armeabi-v7a APK | PASS |
+| Upload universal APK | PASS |
+
+Executed tests, from the workflow's own annotation on this commit
+(`unit tests executed: 276 (failures=0 errors=0 skipped=0)`): **276 run, 0 failures, 0 errors,
+0 skipped** across `com.v2ray.ang.ui.connect.*`, `com.v2ray.ang.ui.qsn.*`,
+`com.v2ray.ang.ui.qsn.domain.*` and `com.v2ray.ang.ui.qsn.data.*`. The two new classes
+(`CrashReportTest`, `ConnectFromConfigTest`) are part of that count.
+
+### 16.8 Artifacts produced by the build of record
+
+| ABI | Artifact | APK inside | Artifact size (bytes) | Download |
+|---|---|---|---|---|
+| arm64-v8a | `arm64-v8a` | `QuietStormNG_2.3.4_arm64-v8a.apk` | 34,617,394 | [artifact](https://github.com/mo3iiibest77-hub/PattNG/actions/runs/40454835999/artifacts/12711289063) |
+| armeabi-v7a | `armeabi-v7a` | `QuietStormNG_2.3.4_armeabi-v7a.apk` | 34,971,732 | [artifact](https://github.com/mo3iiibest77-hub/PattNG/actions/runs/40454835999/artifacts/12711299184) |
+| universal | `universal-apk` | `QuietStormNG_2.3.4_universal.apk` | 74,053,403 | [artifact](https://github.com/mo3iiibest77-hub/PattNG/actions/runs/40454835999/artifacts/12711388925) |
+
+The "Verify APK identity, signature and features" step of this run asserted, for each of the three
+files, that exactly one APK per ABI exists, that its package is `com.quietstorm.ng`, and that
+`apksigner` accepts the signature — it fails the build otherwise, and it did not fail.
+
+**What is not reported here.** The APK files themselves were not downloaded in this environment:
+the artifact endpoint answers `401 Requires authentication` without a token, so their per-file
+SHA-256 values and their on-device byte counts are not stated in this section rather than guessed.
+The artifact sizes above are what the GitHub API reports for the uploaded archives. Download the
+artifacts from the run page (signed in) to get the three APKs.
 
