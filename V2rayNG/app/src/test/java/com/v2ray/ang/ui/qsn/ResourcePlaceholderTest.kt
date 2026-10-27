@@ -19,13 +19,33 @@ class ResourcePlaceholderTest {
     private val specifier = Regex("%(\\d+\\$)?[-#+ 0,(]*\\d*(?:\\.\\d+)?[a-zA-Z%]")
 
     private fun resDir(): File {
-        val candidates = listOf(
-            "src/main/res",
-            "app/src/main/res",
-            "V2rayNG/app/src/main/res",
-        )
-        return candidates.map { File(it) }.firstOrNull { it.isDirectory }
+        val candidates = buildList {
+            // The module the test class was compiled into, found from the
+            // class file itself: this does not depend on the working
+            // directory the Gradle test worker happens to use.
+            moduleDirFromClasspath()?.let { add(File(it, "src/main/res")) }
+            add(File("src/main/res"))
+            add(File("app/src/main/res"))
+            add(File("V2rayNG/app/src/main/res"))
+        }
+        return candidates.firstOrNull { it.isDirectory }
             ?: error("res directory not found from " + File(".").absolutePath)
+    }
+
+    /** Walks up from the compiled test class to the Gradle module directory. */
+    private fun moduleDirFromClasspath(): File? {
+        val location = ResourcePlaceholderTest::class.java
+            .protectionDomain?.codeSource?.location ?: return null
+        var dir = try {
+            File(location.toURI())
+        } catch (_: Exception) {
+            return null
+        }
+        while (dir.parentFile != null) {
+            if (File(dir, "src/main/res").isDirectory) return dir
+            dir = dir.parentFile
+        }
+        return null
     }
 
     private fun readStrings(dir: File): Map<String, String> {
