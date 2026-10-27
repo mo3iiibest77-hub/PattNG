@@ -520,7 +520,7 @@ object CloudflareScanner {
         val exhausted = !stopped.get() && from + work.size >= total
         val nextIndex = if (exhausted) 0 else scanned.coerceIn(0, total)
         IspManager.savePartialProgress(
-            context = context,
+            ctx = context,
             ispName = ispName,
             foundCidrs = accumulator.qualified.map { it.cidr },
             lastIndex = nextIndex,
