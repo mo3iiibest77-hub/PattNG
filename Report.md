@@ -911,3 +911,161 @@ Everything below needs real hardware and is not claimed:
 - Each candidate costs a 1 MiB upload plus a 1 MiB download. With no ranges configured the scanner
   still uses its own 30-candidate list, as before; a full 64-candidate range scan moves up to 64 MiB
   in each direction. The ceiling bounds the work, it does not make it free.
+
+
+## 14. Release pipeline fix — the installed APK was the wrong flavour
+
+### 14.1 Symptom
+
+Build #78 was installed and the new capabilities were not visible in the app.
+
+### 14.2 Root cause
+
+The build step ran `./gradlew assembleRelease`, which assembles **every** product flavour, and the
+upload globs had a wildcard in the flavour segment:
+
+`path: V2rayNG/app/build/outputs/apk/*/release/*arm64-v8a*.apk`
+
+That matches both `fdroid/release/…-fdroid_arm64-v8a.apk` and
+`playstore/release/…_arm64-v8a.apk`, so each "one APK" artifact actually contained two APKs.
+`actions/upload-artifact` keeps the least common ancestor directory, so the zip contained a
+`fdroid/` folder and a `playstore/` folder, with the F-Droid file sorting first.
+
+### 14.3 Evidence
+
+The artifact of build #78 ([run 40439097049](https://github.com/mo3iiibest77-hub/PattNG/actions/runs/40439097049),
+commit `a816a782`) was downloaded and listed:
+
+`
+  Length      Date    Time    Name
+---------  ---------- -----   ----
+ 32848673  2026-10-27 02:40   fdroid/release/QuietStormNG_2.3.4-fdroid_arm64-v8a.apk
+ 32848581  2026-10-27 02:40   playstore/release/QuietStormNG_2.3.4_arm64-v8a.apk
+--------                     -------
+ 65697254                     2 files
+`
+
+Both files were parsed (binary AndroidManifest) and inspected:
+
+| Property | `…-fdroid_arm64-v8a.apk` | `…_arm64-v8a.apk` |
+|---|---|---|
+| package | `com.quietstorm.ng.fdroid` | `com.quietstorm.ng` |
+| versionCode | 5,074,401 | 4,000,744 |
+| versionName | 2.3.4 | 2.3.4 |
+| `CandidateRanker` in dex | present | present |
+| `QsConfigScreen` in dex | present | present |
+| "Cloudflare-ready" in resources.arsc | present | present |
+
+So the **code was correct** in both files. The build never produced a stale APK; the problem was
+which of the two files the user installed.
+
+### 14.4 Why the app showed nothing new
+
+The F-Droid APK declares `com.quietstorm.ng.fdroid`. Android cannot install it *over* an existing
+`com.quietstorm.ng` — different applicationId means a different app. Installing it therefore left
+the previously installed `com.quietstorm.ng` untouched, and the home screen ended up with two icons
+carrying the same label, "Quiet Storm NG". Opening the old one (the one already there) shows the old
+UI, which is exactly the reported symptom.
+
+The pipeline made that the likely outcome: the F-Droid file was listed first, it was the same size,
+it had the same label, and it carried a *higher* versionCode (5,074,401 vs 4,000,744), so it looked
+like the newer build.
+
+### 14.5 Changes
+
+`.github/workflows/build.yml`:
+
+| Before | After |
+|---|---|
+| `testFdroidDebugUnitTest` | `testPlaystoreDebugUnitTest` — the F-Droid variant is never compiled |
+| `licenseFdroidReleaseReport` | `licensePlaystoreReleaseReport` |
+| `assembleRelease` (all flavours) | `assemblePlaystoreRelease` |
+| `apk/*/release/*arm64-v8a*.apk` | `apk/playstore/release/QuietStormNG_*_arm64-v8a.apk` |
+| `apk/*/release/*armeabi-v7a*.apk` | `apk/playstore/release/QuietStormNG_*_armeabi-v7a.apk` |
+| `apk/*/release/*universal*.apk` | `apk/playstore/release/QuietStormNG_*_universal.apk` |
+| `apk/*/release/*x86*.apk` (also matched x86_64) | removed |
+| no check | new "Verify APK identity, signature and features" step |
+| upload could silently produce nothing | `if-no-files-found: error` |
+
+The verification step fails the build when any of the following is true:
+
+- any `*-fdroid*` file exists anywhere under `app/build/outputs/apk`;
+- `git rev-parse HEAD` differs from `GITHUB_SHA`;
+- a glob does not resolve to exactly one existing APK;
+- `aapt2 dump badging` does not report `name='com.quietstorm.ng'`;
+- `apksigner verify` rejects an APK, or the three signer reports differ;
+- `CandidateRanker`, `QsConfigScreen` or the "Cloudflare-ready" resource is missing from the dex
+  or the resource table of any APK.
+
+### 14.6 The three APKs
+
+Build #80 ([run 40443901521](https://github.com/mo3iiibest77-hub/PattNG/actions/runs/40443901521),
+commit `130b1472`):
+
+| Artifact | File | Size | SHA-256 |
+|---|---|---|---|
+| `arm64-v8a` | QuietStormNG_2.3.4_arm64-v8a.apk | 32,848,581 B | `99be9b70c2d40196ad24f62a03b820c9516fda4bfc1c26d104bee8be7b853a27` |
+| `armeabi-v7a` | QuietStormNG_2.3.4_armeabi-v7a.apk | 33,241,015 B | `438fa22257206284bc9b7e3bcc09cb6c33a91c733d5f390b2beaed57a428f31f` |
+| `universal-apk` | QuietStormNG_2.3.4_universal.apk | 72,645,070 B | `7f20c63e6aa4afd62ff8bacdfb88e71f5766f17a13b88d3f943bfd63abba942a` |
+
+All three, verified locally against the downloaded artifacts:
+
+- exactly one file per artifact zip, at the zip root, with no `fdroid/` directory;
+- package `com.quietstorm.ng`, versionCode 4,000,744, versionName 2.3.4;
+- APK Signature Scheme v2 block present, and the CI step confirmed the three signer reports are
+  identical (one key);
+- `CandidateRanker` and `QsConfigScreen` present in the dex, "Cloudflare-ready" present in
+  `resources.arsc`;
+- 7 native libraries in each ABI split, 28 in the universal APK.
+
+Artifact sizes confirm the fix without opening them: the arm64 artifact went from 61.0 MB (two APKs)
+to 30.5 MB (one APK), the universal artifact from 136.2 MB to 68.1 MB.
+
+### 14.7 No F-Droid output
+
+`GET /repos/…/actions/runs/40443901521/artifacts` returns exactly three entries:
+`arm64-v8a`, `armeabi-v7a`, `universal-apk`. There is no F-Droid artifact, and the build tree
+contains no `*-fdroid*` file — the step that would have produced one is no longer invoked, and the
+verification step would fail the run if one appeared.
+
+### 14.8 CI evidence
+
+| Run | Commit | Result | Note |
+|---|---|---|---|
+| [#79](https://github.com/mo3iiibest77-hub/PattNG/actions/runs/40442891992) | `0d7187de` | failure | the new verification step rejected all three APKs |
+| [#80](https://github.com/mo3iiibest77-hub/PattNG/actions/runs/40443901521) | `130b1472` | success | 6 m 06 s, 03:23:33Z → 03:29:39Z |
+
+Run #79 failed because of the verification step itself, not the build. No APK was rejected by
+`apksigner` (the rejection branch never fired and the v2 signing block is present in every file),
+but the certificate digest was not extracted from the captured output, so the step treated the APKs
+as unsigned. The step now captures stdout and stderr together, matches the digest line without
+anchoring it, and falls back to comparing the whole signer report when no digest line is printed.
+Run #80 passed it.
+
+Run #80 also reported `unit tests executed: 199 (failures=0 errors=0 skipped=0)`.
+
+### 14.9 How to confirm the new capabilities are in a downloaded APK
+
+Any of these can be run on the artifact itself:
+
+`
+unzip -l arm64-v8a.zip                       # exactly one .apk, no fdroid/ folder
+unzip -p <apk> 'classes*.dex' | grep -ac CandidateRanker
+unzip -p <apk> 'classes*.dex' | grep -ac QsConfigScreen
+unzip -p <apk> resources.arsc | grep -ac 'Cloudflare-ready'
+$ANDROID_HOME/build-tools/<ver>/aapt2 dump badging <apk> | head -1
+$ANDROID_HOME/build-tools/<ver>/apksigner verify --print-certs <apk>
+`
+
+On the device: the launcher entry opens the four-tab screen (Connection, Configurations, IP Ranges,
+Apps). If an older icon with the same name is still present, it belongs to the previous
+`com.quietstorm.ng` install or to a previously installed `com.quietstorm.ng.fdroid`; uninstalling
+both and installing only the new APK removes the ambiguity.
+
+### 14.10 NOT verified
+
+- the three APKs were not installed on a physical device in this pass;
+- the signer digest equality was proven by `apksigner` output inside CI and by the v2 block being
+  present in all three files, not by comparing certificate bytes independently;
+- x86 and x86_64 splits are still compiled by AGP (the ABI split configuration was not changed) but
+  no artifact publishes them.
