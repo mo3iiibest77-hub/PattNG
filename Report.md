@@ -508,3 +508,105 @@ Evidence details:
 
 Deliberately **not** changed: `applicationId` (`com.quietstorm.ng`), `namespace` (`com.v2ray.ang`), and `app_tile_name` (the quick-settings tile label, a functional string, not the launcher name).
 
+
+---
+
+## 12. Phase 3 — minimal UI, connection wiring and release readiness
+
+> Branch: `feature/minimal-cloudflare-vpn`. `master` untouched at `a52f20c2`.
+> No local or server Gradle build was run; every compile/test result below comes from GitHub Actions.
+
+### 12.1 Objective
+
+Turn the Phase 2 auto-connect logic (which until now had **zero callers**) into a shippable,
+installable product: a two-screen UI (Connection, Apps) that reflects only real state, plus the
+defects that wiring exposed.
+
+### 12.2 Navigation audit (before -> after)
+
+Before this pass the launcher activity was `ui.main.MainActivity` with 10 drawer destinations
+(`MainDrawer.kt:37-48`): Subscriptions, PerAppProxy, Routing, UserAssets, Settings, Promotion,
+Logcat, CheckUpdate, BackupRestore, About — plus the group/server pager and its bottom bar.
+
+| Destination | Before | After |
+|---|---|---|
+| Connection (new) | did not exist | launcher, tab 1 |
+| Apps / per-app proxy (new) | drawer -> `PerAppProxyActivity` | launcher, tab 2 |
+| Subscription list, server list, routing, user assets, settings, logcat, backup, update, about | launcher drawer | still present in the app, no longer reachable from the launcher |
+| `v2rayng://install-config`, `v2rayng://install-sub` | `UrlSchemeActivity` -> `MainActivity` | unchanged (import must keep working) |
+| Quick settings tile long-press (`QS_TILE_PREFERENCES`) | `MainActivity` | unchanged |
+| Scanner import (`ScScannerActivity`) | -> `MainActivity` | unchanged |
+| VPN notification tap | `MainActivity` | `QuietStormActivity` |
+
+No screen, parser, service or capability was deleted. `MainActivity` keeps `exported="true"`
+because the system starts it for `QS_TILE_PREFERENCES`; it lost only its MAIN/LAUNCHER filter.
+
+### 12.3 Implemented
+
+| File | Purpose |
+|---|---|
+| `ui/qsn/QsContract.kt` | `QsStatus`, `QsStep`, `QsUiState`, the pure `withConnectState()` mapper and `QsUrlValidator` |
+| `ui/qsn/QsViewModel.kt` | Owns the orchestrator, the subscription URL and the daemon event stream; single-flight connect, cancel, disconnect with a real stop confirmation |
+| `ui/qsn/QuietStormActivity.kt` | Launcher activity: two tabs, VPN consent flow, restart-on-setting-change |
+| `ui/qsn/QsConnectScreen.kt` | Status card, subscription card, progress/step list, error card, real connection details |
+| `ui/qsn/QsAppsScreen.kt` | Per-app list wired to the existing `PerAppProxyViewModel` |
+| `res/values/strings.xml`, `res/values-fa/strings.xml` | 39 new strings (en + fa) |
+| `AndroidManifest.xml` | `QuietStormActivity` is the launcher; `MainActivity` keeps only the QS tile filter |
+| `handler/NotificationManager.kt` | Notification opens the minimal UI |
+| `.github/workflows/build.yml` | Unit tests now cover `ui.qsn.*`, print per-class counts and fail if 0 tests run |
+| `.github/scripts/summarize-unit-tests.py` | Parses the Gradle XML results into a per-class summary |
+
+### 12.4 Connection state contract
+
+`Connected` is produced only by `MSG_STATE_START_SUCCESS` / `MSG_STATE_RUNNING` (both real daemon
+signals) or by `AutoConnectResult.Success`, which the orchestrator emits only after the daemon
+confirmed running. `QsContractTest.noStateClaimsConnectedWithoutARunningCore` asserts that no other
+orchestrator state can report `Connected` while the core is down.
+
+Restoration: on cold start the view model re-sends `MSG_REGISTER_CLIENT` after its collector is
+attached, because `MainRepository` probes in its constructor and that reply can be dropped. The UI
+never reads a cached "was connected" flag.
+
+### 12.5 Defects found and fixed in this pass
+
+| # | Severity | File | Defect | Fix |
+|---|---|---|---|---|
+| 1 | **Critical** | `ConnectionOrchestrator.kt` | `autoConnect()` ran `AngConfigManager.updateConfigViaSub()` — blocking OkHttp — on the caller thread. Called from `viewModelScope` (Main) it would ANR. | The flow now runs inside `withContext(Dispatchers.IO)`; callers cannot get it wrong. |
+| 2 | High | `ConnectionOrchestrator.kt` | Cancelling the coroutine (activity destroyed mid-scan) left `CloudflareScanner` running in its own scope, writing temp profiles with nobody listening. | `cancel()` is now called in the `CancellationException` branch. |
+| 3 | High | `ConnectionOrchestrator.kt` + UI | With no VPN consent `CoreVpnService.setupVpnService()` returns false and `stopSelf()`s **without** broadcasting `START_FAILURE`, so every such attempt burned the 30 s timeout and reported "core did not start". | Consent is requested before the flow; the orchestrator also fails fast with `VPN permission required`. |
+| 4 | Medium | `CloudflareScanner.kt` | `encodeServerConfig()` publishes every profile into its subscription list, so a `cfscanner-*` temp profile orphaned by process death becomes a visible fake config. | `purgeStaleTempProfiles()` runs at the start of every scan. |
+| 5 | Medium | `NotificationManager.kt` | The VPN notification opened the full PattNG UI. | Opens `QuietStormActivity`. |
+| 6 | Medium | `ui/connect/*` | Phase 2 shipped an orchestrator with **zero callers** — the automatic flow was unreachable from any UI. | Wired into `QsViewModel`. |
+| 7 | Low | `build.yml` | The test filter covered only `com.v2ray.ang.ui.connect.*`; a new package would silently never run. | Filter covers `ui.qsn.*` too, counts are printed, and the step fails when 0 tests execute. |
+
+### 12.6 Tests
+
+`QsContractTest` (25 tests) exercises the real `QsUiState.withConnectState()` and the real
+`QsUrlValidator` — not re-implementations:
+
+- URL: https/http accepted, whitespace trimmed, blank / non-http / no-scheme / no-host / embedded-space rejected, non-ASCII host accepted.
+- Mapping: every step maps to its own UI step; scan progress produces a real fraction; `Connected` requires the daemon signal; a failure while the tunnel is up keeps `Connected`; a failure while it is down becomes `Error`; cancel reports `Disconnected` or `Connected` truthfully; missing subscription is an error.
+- Property: for all 13 non-connected orchestrator states, no mapping reports `Connected` while the core is down.
+
+CI runs `com.v2ray.ang.ui.connect.*` + `com.v2ray.ang.ui.qsn.*` = **83 tests**.
+
+### 12.7 CI evidence for this pass
+
+- *To be filled after push.*
+
+### 12.8 NOT RUN
+
+- On-device / instrumented tests: **NOT RUN** (no device or emulator).
+- Real end-to-end connect (subscription -> scan -> tunnel up): **NOT RUN**.
+- Per-app enforcement on a device (`addAllowedApplication`): **NOT RUN**.
+- Rotation / process-death behaviour: **NOT RUN** (state design is rotation-safe, but unproven on hardware).
+- Traffic statistics in the UI: **not implemented** — the core exposes them only inside the daemon process; the screen states this instead of showing fake numbers.
+
+### 12.9 Remaining risks
+
+- The subscription fetch is blocking OkHttp with a 15 s timeout per attempt, so Cancel during the fetch is honoured at the next checkpoint, not instantly.
+- The full PattNG UI is still reachable through `v2rayng://` deep links, the QS tile preferences and the scanner import flow. This is intentional (import must keep working) but means the minimal UI is not the only surface.
+- `MainActivity` stays exported for `QS_TILE_PREFERENCES`; any app that knows the component name can start it.
+- Changing the per-app selection restarts a running tunnel on the next tab switch or resume, not instantly.
+- `Utils.receiverFlags()` still uses `RECEIVER_EXPORTED` on API 33+, so status broadcasts can be spoofed by a hostile app (project-wide pattern, unchanged).
+- No automatic retry when the flow fails; the user must tap Retry.
