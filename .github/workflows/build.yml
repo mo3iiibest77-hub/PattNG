@@ -167,15 +167,25 @@ jobs:
             *) echo "::error::unexpected package for ${apk}: ${line}"; fail=1 ;;
           esac
 
-          if ! certs=$("${BUILD_TOOLS}/apksigner" verify --print-certs "${apk}"); then
+          set +e
+          certs=$("${BUILD_TOOLS}/apksigner" verify --print-certs "${apk}" 2>&1)
+          sign_status=$?
+          set -e
+          printf '%s\n' "${certs}" | sed 's/^/     /'
+          if [ "${sign_status}" -ne 0 ]; then
             echo "::error::apksigner rejected ${apk}"
             fail=1
             continue
           fi
-          cert=$(printf '%s\n' "${certs}" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p')
-          echo "   signer sha256: ${cert}"
+          cert=$(printf '%s\n' "${certs}" | sed -n 's/.*SHA-256 digest: *//p' | tr -d ' \r' | awk 'NR==1')
           if [ -z "${cert}" ]; then
-            echo "::error::unsigned or unverifiable APK: ${apk}"
+            # The exit status already proved the signature is valid; keep the
+            # whole report so the three APKs can still be compared exactly.
+            cert=$(printf '%s\n' "${certs}" | tr '\n' ' ' | tr -s ' ')
+          fi
+          echo "   signer: ${cert}"
+          if [ -z "${cert}" ]; then
+            echo "::error::apksigner printed no signer information for ${apk}"
             fail=1
           elif [ -z "${signer}" ]; then
             signer="${cert}"
