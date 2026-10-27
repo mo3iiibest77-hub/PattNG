@@ -592,7 +592,25 @@ CI runs `com.v2ray.ang.ui.connect.*` + `com.v2ray.ang.ui.qsn.*` = **83 tests**.
 
 ### 12.7 CI evidence for this pass
 
-- *To be filled after push.*
+Every build below ran on GitHub Actions. No Gradle task was executed on the server or locally.
+
+| Commit | Workflow run | Result |
+|---|---|---|
+| `4d419ffa` phase 3, first attempt | [Build APK 40429625735](https://github.com/mo3iiibest77-hub/PattNG/actions/runs/40429625735) | **failure** — main and test sources compiled; exactly one test failed: `QsContractTest > acceptsNonAsciiHost`. `java.net.URI` returns a null host for a non-ASCII authority instead of throwing, so the IDN fallback was never reached. |
+| `1bbe4f16` validator fix | [Build APK 40430257755](https://github.com/mo3iiibest77-hub/PattNG/actions/runs/40430257755) | **success** — 5.0 min, 4 artifacts |
+
+Run `40430257755` step list: `Checkout code`, `Setup Android SDK`, `Install NDK`, `Copy libhevtun`,
+`Fetch AndroidLibXrayLite tag`, `Download libv2ray`, `Decode Keystore`, `Run unit tests`,
+`Build APK`, `Upload arm64-v8a/armeabi-v7a/x86/universal APK` — all `success`.
+`Build libhevtun` / `Save libhevtun` were `skipped` because the NDK-keyed cache was restored.
+`sign-and-release` is `skipped` by design for non-tag pushes.
+
+Artifacts of run `40430257755` (not expired): `arm64-v8a` 60.8 MB, `armeabi-v7a` 61.5 MB,
+`x86-apk` 126.2 MB, `universal-apk` 136.0 MB.
+
+The failed run is recorded on purpose: it proves the `Run unit tests` step really executes the
+filtered suite and can fail, rather than passing vacuously. `summarize-unit-tests.py` fails the
+step when zero tests execute and emits the executed count as a workflow annotation.
 
 ### 12.8 NOT RUN
 
@@ -610,3 +628,17 @@ CI runs `com.v2ray.ang.ui.connect.*` + `com.v2ray.ang.ui.qsn.*` = **83 tests**.
 - Changing the per-app selection restarts a running tunnel on the next tab switch or resume, not instantly.
 - `Utils.receiverFlags()` still uses `RECEIVER_EXPORTED` on API 33+, so status broadcasts can be spoofed by a hostile app (project-wide pattern, unchanged).
 - No automatic retry when the flow fails; the user must tap Retry.
+
+### 12.10 Branding sweep (same pass)
+
+| File | Change |
+|---|---|
+| `res/values-vi/strings.xml` | 9 user-visible strings still said `v2rayNG` (toasts, notification stop action, page title, Tasker action, tile first-use hint) -> `Quiet Storm NG` |
+| `res/values-ru/strings.xml` | `app_widget_name` / `app_tile_name` said `v2rayNG`; they are action labels, so they now use the functional label the other locales use (`Переключить`) instead of the long product name |
+| `fastlane/metadata/android/en-US/title.txt` | store title `v2rayNG` -> `Quiet Storm NG` |
+
+Checked and unchanged: `applicationId` (`com.quietstorm.ng`), `namespace` (`com.v2ray.ang`),
+`app_name` in all 9 locales (already `Quiet Storm NG`), and
+`fastlane/metadata/android/en-US/full_description.txt`, which still carries the upstream project
+attribution and the upstream Telegram link. Rewriting store copy was not part of this task and is
+listed as a remaining item.
