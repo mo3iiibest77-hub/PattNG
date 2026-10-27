@@ -133,6 +133,11 @@ class MainViewModel(
             is MainServiceEvent.MeasureConfigFinish -> {
                 onTestsFinished()
             }
+
+            // Traffic snapshots belong to the Quiet Storm NG screen; the full
+            // PattNG UI does not render live rates, so the event is consumed
+            // here to keep this exhaustive without changing its behaviour.
+            is MainServiceEvent.TrafficUpdate -> Unit
         }
     }
 
