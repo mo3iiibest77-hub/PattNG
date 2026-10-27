@@ -1468,3 +1468,249 @@ SHA-256 values and their on-device byte counts are not stated in this section ra
 The artifact sizes above are what the GitHub API reports for the uploaded archives. Download the
 artifacts from the run page (signed in) to get the three APKs.
 
+## 17. Connect no longer crashes — root cause, one eligibility rule, add-configuration on both screens
+
+This section records the change set built and tested on `521f3ad3`. The commit that carries this
+section changes documentation only. The CI evidence is §17.10, and the one thing that is **not**
+proven here is stated in §17.12: no phone was involved.
+
+### 17.1 The crash, exactly
+
+The reported behaviour was: tapping Connect closes the app immediately, from the Connection screen
+and from the Configurations screen. The message on the device was
+
+    java.util.MissingFormatArgumentException: Format specifier '%s'
+
+The defect was in `QsViewModel.getString()`. At the commit that was installed on the phone
+(`d9627160`, lines 1191–1192) the helper forwarded **every** call to the formatting overload:
+
+```kotlin
+private fun getString(resId: Int, vararg args: Any): String =
+    getApplication<Application>().getString(resId, *args)
+```
+
+`Context.getString(int)` never formats; `Context.getString(int, vararg Any)` always does. With an
+empty `args` array the second overload still runs `String.format`, and a resource containing a
+placeholder then throws `MissingFormatArgumentException` — for the *first* placeholder it finds.
+Two call sites passed no arguments to a template (`flowText()`, lines 1186–1187):
+
+| Resource | Value | Placeholder | Call site |
+|---|---|---|---|
+| `qs_using_saved_ip` | "Using the saved edge %s" | `%s` | `usingSavedIp = getString(R.string.qs_using_saved_ip)` |
+| `qs_reconnecting` | "Reconnecting (attempt %d)" | `%d` | `reconnecting = getString(R.string.qs_reconnecting)` |
+
+The second one was never reported by the user because the first one always fired first; both are
+fixed.
+
+Why it killed the process instead of showing an error: `flowText()` is called **inside** the
+`onState` lambda handed to `ConnectionOrchestrator.autoConnect()`. The throw happened there, inside
+`runFlow`, and was caught by the orchestrator's `catch (e: Exception)` at line 229, whose recovery
+is `onState(AutoConnectState.Failed("Unexpected error"))` — a second call into the same broken
+callback. That second throw happens *inside the catch handler*, so nothing catches it; it leaves
+`autoConnect`, leaves the `viewModelScope.launch` in `connect()`, and reaches the default handler.
+`MissingFormatArgumentException` is an `IllegalArgumentException`, so it is an `Exception`, not an
+`Error`: the containment the orchestrator already had could not save a defect that lives in its own
+recovery path.
+
+Both entry points reach it the same way, which is why both crashed:
+
+```
+Connection screen      → connect()                 ─┐
+Configurations screen  → configAction(guid)        │
+                       → connectConfig(guid)      ─┴→ connect()
+                                                      → orchestrator.autoConnect { … flowText() … }
+```
+
+### 17.2 The fix
+
+Three changes, at the source rather than around it:
+
+1. **The helper can no longer be called wrongly.** `getString(resId, vararg args)` branches on
+   `args.isEmpty()` and uses the non-formatting overload when there is nothing to format. Every
+   caller in the class is now safe by construction, including future ones.
+2. **The value is bound where it exists.** `QsFlowText` owns the template and formats it in
+   `savedEdge(ip)` / `reconnectAttempt(attempt)`. The mapper asks for the message for a *real* IP or
+   a *real* attempt number, and gets `null` when there is no IP — no placeholder, no invented
+   address. The templates are read with a new `templateString()` that never formats.
+3. **The state callback is guarded.** If a future mapping defect throws, the callback logs the
+   exception class only and moves the UI to a localized `Error` state. It cannot take the process
+   down, and it cannot leak a URL or a credential into a message.
+
+Nothing was done to the strings to make the exception go away: `qs_using_saved_ip` still contains
+`%s` and `qs_reconnecting` still contains `%d` in both locales.
+
+An audit of every `getString(...)` and `stringResource(...)` call site under `ui/qsn` and
+`ui/` found **0** placeholder-bearing resources read without arguments, and a data-driven test now
+enforces the same property on the XML itself (§17.9).
+
+### 17.3 Reliable connect
+
+| Requirement | Where it holds |
+|---|---|
+| The selected configuration is the one connected | `connectConfig(guid)` pins the guid (`QsPrefs.setPinnedGuid`, `MmkvManager.setSelectServer`) and then calls the same `connect()` the Connection screen uses |
+| A second tap cannot start a second attempt | `connect()` returns while `flowJob` is active; `connectConfig()` returns false in the same condition; `configAction()` maps to `Ignore` while the status is `Connecting`/`Disconnecting`; the orchestrator itself is single-flight behind a `Mutex` |
+| Truthful states | `StartingVpn` maps to `Connecting`; only `AutoConnectState.Connected(guid)`, which the orchestrator emits after the daemon's `MSG_STATE_RUNNING`, maps to `Connected` and sets `connectedGuid` |
+| A failure is a message, not a close | failures map through `FlowFailureRules` to a localized sentence; the raw machine reason is never shown |
+| Nothing is claimed after a failed start | `Failed` with `coreRunning == false` is `Error`; with `coreRunning == true` it keeps `Connected` and the confirmed guid rather than pretending the tunnel went down |
+| VPN consent, foreground service, cancel, cleanup, Per-App Proxy | untouched: the flow still goes through `LauncherManager`, `CoreVpnService` and the existing broadcast IPC |
+
+### 17.4 Adding a configuration from either screen
+
+One dialog, `QsAddConfigDialog`, hosted by both screens and driven by `state.importOpen`:
+
+| Screen | Entry point |
+|---|---|
+| Connection | "+" `IconButton` in the shared header (`contentDescription = qs_add_config`) |
+| Configurations | the same header button, plus the "add" affordance inside the manual group |
+
+Paste reads the clipboard once, on an explicit tap, never in the background. The text is validated
+by the existing importer (`dataSource.importBatchConfig`) — no new parser and no new format — then
+each imported profile passes the shared eligibility rule. Outcomes are explicit: all rejected
+(dialog stays open, names the failing rule), duplicates only, partial, or success. The list is
+re-read from MMKV afterwards, so the new row appears without a restart, and the row's own action
+connects that exact configuration.
+
+### 17.5 One eligibility rule
+
+Two rules existed. `ManualConfigRules.eligibility()` compared transport and security
+case-insensitively and never looked at the protocol or its credentials; `AutoConfigFilter` compared
+exactly and did. A configuration could therefore be accepted by the import path and refused by the
+connect path. The copy is deleted; `AutoConfigFilter.ineligibility()` is the only decision, used by
+
+- the automatic flow (`filterEligible`),
+- the Configurations connect action (`connectConfig`),
+- the manual import (`runImport`).
+
+| Rule | Accepted | Rejection message |
+|---|---|---|
+| protocol | VMESS, VLESS, TROJAN, SHADOWSOCKS, SOCKS, HTTP, WIREGUARD, HYSTERIA2 | `qs_reject_protocol` |
+| transport (`network`) | `ws`, `xhttp` — compared exactly | `qs_reject_transport` |
+| security | `tls` — compared exactly | `qs_reject_tls` |
+| port | 443, 2053, 2083, 2087, 2096, 8443 | `qs_reject_port` |
+| server | non-empty | `qs_reject_server` |
+| credential | VMESS/VLESS/TROJAN: uuid in `password`; SS: `password` + `method`; SOCKS/HTTP: `username`; WIREGUARD: `publicKey`; HYSTERIA2: `password` | `qs_reject_credential` |
+
+Rejected combinations therefore include HTTP-only ports (80, 8080, 8880, 2052, 2082, 2086, 2095),
+non-TLS profiles, `tcp`/`grpc`/`httpupgrade`/`h3`, a missing server and a missing credential. The
+rule never rewrites anything: transport, TLS, SNI, Host, Path and authentication are left exactly as
+parsed. A profile that fails is not deleted from the manual list — it is only excluded from this
+flow, and the message says which rule excluded it, never what the profile contains.
+
+### 17.6 HTTP/3 is not offered
+
+`h3` is rejected as `UnsupportedTransport` rather than silently rewritten to WebSocket-over-TLS.
+The reason is in the core, not in this filter: `NetworkType` has no `h3`/`quic` entry (the QUIC
+line is commented out) and `CoreOutboundBuilder` has no HTTP/3 branch. The only `alpn = "h3"` in
+the codebase is inside `toOutboundHysteria2()`, which is Hysteria2's own QUIC transport and not
+HTTP/3. Advertising an HTTP/3 mode would mean advertising a transport this core cannot build.
+
+### 17.7 The GIF background is unchanged
+
+Part of the mandate was to leave the artwork alone unless it was defective, and to prove it with more
+than a path string.
+
+| | |
+|---|---|
+| Asset | `V2rayNG/app/src/main/assets/qs_background.gif` |
+| SHA-256 | `270ea8a4e69bab0e576882d9ddf11faba4d6242d9488bfd5d3a12b629ccb45fc` |
+| Compared with | `background gif/1793075946100.gif` (the file the user supplied) |
+| Result | identical hash; the file is byte-for-byte the user's original |
+| `ui/qsn/QsBackground.kt` | not modified in this change set (`git diff` is empty) |
+
+### 17.8 Files changed
+
+| File | Change |
+|---|---|
+| `ui/qsn/QsContract.kt` | `QsFlowText` owns the templates (`savedEdge`, `reconnectAttempt`); `FlowFailure` + `FlowFailureRules` |
+| `ui/qsn/QsViewModel.kt` | `getString` branches on an empty argument list; `templateString`; guarded state callback; `rejectionText`; import rejects ineligible profiles and reports why; `connectConfig` names the failing rule |
+| `ui/qsn/domain/ManualConfig.kt` | divergent eligibility copy removed; only `keyOf`/duplicate identity remains |
+| `ui/qsn/QsAddConfigDialog.kt` | new: the one add-configuration dialog (paste + validate + report) |
+| `ui/qsn/QsConnectScreen.kt` | "+" in the header; hosts the shared dialog |
+| `ui/qsn/QsConfigScreen.kt` | "+" in the header; private `ImportDialog` deleted in favour of the shared one |
+| `ui/qsn/QuietStormActivity.kt` | wires the dialog callbacks on the Connection screen |
+| `res/values/strings.xml`, `res/values-fa/strings.xml` | `qs_error_busy`, `qs_add_config`, `qs_paste`, `qs_import_rejected`, `qs_import_partial_rejected`, `qs_reject_protocol`, `qs_reject_transport`, `qs_reject_tls`, `qs_reject_port`, `qs_reject_server`, `qs_reject_credential` — in both locales, same placeholders in the same order |
+| `app/src/test/.../qsn/FlowTextTest.kt` | new |
+| `app/src/test/.../qsn/ResourcePlaceholderTest.kt` | new |
+| `app/src/test/.../qsn/domain/ManualConfigTest.kt` | rewritten against `AutoConfigFilter` |
+| `.github/workflows/build.yml` | JUnit failure messages are echoed as check-run annotations |
+
+### 17.9 Tests added, and what the run executed
+
+| Class | Tests | What it pins |
+|---|---|---|
+| `FlowTextTest` | 13 | saved-edge message carries the real IP and no `%`; null/blank/whitespace IP yields no message; reconnect carries the attempt number; a translation without a placeholder renders as-is; no mapping branch leaves a placeholder; `StartingVpn` is `Connecting`, not `Connected`; the pre-confirmation states never report `Connected` while `Connected(guid)` does and sets `connectedGuid`; a failure before the daemon is `Error`; a failure while it runs does not claim a disconnect; `Core did not reach running state` → `CoreStart`; the full reason→kind table; `already running` is `Busy`, not `CoreStart` |
+| `ResourcePlaceholderTest` | 3 | every `qs_*` key exists in every locale that translates QSN with identical placeholders in order; the two flow templates have exactly one placeholder each (`%s`, `%d`); no `qs_*` string mixes indexed and plain placeholders |
+| `ManualConfigTest` | 23 | the shared rule for each accepted transport and port, VMESS, and each rejection: `tcp`/`grpc`/`httpupgrade`/`h3`, missing or `none` security, HTTP-only ports, 80, null port, null server, null credential, `POLICYGROUP`, `"WS"`/`"TLS"` (wrong case), plus the duplicate-identity cases |
+
+The suite is not self-referential: `FlowTextTest` drives the real `withConnectState` and the real
+`AutoConnectState` types, and `ResourcePlaceholderTest` reads the shipped XML files.
+
+The workflow annotation on this build says **`unit tests executed: 299 (failures=0 errors=0
+skipped=0)`**. The previous build of record said 276. The difference is exactly the new tests:
+276 + 13 + 3 + (23 − 16) = 299.
+
+### 17.10 CI evidence
+
+Validation was done only through GitHub Actions; no Gradle task was run locally.
+
+| Run | Commit | Result |
+|---|---|---|
+| [40459607362](https://github.com/mo3iiibest77-hub/PattNG/actions/runs/40459607362) | `521f3ad3` | **success**, 06:11:20Z → 06:16:23Z (5 m 3 s), first attempt, no retry |
+| [40458713654](https://github.com/mo3iiibest77-hub/PattNG/actions/runs/40458713654) | `8ca44f62` | failure — `ResourcePlaceholderTest` ×3 |
+| [40458250703](https://github.com/mo3iiibest77-hub/PattNG/actions/runs/40458250703) | `544ae2de` | failure — `ResourcePlaceholderTest` ×3 |
+
+The two failures were in the new test, not in the app. The first hypothesis was that the test could
+not find `res/` because it relied on the working directory; `8ca44f62` made the lookup
+classpath-based **and** added the annotation that prints each JUnit `message=`. That annotation
+returned the real cause on the next run:
+
+    message="java.lang.AssertionError: missing /home/runner/work/PattNG/PattNG/V2rayNG/app/src/main/res/strings.xml"
+
+The lookup was fine; the test read the base locale from `res/strings.xml` instead of
+`res/values/strings.xml`. `521f3ad3` fixed that. The classpath change was kept — it removes the
+working-directory assumption — but it was not the defect, and the commit message of `8ca44f62`
+records the hypothesis that this run disproved.
+
+Job `build`, all steps: Set up job, Checkout, Setup Android SDK, Install NDK, Restore cached
+libhevtun, Copy libhevtun, Fetch AndroidLibXrayLite tag, Download libv2ray, Setup Java, Decode
+Keystore, **Run unit tests**, **Build APK**, **Verify APK identity, signature and features**,
+**Upload arm64-v8a APK**, **Upload armeabi-v7a APK**, **Upload universal APK** — all `success`.
+`sign-and-release` was `skipped` (it requires a `workflow_dispatch` with a release tag).
+
+### 17.11 Artifacts of this build
+
+| ABI | Artifact | APK inside | Artifact size (bytes) | Download |
+|---|---|---|---|---|
+| arm64-v8a | `arm64-v8a` | `QuietStormNG_2.3.4_arm64-v8a.apk` | 34,621,558 | [artifact](https://github.com/mo3iiibest77-hub/PattNG/actions/runs/40459607362/artifacts/12714161252) |
+| armeabi-v7a | `armeabi-v7a` | `QuietStormNG_2.3.4_armeabi-v7a.apk` | 34,976,296 | [artifact](https://github.com/mo3iiibest77-hub/PattNG/actions/runs/40459607362/artifacts/12713698859) |
+| universal | `universal-apk` | `QuietStormNG_2.3.4_universal.apk` | 74,058,861 | [artifact](https://github.com/mo3iiibest77-hub/PattNG/actions/runs/40459607362/artifacts/12713549936) |
+
+The "Verify APK identity, signature and features" step asserted, for each file, that exactly one APK
+per ABI exists, that its package is `com.quietstorm.ng`, and that `apksigner` accepts the
+signature. It passed.
+
+The APK files themselves were not downloaded here: the artifact endpoint answers `401` without a
+token, so their SHA-256 values are not stated rather than guessed.
+
+### 17.12 What is still unverified — the phone
+
+**The crash is not yet proven fixed on a device.** What is proven is that the exception's cause is
+gone from the code, that a test reproduces the class of defect, and that the build which contains
+both compiles, passes 299 tests and produces signed APKs.
+
+To confirm on the phone, install `QuietStormNG_2.3.4_arm64-v8a.apk` (or the universal build) from
+run 40459607362 and check:
+
+1. Save a subscription that contains at least one `ws` + `tls` configuration on port 443.
+2. Tap **Connect** on the Connection screen. The app must stay open; the state must go
+   Connecting → Connected, and Connected only after the core reports running.
+3. Tap **Connect** a second time while it connects: nothing new must start.
+4. Force-stop, reopen, tap Connect again so the saved-edge path runs: the message must name a real
+   IP, never `%s`.
+5. Open **Configurations**, tap Connect on a row: the same flow must run and the screen must switch
+   to Connection.
+6. Tap "+" on both screens, paste a share link: success message and the row appears. Paste a `tcp`
+   link or one on port 80: a message naming the rule, the dialog stays open, nothing is stored.
+7. Cancel mid-connect: it must return to Disconnected without leaving the core running.
+8. If it still closes: reopen the app and read the crash card on the Connection screen (with Copy) —
+   that text is the evidence needed for the next pass.
