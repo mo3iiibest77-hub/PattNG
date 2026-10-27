@@ -1,6 +1,7 @@
 package com.v2ray.ang.senpai
 
 import android.content.Context
+import com.v2ray.ang.AppConfig
 import com.v2ray.ang.core.CoreConfigManager
 import com.v2ray.ang.core.CoreNativeManager
 import com.v2ray.ang.dto.entities.ProfileItem
@@ -40,6 +41,9 @@ object CloudflareScanner {
     private const val DEFAULT_CONCURRENCY = 4
     private const val IPS_PER_CIDR = 2
     private const val MAX_CANDIDATES = 30
+
+    /** GUID prefix used for throw-away profiles created while probing candidates. */
+    private const val TEMP_GUID_PREFIX = "cfscanner-"
 
     private val PRODUCTION_FINALMASK = buildString {
         append("""{"tcp":[""")
@@ -134,6 +138,7 @@ object CloudflareScanner {
         scanJob = SupervisorJob()
         scanScope = CoroutineScope(scanJob + Dispatchers.IO)
         scanScope.launch {
+            purgeStaleTempProfiles()
             val actual = if (candidates.isEmpty()) generateCandidates(context) else candidates
             LogUtil.i(TAG, "Scan started: ${actual.size} candidates")
             runScan(context, guid, actual, concurrency, callback)
@@ -141,6 +146,34 @@ object CloudflareScanner {
     }
 
     fun cancel() { scanJob.cancel() }
+
+    /**
+     * Deletes temp profiles left behind by a scan that was killed before its
+     * per-candidate cleanup could run (process death, OOM kill).
+     *
+     * [testCandidate] removes its temp profile in a finally block, so a scan
+     * that finished, failed, was cancelled or timed out leaves nothing behind.
+     * Only an abrupt process death can orphan one, and because
+     * [MmkvManager.encodeServerConfig] publishes every profile into its
+     * subscription list, an orphan would otherwise show up as a real config.
+     */
+    fun purgeStaleTempProfiles() {
+        val subIds = LinkedHashSet<String>()
+        subIds.addAll(MmkvManager.decodeSubsList())
+        subIds.add(AppConfig.DEFAULT_SUBSCRIPTION_ID)
+        var removed = 0
+        subIds.forEach { subId ->
+            val stale = MmkvManager.decodeServerList(subId)
+                .filter { it.startsWith(TEMP_GUID_PREFIX) }
+            if (stale.isNotEmpty()) {
+                MmkvManager.removeServers(stale, subId)
+                removed += stale.size
+            }
+        }
+        if (removed > 0) {
+            LogUtil.i(TAG, "purgeStaleTempProfiles: removed $removed orphaned temp profile(s)")
+        }
+    }
 
     // ── Discovery: تست کامل با threshold نرم — فقط رنج‌هایی که واقعاً کار می‌کنن ────
     // لایه ۱: از هر CIDR یه IP تست کامل می‌زنه (latency + upload)
@@ -329,7 +362,7 @@ object CloudflareScanner {
         base: ProfileItem,
         ip: String,
     ): CandidateResult = withContext(Dispatchers.IO) {
-        val tempGuid = "cfscanner-$baseGuid-${ip.replace('.', '-').replace(':', '-')}"
+        val tempGuid = "$TEMP_GUID_PREFIX$baseGuid-${ip.replace('.', '-').replace(':', '-')}"
         return@withContext try {
             // Keep scanner validation identical to the configuration that
             // applyBestIp() writes to the real production profile.
