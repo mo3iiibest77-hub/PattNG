@@ -77,7 +77,8 @@ class ResourcePlaceholderTest {
                 if (map.keys.none { it.startsWith("qs_") }) null else dir.name to map
             }
             .toMap()
-            .plus("values" to readStrings(root))
+            // The base locale lives in res/values, not in res itself.
+            .plus("values" to readStrings(File(root, "values")))
     }
 
     @Test
