@@ -207,7 +207,9 @@ class QsContractTest {
     @Test
     fun progressStepsAreOrderedAndExcludeIdle() {
         val steps = QsStep.progressSteps
-        assertEquals(7, steps.size)
+        // Ten rows now: the flow gained the config choice, the IP choice and
+        // the edge application, each backed by a real orchestrator phase.
+        assertEquals(10, steps.size)
         assertFalse(steps.contains(QsStep.Idle))
         assertEquals(QsStep.Preparing, steps.first())
         assertEquals(QsStep.Connected, steps.last())
