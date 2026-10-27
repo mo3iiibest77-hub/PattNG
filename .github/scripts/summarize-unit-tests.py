@@ -25,6 +25,8 @@ def main() -> int:
         skipped += skipped_count
         print("%-52s tests=%d failures=%d errors=%d skipped=%d" % (root.get("name"), tests, failed, errored, skipped_count))
     print("TOTAL tests=%d failures=%d errors=%d skipped=%d" % (total, failures, errors, skipped))
+    # Emitted as a workflow annotation so the executed count is readable from the API/UI.
+    print("::notice::unit tests executed: %d (failures=%d errors=%d skipped=%d)" % (total, failures, errors, skipped))
     if total == 0:
         print("no unit tests were executed")
         return 1
