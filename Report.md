@@ -2026,4 +2026,27 @@ Fourteen new string resources, in English and Persian, with identical placeholde
 
 ### 19.11 Build of record
 
-The build of record for this section is the `Build APK` run of the commit that carries it. The run URL, the executed-test annotation and the artifact names and sizes are reported with the delivery of this pass; they are not pre-written here, because a run result that does not exist yet is not evidence.
+| Item | Value |
+|---|---|
+| Implementation commit | `2ce6d9ef` |
+| Workflow | `Build APK` (run [40472868254](https://github.com/mo3iiibest77-hub/PattNG/actions/runs/40472868254)) |
+| Result | `completed` / `success` |
+| Unit tests | **373 executed, 0 failures, 0 errors, 0 skipped** (notice annotation of the run) |
+| Steps | `Run unit tests`, `Build APK`, `Verify APK identity, signature and features` and all three upload steps: `success` |
+
+The previous build of this branch ran 343 tests; this one runs 373, which is exactly the 30 test
+methods listed in 19.7. The count is read from the run's own annotation, not from a local run: no
+Gradle build was executed on this machine.
+
+| ABI | Artifact | APK inside | Artifact size (bytes) | Download |
+|---|---|---|---|---|
+| arm64-v8a | `arm64-v8a` | `QuietStormNG_2.3.4_arm64-v8a.apk` | 34,658,590 | [artifact](https://github.com/mo3iiibest77-hub/PattNG/actions/runs/40472868254/artifacts/12720140073) |
+| armeabi-v7a | `armeabi-v7a` | `QuietStormNG_2.3.4_armeabi-v7a.apk` | 35,011,944 | [artifact](https://github.com/mo3iiibest77-hub/PattNG/actions/runs/40472868254/artifacts/12719812801) |
+| universal | `universal-apk` | `QuietStormNG_2.3.4_universal.apk` | 74,094,766 | [artifact](https://github.com/mo3iiibest77-hub/PattNG/actions/runs/40472868254/artifacts/12720045578) |
+
+The artifact zips themselves were not downloaded: the artifact endpoint answers `401` without a
+token, so their SHA-256 values are not stated rather than guessed. The file names come from
+`output.outputFileName` in `app/build.gradle.kts`, versionName 2.3.4.
+
+This subsection was added after that run, in a documentation-only commit. The code described above
+is exactly the tree run 40472868254 built.
