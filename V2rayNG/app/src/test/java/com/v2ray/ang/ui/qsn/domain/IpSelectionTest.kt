@@ -135,8 +135,8 @@ class IpSelectionTest {
 
     @Test
     fun `parse accepts the boundary octets`() {
-        assertEquals(0L, IpAddress.parse("0.0.0.0"))
-        assertEquals(0xFFFFFFFFL, IpAddress.parse("255.255.255.255"))
+        assertEquals(0L, IpAddress.parse("0.0.0.0")!!)
+        assertEquals(0xFFFFFFFFL, IpAddress.parse("255.255.255.255")!!)
     }
 
     @Test

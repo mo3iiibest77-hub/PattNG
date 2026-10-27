@@ -38,6 +38,14 @@ private val QSTextSub       = Color(0xFF8A8878)   // متن ثانویه
 private val QSOrange        = Color(0xFFD4833A)   // نارنجی گرم (accent)
 private val QSGreen         = Color(0xFF4CAF82)   // سبز موفقیت
 
+// ── Quiet Storm accents ───────────────────────────────────────────────────────
+// Green is deliberately a step brighter and cleaner than the reference success
+// green (#2B7A4B): a fill for state and a darker ink for text on paper.
+val QsGreenFill = Color(0xFF23A55A)
+val QsGreenInk  = Color(0xFF17703F)
+/** The app red, unchanged from the previous theme. */
+val QsRed = Color(0xFFCF4848)
+
 // ── Dark Color Scheme (QuietStormNG) ─────────────────────────────────────────
 private val QSDarkColors = darkColorScheme(
     primary                = QSGold,
@@ -52,10 +60,10 @@ private val QSDarkColors = darkColorScheme(
     onTertiary             = QSBlack,
     tertiaryContainer      = Color(0xFF0A2018),
     onTertiaryContainer    = QSGreen,
-    error                  = QSRed,
+    error                  = QsRed,
     onError                = Color(0xFFFFFFFF),
     errorContainer         = Color(0xFF2A0808),
-    onErrorContainer       = QSRed,
+    onErrorContainer       = QsRed,
     background             = QSBlack,
     onBackground           = QSText,
     surface                = QSSurface,
@@ -100,14 +108,6 @@ val VoxoraFocus           = Color(0xFFB07A12)   // --vx-focus
 val VoxoraControlLine     = Color(0xFF8F8676)   // --vx-control-line
 val VoxoraLive            = Color(0xFF1F5C66)   // --vx-live
 
-// ── Quiet Storm accents ───────────────────────────────────────────────────────
-// Green is deliberately a step brighter and cleaner than the reference success
-// green (#2B7A4B): a fill for state and a darker ink for text on paper.
-val QsGreenFill = Color(0xFF23A55A)
-val QsGreenInk  = Color(0xFF17703F)
-/** The app red, unchanged from the previous theme. */
-val QsRed = Color(0xFFCF4848)
-
 // ── Light Color Scheme (Voxora Web, paper and saffron) ────────────────────────
 private val QSLightColors = lightColorScheme(
     primary                = VoxoraGoldInk,
@@ -147,7 +147,7 @@ private val QSLightColors = lightColorScheme(
 )
 // ── Semantic Colors ───────────────────────────────────────────────────────────
 val colorPing            = QSGreen
-val colorPingRed         = QSRed
+val colorPingRed         = QsRed
 val colorConfigType      = QSGold
 val colorFabActive       = QSGold
 val colorFabInactiveLight= Color(0xFF8A8070)

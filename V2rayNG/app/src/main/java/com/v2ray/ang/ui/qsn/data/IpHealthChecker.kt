@@ -33,7 +33,10 @@ object IpHealthChecker {
             raw = Socket()
             raw.connect(InetSocketAddress(ip, port), timeoutMs)
             if (sni.isNullOrBlank()) return true
-            val socket = SSLSocketFactory.getDefault().createSocket(raw, sni, port, true) as SSLSocket
+            // getDefault() is declared as SocketFactory; the overload that
+            // wraps an existing socket lives on SSLSocketFactory.
+            val factory = SSLSocketFactory.getDefault() as SSLSocketFactory
+            val socket = factory.createSocket(raw, sni, port, true) as SSLSocket
             ssl = socket
             socket.soTimeout = timeoutMs
             val params = socket.sslParameters
