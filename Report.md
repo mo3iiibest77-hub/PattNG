@@ -598,6 +598,7 @@ Every build below ran on GitHub Actions. No Gradle task was executed on the serv
 |---|---|---|
 | `4d419ffa` phase 3, first attempt | [Build APK 40429625735](https://github.com/mo3iiibest77-hub/PattNG/actions/runs/40429625735) | **failure** — main and test sources compiled; exactly one test failed: `QsContractTest > acceptsNonAsciiHost`. `java.net.URI` returns a null host for a non-ASCII authority instead of throwing, so the IDN fallback was never reached. |
 | `1bbe4f16` validator fix | [Build APK 40430257755](https://github.com/mo3iiibest77-hub/PattNG/actions/runs/40430257755) | **success** — 5.0 min, 4 artifacts |
+| `6813b5db` branding + CI annotation + report | [Build APK 40431293682](https://github.com/mo3iiibest77-hub/PattNG/actions/runs/40431293682) | **success** — 7.8 min, 4 artifacts |
 
 Run `40430257755` step list: `Checkout code`, `Setup Android SDK`, `Install NDK`, `Copy libhevtun`,
 `Fetch AndroidLibXrayLite tag`, `Download libv2ray`, `Decode Keystore`, `Run unit tests`,
@@ -607,6 +608,13 @@ Run `40430257755` step list: `Checkout code`, `Setup Android SDK`, `Install NDK`
 
 Artifacts of run `40430257755` (not expired): `arm64-v8a` 60.8 MB, `armeabi-v7a` 61.5 MB,
 `x86-apk` 126.2 MB, `universal-apk` 136.0 MB.
+
+Run `40431293682` also carries the executed-test annotation, which is the authoritative count:
+
+    unit tests executed: 83 (failures=0 errors=0 skipped=0)
+
+83 = 58 (`AutoConfigFilterTest` 27, `CloudflareScannerPreservationTest` 18, `ConnectionOrchestratorTest` 13)
++ 25 (`QsContractTest`). The only other annotation is the runner-image deprecation notice.
 
 The failed run is recorded on purpose: it proves the `Run unit tests` step really executes the
 filtered suite and can fail, rather than passing vacuously. `summarize-unit-tests.py` fails the
@@ -642,3 +650,35 @@ Checked and unchanged: `applicationId` (`com.quietstorm.ng`), `namespace` (`com.
 `fastlane/metadata/android/en-US/full_description.txt`, which still carries the upstream project
 attribution and the upstream Telegram link. Rewriting store copy was not part of this task and is
 listed as a remaining item.
+
+### 12.11 Device test guide (next step, needs real hardware)
+
+Install `arm64-v8a` (or `universal-apk` if unsure) from the run artifacts.
+
+| # | Scenario | Expected | On failure capture |
+|---|---|---|---|
+| 1 | Launch the app | "Quiet Storm NG", two tabs, status Disconnected, empty URL field | screenshot |
+| 2 | Paste a subscription URL, Save | "N configs" and a last-update time appear | the count shown, the HTTP status if it fails (never the URL) |
+| 3 | Update | Config count refreshes; on a bad URL: "Update failed: ..." with no URL in the text | the message text |
+| 4 | Connect (first run) | system VPN consent dialog, then steps: subscription -> configs -> scan -> start -> Connected | which step was last highlighted |
+| 5 | Cancel during the scan | status returns to Disconnected, no lingering CPU/network use | whether the scan kept running |
+| 6 | Disconnect | status Disconnected within a few seconds; the notification disappears | whether it stuck on "Disconnecting..." |
+| 7 | Close and reopen while connected | status Connected without pressing anything | what the app showed |
+| 8 | Rotate the screen while connecting | the step list keeps its place; no restart of the flow | which step reset |
+| 9 | Apps tab: enable per-app proxy, select 2 apps, back to Connection | the tunnel restarts once, only those apps go through it | whether all apps or none went through |
+| 10 | Airplane mode / dead subscription | a readable error, Retry available, status never claims Connected | the message text |
+
+Do not paste subscription URLs, tokens or config links into bug reports; the UI and the logs are
+designed not to need them.
+
+### 12.12 Final state of this pass
+
+| Item | Value |
+|---|---|
+| Branch | `feature/minimal-cloudflare-vpn` |
+| Last verified code SHA | `6813b5db` (run 40431293682, success) |
+| `master` | untouched at `a52f20c2` |
+| Commits ahead of master | 20 |
+| Working tree | clean before this doc commit |
+| Verified by CI | compile (main + test), 83 unit tests, release APK signing, 4 APK artifacts |
+| Not verified | anything that needs a device: real tunnel, per-app enforcement, rotation, process death |
