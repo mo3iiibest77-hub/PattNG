@@ -192,12 +192,18 @@ internal object QsUrlValidator {
         ) {
             return null
         }
-        return try {
+        val hasHost = try {
             val uri = java.net.URI(trimmed)
-            if (uri.host.isNullOrBlank()) null else trimmed
+            // java.net.URI does not decode IDN: for a non-ASCII authority it
+            // returns a null host instead of throwing, so fall back to the
+            // raw authority before giving up.
+            val host = uri.host ?: uri.authority
+                ?.substringAfter("@")
+                ?.substringBefore(":")
+            !host.isNullOrBlank()
         } catch (_: Exception) {
-            // Non-ASCII hosts make URI throw; fall back to a shape check.
-            if (lenient.containsMatchIn(trimmed)) trimmed else null
+            false
         }
+        return if (hasHost || lenient.containsMatchIn(trimmed)) trimmed else null
     }
 }
