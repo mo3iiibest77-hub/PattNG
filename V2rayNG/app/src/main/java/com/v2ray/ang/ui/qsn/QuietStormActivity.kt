@@ -255,6 +255,7 @@ class QuietStormActivity : HelperBaseComponentActivity() {
                                 state = state,
                                 onChooseConfig = { qsViewModel.chooseConfig(it) },
                                 onSelectIp = { qsViewModel.selectPendingIp(it) },
+                                onUseIp = { qsViewModel.useCandidateNow(it) },
                                 onConfirmIp = { qsViewModel.confirmIp() },
                                 onCancel = { qsViewModel.cancel() },
                             )

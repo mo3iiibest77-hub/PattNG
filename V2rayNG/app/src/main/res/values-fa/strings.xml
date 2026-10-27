@@ -693,6 +693,13 @@
     <string name="qs_scan_suggested">پیشنهادی</string>
     <string name="qs_scan_confirm">از این IP استفاده کن و وصل شو</string>
     <string name="qs_scan_waiting">در انتظار نخستین اندازه‌گیری</string>
+    <string name="qs_step_discovering">در حال کشف رنج‌های کلادفلر</string>
+    <string name="qs_scan_use_ip">استفاده از این IP</string>
+    <string name="qs_scan_applied">%1$s روی این کانفیگ اعمال شد</string>
+    <string name="qs_quality_good">خوب</string>
+    <string name="qs_quality_ordinary">زیر آستانه</string>
+    <string name="qs_quality_failed">ناموفق</string>
+    <string name="qs_quality_incomplete">اندازه‌گیری نشده</string>
     <string name="qs_scan_empty">هیچ نامزدی پاسخ نداد. چیزی اعمال نمی‌شود.</string>
     <string name="qs_scan_col_ip">IP</string>
     <string name="qs_scan_col_ping">پینگ</string>

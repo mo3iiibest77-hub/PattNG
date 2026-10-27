@@ -1714,3 +1714,188 @@ run 40459607362 and check:
 7. Cancel mid-connect: it must return to Disconnected without leaving the core running.
 8. If it still closes: reopen the app and read the crash card on the Connection screen (with Copy) —
    that text is the evidence needed for the next pass.
+## 18. Two-stage Cloudflare discovery, direct configuration connection, duplicate-profile fix
+
+Branch: `feature/minimal-cloudflare-vpn`. `master` was not modified.
+
+### 18.1 What the original scanner actually was
+
+`origin/main` (19a7262e) contains **no** Cloudflare scanner: `git grep -l -i cloudflare origin/main`
+matches only `AppConfig.kt` and `CoreConfigManager.kt`. The two-layer scanner this project
+remembers lives on `origin/fix/isp-discovery-quality` (be9f3cef), and that is the code that was
+read before any threshold was written:
+
+* `discoverGoodCidrs` — reads the bundled `cf_ranges_v4.txt` (632 lines), takes **2 random
+  addresses per CIDR**, runs the **full** `testCandidate` on each (latency samples + bounded
+  traffic), at a semaphore of **6**, and keeps a range when a sampled address answered **and**
+  `uploadKBps >= 15`. Progress is persisted every 20 ranges (`IspManager.savePartialProgress`).
+* `scanForIsp` — draws random addresses from the stored `goodCidrs` and hands them to the same
+  `runScan` used for any candidate list, so the ranking is the ordinary one.
+
+Two things follow, and both were kept: a range is qualified by **traffic**, not by a ping, and the
+candidate scan is never replaced by a cheaper check. The only value that differs is the gate: that
+commit used 15 KB/s, this branch had already shipped 20 KB/s, so `DiscoveryQuality.MIN_UPLOAD_KBPS`
+is **20** and the history is recorded in its KDoc rather than silently "restored".
+
+### 18.2 The duplicate-configuration bug
+
+**Symptom.** While a scan ran, the Configurations screen filled with copies of the selected
+configuration (same remarks, same port), one per measured candidate.
+
+**Root cause.** `CloudflareScanner.testCandidate` copied the base `ProfileItem`, set
+`server = <candidate ip>` and stored it with `MmkvManager.encodeServerConfig("cfscanner-…", temp)`
+while **keeping the base profile's `subscriptionId`**. `encodeServerConfig` publishes the GUID into
+`SUB_SERVERS_<subscriptionId>`; `decodeAllServerList()` is the union of those lists; the
+Configurations screen is built from `decodeAllServerList()`. So every probe was a first-class
+member of the user's own subscription for as long as it existed. The `finally` cleanup was real, but
+it only ran when the probe finished: the copies were visible during the scan, and a process death
+left them behind permanently.
+
+**Fix (identity, not a prefix convention).**
+
+* `ProbeProfile` — probes live under a private subscription id (`qsn-probe`) that is never added to
+  the subscription list, so no screen built on `decodeAllServerList()` can ever show one. The GUID
+  is `cfscanner-<baseGuid>-<ip>` (dots and colons replaced), stable per address, so re-measuring the
+  same address reuses the same identity instead of creating another row.
+* `testCandidate` clears `qsEdgeIp`, fills blank `finalMask`/`cipherSuites` with the production
+  values, stores the probe in the private index, and removes it in `finally` on success, failure,
+  cancellation, timeout and exception.
+* `purgeStaleTempProfiles()` clears the whole private index at the start of every scan and every
+  discovery run, and also migrates leftovers written by older builds into the user's subscriptions
+  (recognised by the `cfscanner-` prefix). This is the recovery path for profiles already on a
+  phone; it is not the fix itself.
+* A probe must never become the selected server: `encodeServerConfig` selects a profile when nothing
+  is selected, so the base configuration is put back immediately if that happened.
+
+**What is preserved.** The measurement is untouched: three latency samples per candidate (median and
+MAD jitter), the bounded 1 MiB up/down traffic test, failure/timeout counting, `CandidateRanker`
+scoring and confidence, concurrency 4, and the same temporary-profile semantics.
+
+### 18.3 Configurations Connect no longer runs discovery
+
+`QsViewModel.connectConfig(guid)` used to pin the GUID and call `connect()`, i.e. the automatic flow:
+subscription refresh, Cloudflare eligibility filter, range discovery, candidate scan, edge rewrite.
+A configuration that the Cloudflare rule rejects could not be connected at all from that screen.
+
+The two behaviours are now separate operations, not a boolean inside one:
+
+| Entry point | Call | Refresh | Filter | Discovery/scan | Edge rewrite |
+|---|---|---|---|---|---|
+| Connection screen **Connect** | `autoConnect()` | yes | yes | yes | yes |
+| Configurations row **Connect** | `directConnect(guid)` | no | no | no | no |
+
+`ConnectPolicy` (pure, tested) makes the split explicit: `ConnectMode.Direct` always yields
+`ConnectDecision.Direct(guid)`, which `connectSelected` turns into `startTunnel` without touching the
+scanner. The direct path still shares the single-flight mutex, the VPN-consent check and the
+daemon-confirmation wait, so it can never report Connected early and can never run beside a scan.
+GUID, protocol, credentials, transport, SNI, Host, path and TLS settings are untouched: the only
+write is filling blank `finalMask`/`cipherSuites`.
+
+### 18.4 Two-stage discovery
+
+Stage 1 — `CloudflareScanner.discoverRanges`:
+
+* reads the bundled dataset, samples one address per range (`DISCOVERY_IPS_PER_CIDR = 1`),
+  concurrency 3, and measures with the **same** `testCandidate`;
+* qualifies a range only through `DiscoveryQuality.verdict` — reachable **and** upload ≥ 20 KB/s; a
+  missing traffic measurement is `NotMeasured`, never zero, so an unmeasured range is neither
+  accepted nor rejected;
+* stops as soon as **five** distinct ranges qualify (`DiscoveryQuality.TARGET_RANGES`), which is a
+  **pause**: `DiscoveryOutcome.nextIndex` plus `IspManager` progress let the next run resume, and
+  the background pass continues from there;
+* bounded by a 300 s timeout in the orchestrator and by cancellation at every step; a run that
+  qualifies nothing returns an empty outcome and writes nothing.
+
+Stage 2 — `CloudflareScanner.scanRanges`: samples `IPS_PER_CIDR = 2` addresses per range (shuffled,
+capped at `MAX_CANDIDATES = 30`) and calls the existing `runScan`. No new scoring, no new traffic
+test, no ping-only shortcut.
+
+### 18.5 What is persisted, and how it is reused
+
+Two independent records, both in the existing SETTINGS MMKV file:
+
+| Record | Key | Contents |
+|---|---|---|
+| Selected edge | `qsn_ip_selection_v1` | fingerprint, IP, score, latency, jitter, up/down, confidence, timestamp |
+| Qualified ranges | `qsn_qualified_ranges_v1` | CIDR, best upload, latency, validation time |
+
+Ranges are sanitised on every read and write (`RangeSet.sanitize`): an unparsable CIDR is dropped
+rather than repaired, duplicates are folded keeping the higher upload, entries are normalised to the
+network address and the database is capped at 64. A CIDR in the bundled asset is only a candidate;
+nothing is persisted from it unless a measurement qualified it.
+
+Decision table for the automatic path (`ConnectPolicy`, covered by `ConnectPolicyTest`):
+
+| Saved edge | Qualified ranges | Refresh asked | Action |
+|---|---|---|---|
+| valid | any | no | reuse it, no network measurement |
+| invalid/missing | yes | no | Stage 2 over the stored ranges |
+| invalid/missing | no | no | Stage 1, then Stage 2 |
+| any | any | yes | Stage 1, then Stage 2 |
+
+Ranges entered by hand on the IP Ranges screen stay authoritative: when no qualified range exists
+they are used directly for Stage 2 instead of forcing a discovery pass first.
+
+### 18.6 Background discovery after the connection is confirmed
+
+`DiscoveryScheduler` is an application-scoped coroutine, not a Service. It starts only after
+`startTunnel` returned `Success` (the core confirmed running), is single-flight
+(`AtomicBoolean` + `CloudflareScanner.isBusy`), stops when a new connect starts, and has a 10-minute
+budget. It writes **only** the range database — never a profile, an edge, a selection or the tunnel —
+so it cannot replace the address in use, and it resumes from `lastScannedIndex`.
+
+### 18.7 Choosing a candidate while the scan is still running
+
+Each candidate is delivered as soon as it is measured (`ScanCandidateFound`) and is tappable while
+the scan runs. "Use this IP" is offered only for a candidate that actually answered. On confirm:
+
+* the scanner is cancelled so no further address is measured;
+* the pick is stored in `earlyPick` and read **once** after the scan returns, so it wins over the
+  ranker;
+* the selection is persisted, the edge is applied to the intended configuration (same GUID), and
+  the UI is told the address was applied;
+* a late `ScanProgress`/`ScanCandidateFound` cannot move the screen back: `withConnectState` ignores
+  scanner traffic once the flow has reached ChoosingIp/SelectingIp/ApplyingEdge/StartingVpn/Connected
+  (the guard is opt-in, so a standalone scan while connected still works).
+
+A standalone scan applies the choice without starting the tunnel: choosing an IP is not a
+connection request.
+
+### 18.8 What "green" means
+
+`ScanCandidate.quality` is derived from measurements only:
+
+| Quality | Rule | Colour |
+|---|---|---|
+| Good | answered **and** upload ≥ 20 KB/s (same gate as discovery) | green (`#1B8A3A`), border |
+| Ordinary | fully measured, below the gate | secondary |
+| Incomplete | answered, but a traffic number is missing | outline ("Not measured") |
+| Failed | never answered | error |
+
+Latency alone never produces green, and a missing measurement is never rendered as 0. The chosen
+row stays highlighted through `pendingIp`.
+
+### 18.9 Tests added
+
+44 test methods, all against production code, no Android and no running core:
+
+* `ui/qsn/domain/DiscoveryQualityTest` (16) — gate, target, NotMeasured vs measured zero,
+  accumulator stopping at five, no double counting, corrupt CIDRs dropped, dedupe keeps the better
+  upload, `/24` normalisation, database cap, merge, `cidrs` validation.
+* `ui/qsn/domain/ConnectPolicyTest` (7) — direct is always direct and never scans, every row of the
+  table, refresh forces discovery, totality.
+* `ui/qsn/domain/CandidateQualityTest` (8) — good, latency alone is not good, below gate, measured
+  zero vs missing, half-measured is incomplete, never-answered is failed, `CandidateResult`
+  mapping with and without traffic.
+* `ui/connect/ProbeProfileTest` (7) — probe GUID distinct from the base, stable per address,
+  recognisable prefix, private subscription id, stable constants, IPv6-safe.
+* `ui/qsn/QsContractTest` (+6) — repeated candidate replaces its row, two candidates two rows, a
+  late candidate cannot replace the confirmed choice, a late progress event cannot reopen the scan
+  step, a rescan still starts after a reused edge, a rescan cannot start while the edge is applied.
+
+### 18.10 What is not verified
+
+**No physical-device VPN test was performed.** Nothing here claims that a tunnel was established on
+a phone. The unit tests cover the pure rules (policy, quality, range storage, probe identity, state
+mapping); the build proves compilation and the existing suite; the tunnel itself is exercised only
+by the daemon-confirmation path, which is unchanged.

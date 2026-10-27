@@ -698,6 +698,7 @@ internal fun stepLabel(step: QsStep): String = when (step) {
     QsStep.FetchingSubscription -> stringResource(R.string.qs_step_fetching)
     QsStep.CheckingConfigs -> stringResource(R.string.qs_step_checking)
     QsStep.ChoosingConfig -> stringResource(R.string.qs_step_choosing_config)
+    QsStep.Discovering -> stringResource(R.string.qs_step_discovering)
     QsStep.ScanningIps -> stringResource(R.string.qs_step_scanning)
     QsStep.ChoosingIp -> stringResource(R.string.qs_step_choosing_ip)
     QsStep.SelectingIp -> stringResource(R.string.qs_step_selecting)

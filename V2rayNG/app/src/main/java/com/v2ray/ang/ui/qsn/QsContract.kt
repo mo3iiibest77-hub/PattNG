@@ -27,6 +27,7 @@ enum class QsStep {
     FetchingSubscription,
     CheckingConfigs,
     ChoosingConfig,
+    Discovering,
     ScanningIps,
     ChoosingIp,
     SelectingIp,
@@ -47,6 +48,7 @@ enum class QsStep {
             FetchingSubscription,
             CheckingConfigs,
             ChoosingConfig,
+            Discovering,
             ScanningIps,
             ChoosingIp,
             SelectingIp,
@@ -258,6 +260,39 @@ internal fun rankCandidates(candidates: List<ScanCandidate>): List<ScanCandidate
 internal fun QsUiState.withConnectState(
     state: AutoConnectState,
     text: QsFlowText = QsFlowText(),
+    guardStaleScan: Boolean = false,
+): QsUiState {
+    // A scanner callback that arrives after a connect flow already moved on
+    // must not pull the screen backwards. This is what keeps a late progress
+    // event from replacing a choice the user confirmed mid-scan. A standalone
+    // scan (IP Ranges while connected) does not pass this flag: it legitimately
+    // starts from a screen that is already showing Connected.
+    if (guardStaleScan && isStaleScanEvent(state, step)) return copy()
+    return foldConnectState(state, text)
+}
+
+/** True when [state] is scanner traffic that [step] has already moved past. */
+internal fun isStaleScanEvent(state: AutoConnectState, step: QsStep): Boolean {
+    val settled = step == QsStep.ChoosingIp ||
+        step == QsStep.SelectingIp ||
+        step == QsStep.ApplyingEdge ||
+        step == QsStep.StartingVpn ||
+        step == QsStep.Connected
+    val starting = step == QsStep.ApplyingEdge ||
+        step == QsStep.StartingVpn ||
+        step == QsStep.Connected
+    return when (state) {
+        is AutoConnectState.ScanProgress,
+        is AutoConnectState.ScanCandidateFound,
+        -> settled
+        AutoConnectState.ScanningCloudflareIps -> starting
+        else -> false
+    }
+}
+
+private fun QsUiState.foldConnectState(
+    state: AutoConnectState,
+    text: QsFlowText,
 ): QsUiState = when (state) {
     AutoConnectState.WaitingForSubscription -> copy(
         status = if (coreRunning) QsStatus.Connected else QsStatus.Error,
@@ -280,6 +315,23 @@ internal fun QsUiState.withConnectState(
         step = QsStep.CheckingConfigs,
         busy = true,
         message = null,
+    )
+
+    AutoConnectState.DiscoveringRanges -> copy(
+        status = QsStatus.Connecting,
+        step = QsStep.Discovering,
+        busy = true,
+        message = null,
+        scanDone = 0,
+        scanTotal = 0,
+    )
+
+    is AutoConnectState.DiscoveryProgress -> copy(
+        status = QsStatus.Connecting,
+        step = QsStep.Discovering,
+        busy = true,
+        scanDone = state.done,
+        scanTotal = state.total,
     )
 
     AutoConnectState.ScanningCloudflareIps -> copy(

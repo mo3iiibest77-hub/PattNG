@@ -25,6 +25,7 @@ class ConnectFlowContractTest {
                 QsStep.FetchingSubscription,
                 QsStep.CheckingConfigs,
                 QsStep.ChoosingConfig,
+                QsStep.Discovering,
                 QsStep.ScanningIps,
                 QsStep.ChoosingIp,
                 QsStep.SelectingIp,

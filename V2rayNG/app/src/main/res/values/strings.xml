@@ -693,6 +693,13 @@
     <string name="qs_scan_suggested">Suggested</string>
     <string name="qs_scan_confirm">Use this IP and connect</string>
     <string name="qs_scan_waiting">Waiting for the first measurement</string>
+    <string name="qs_step_discovering">Discovering Cloudflare ranges</string>
+    <string name="qs_scan_use_ip">Use this IP</string>
+    <string name="qs_scan_applied">%1$s applied to this configuration</string>
+    <string name="qs_quality_good">Good</string>
+    <string name="qs_quality_ordinary">Below threshold</string>
+    <string name="qs_quality_failed">Failed</string>
+    <string name="qs_quality_incomplete">Not measured</string>
     <string name="qs_scan_empty">No candidate answered. Nothing will be applied.</string>
     <string name="qs_scan_col_ip">IP</string>
     <string name="qs_scan_col_ping">Ping</string>

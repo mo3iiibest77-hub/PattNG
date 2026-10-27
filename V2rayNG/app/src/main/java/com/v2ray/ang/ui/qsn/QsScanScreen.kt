@@ -1,5 +1,6 @@
 package com.v2ray.ang.ui.qsn
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -25,14 +26,17 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.v2ray.ang.R
+import com.v2ray.ang.ui.qsn.domain.CandidateQuality
 import com.v2ray.ang.ui.qsn.domain.ConfigChoice
 import com.v2ray.ang.ui.qsn.domain.MetricFormat
 import com.v2ray.ang.ui.qsn.domain.ScanCandidate
@@ -50,6 +54,7 @@ fun QsScanScreen(
     state: QsUiState,
     onChooseConfig: (String) -> Unit,
     onSelectIp: (String) -> Unit,
+    onUseIp: (String) -> Unit,
     onConfirmIp: () -> Unit,
     onCancel: () -> Unit,
 ) {
@@ -153,8 +158,12 @@ fun QsScanScreen(
                         candidate = candidate,
                         suggested = candidate.ip == state.suggestedIp,
                         selected = candidate.ip == state.pendingIp,
-                        selectable = state.step == QsStep.ChoosingIp && candidate.answered,
+                        // Tappable as soon as it has a measurement: the user does
+                        // not have to wait for the rest of the scan.
+                        selectable = candidate.answered &&
+                            (state.step == QsStep.ScanningIps || state.step == QsStep.ChoosingIp),
                         onClick = { onSelectIp(candidate.ip) },
+                        onUse = { onUseIp(candidate.ip) },
                     )
                 }
             }
@@ -314,6 +323,9 @@ private fun ConfigChoiceCard(
     }
 }
 
+/** Green used only for a candidate that really passed the quality gate. */
+private val GoodGreen = Color(0xFF1B8A3A)
+
 @Composable
 private fun CandidateCard(
     candidate: ScanCandidate,
@@ -321,10 +333,19 @@ private fun CandidateCard(
     selected: Boolean,
     selectable: Boolean,
     onClick: () -> Unit,
+    onUse: () -> Unit,
 ) {
     val container = when {
         selected -> MaterialTheme.colorScheme.secondaryContainer
         else -> MaterialTheme.colorScheme.surfaceContainer
+    }
+    // The accent is the measured verdict, never "the probe answered": latency
+    // alone does not make a candidate good.
+    val accent = when (candidate.quality) {
+        CandidateQuality.Good -> GoodGreen
+        CandidateQuality.Ordinary -> MaterialTheme.colorScheme.secondary
+        CandidateQuality.Incomplete -> MaterialTheme.colorScheme.outline
+        CandidateQuality.Failed -> MaterialTheme.colorScheme.error
     }
     Card(
         modifier = Modifier
@@ -332,20 +353,14 @@ private fun CandidateCard(
             .then(if (selectable) Modifier.clickable(onClick = onClick) else Modifier),
         shape = RoundedCornerShape(14.dp),
         colors = CardDefaults.cardColors(containerColor = container),
+        border = if (candidate.quality == CandidateQuality.Good) BorderStroke(1.dp, accent) else null,
     ) {
         Column(modifier = Modifier.padding(14.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(
                     modifier = Modifier
                         .size(8.dp)
-                        .background(
-                            color = if (candidate.answered) {
-                                MaterialTheme.colorScheme.primary
-                            } else {
-                                MaterialTheme.colorScheme.error
-                            },
-                            shape = CircleShape,
-                        ),
+                        .background(color = accent, shape = CircleShape),
                 )
                 Spacer(Modifier.width(8.dp))
                 Text(
@@ -390,6 +405,21 @@ private fun CandidateCard(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            Text(
+                text = when (candidate.quality) {
+                    CandidateQuality.Good -> stringResource(R.string.qs_quality_good)
+                    CandidateQuality.Ordinary -> stringResource(R.string.qs_quality_ordinary)
+                    CandidateQuality.Incomplete -> stringResource(R.string.qs_quality_incomplete)
+                    CandidateQuality.Failed -> stringResource(R.string.qs_quality_failed)
+                },
+                style = MaterialTheme.typography.labelMedium,
+                color = accent,
+            )
+            if (selectable) {
+                TextButton(onClick = onUse) {
+                    Text(stringResource(R.string.qs_scan_use_ip))
+                }
+            }
             if (candidate.failures > 0 || candidate.timeouts > 0) {
                 Text(
                     text = stringResource(

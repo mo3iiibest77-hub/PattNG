@@ -2,6 +2,8 @@ package com.v2ray.ang.ui.qsn.data
 
 import com.v2ray.ang.handler.MmkvManager
 import com.v2ray.ang.ui.qsn.domain.IpSelection
+import com.v2ray.ang.ui.qsn.domain.QualifiedRange
+import com.v2ray.ang.ui.qsn.domain.RangeSet
 import com.v2ray.ang.ui.qsn.domain.ScanRange
 import com.v2ray.ang.util.JsonUtil
 import com.v2ray.ang.util.LogUtil
@@ -22,6 +24,8 @@ object QsPrefs {
 
     private const val KEY_IP_SELECTION = "qsn_ip_selection_v1"
     private const val KEY_SCAN_RANGES = "qsn_scan_ranges_v1"
+    private const val KEY_QUALIFIED_RANGES = "qsn_qualified_ranges_v1"
+    private const val KEY_RANGE_REFRESH = "qsn_range_refresh"
     private const val KEY_LAST_SCAN_AT = "qsn_last_scan_at"
     private const val KEY_PINNED_GUID = "qsn_pinned_guid"
     private const val KEY_ACTIVE_SUB = "qsn_active_sub_guid"
@@ -115,6 +119,59 @@ object QsPrefs {
 
     fun setSubPanelExpanded(expanded: Boolean) {
         MmkvManager.encodeSettings(KEY_SUB_PANEL_OPEN, expanded)
+    }
+
+    // ---------- Qualified (discovered) Cloudflare ranges ----------
+
+    /**
+     * The ranges real measurements qualified, newest measurement first.
+     *
+     * Kept apart from [loadSelection] on purpose: a saved edge answers "which
+     * address worked", the range database answers "where to look next time".
+     * Losing one must not destroy the other.
+     *
+     * A corrupt or older entry is dropped by [RangeSet.sanitize] instead of
+     * failing the read, so a damaged file degrades to "no ranges yet" rather
+     * than to a crash or a poisoned scan.
+     */
+    fun loadQualifiedRanges(): List<QualifiedRange> {
+        val json = MmkvManager.decodeSettingsString(KEY_QUALIFIED_RANGES)
+        if (json.isNullOrBlank()) return emptyList()
+        return try {
+            val parsed = JsonUtil.fromJsonSafe(json, Array<QualifiedRange>::class.java)?.toList()
+                ?: return emptyList()
+            RangeSet.sanitize(parsed)
+        } catch (e: Exception) {
+            LogUtil.e(TAG, "loadQualifiedRanges failed: " + e.javaClass.simpleName)
+            emptyList()
+        }
+    }
+
+    fun saveQualifiedRanges(ranges: List<QualifiedRange>) {
+        try {
+            val clean = RangeSet.sanitize(ranges)
+            MmkvManager.encodeSettings(KEY_QUALIFIED_RANGES, JsonUtil.toJson(clean.toTypedArray()))
+        } catch (e: Exception) {
+            LogUtil.e(TAG, "saveQualifiedRanges failed: " + e.javaClass.simpleName)
+        }
+    }
+
+    fun clearQualifiedRanges() {
+        MmkvManager.encodeSettings(KEY_QUALIFIED_RANGES, "")
+    }
+
+    /**
+     * Asks the next automatic attempt to run discovery instead of reusing the
+     * saved ranges. One-shot: [consumeRangeRefresh] clears it.
+     */
+    fun requestRangeRefresh() {
+        MmkvManager.encodeSettings(KEY_RANGE_REFRESH, "1")
+    }
+
+    fun consumeRangeRefresh(): Boolean {
+        val requested = MmkvManager.decodeSettingsString(KEY_RANGE_REFRESH) == "1"
+        if (requested) MmkvManager.encodeSettings(KEY_RANGE_REFRESH, "0")
+        return requested
     }
 
     // ---------- Diagnostics ----------

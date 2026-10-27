@@ -3,6 +3,21 @@ package com.v2ray.ang.ui.qsn.domain
 import com.v2ray.ang.senpai.CandidateResult
 import java.util.Locale
 
+/** How a candidate reads at a glance, derived only from real measurements. */
+enum class CandidateQuality {
+    /** Answered and carried upload traffic above the discovery gate. */
+    Good,
+
+    /** Fully measured, but below the gate. */
+    Ordinary,
+
+    /** Never answered. */
+    Failed,
+
+    /** Answered, but at least one traffic measurement is missing. */
+    Incomplete,
+}
+
 /**
  * One measured Cloudflare candidate, in the shape the UI renders.
  *
@@ -26,6 +41,22 @@ data class ScanCandidate(
 ) {
     /** True when at least one probe came back. */
     val answered: Boolean get() = successes > 0
+
+    /**
+     * The status the card colours itself by.
+     *
+     * Latency alone never makes a candidate good: the traffic numbers must
+     * exist and the upload must clear the same gate discovery uses. A missing
+     * measurement is [CandidateQuality.Incomplete], never zero throughput and
+     * never a silent downgrade.
+     */
+    val quality: CandidateQuality
+        get() = when {
+            !answered -> CandidateQuality.Failed
+            uploadKBps == null || downloadKBps == null -> CandidateQuality.Incomplete
+            DiscoveryQuality.qualifies(reachable = true, uploadKBps = uploadKBps) -> CandidateQuality.Good
+            else -> CandidateQuality.Ordinary
+        }
 
     /** Share of probes that answered, 0..100; null when nothing was probed. */
     val stabilityPercent: Int?

@@ -15,13 +15,21 @@ import com.v2ray.ang.handler.SettingsManager
 import com.v2ray.ang.helper.MessageHelper
 import com.v2ray.ang.senpai.CandidateResult
 import com.v2ray.ang.senpai.CloudflareScanner
+import com.v2ray.ang.senpai.DiscoveryOutcome
 import com.v2ray.ang.senpai.ScanCallback
 import com.v2ray.ang.ui.qsn.data.IpHealthChecker
 import com.v2ray.ang.ui.qsn.data.QsPrefs
 import com.v2ray.ang.ui.qsn.domain.ConfigChoice
+import com.v2ray.ang.ui.qsn.domain.ConnectDecision
+import com.v2ray.ang.ui.qsn.domain.ConnectMode
+import com.v2ray.ang.ui.qsn.domain.ConnectPolicy
+import com.v2ray.ang.ui.qsn.domain.DiscoveryQuality
 import com.v2ray.ang.ui.qsn.domain.EdgeApplication
+import com.v2ray.ang.ui.qsn.domain.IpAddress
 import com.v2ray.ang.ui.qsn.domain.IpFingerprint
 import com.v2ray.ang.ui.qsn.domain.IpSelection
+import com.v2ray.ang.ui.qsn.domain.QualifiedRange
+import com.v2ray.ang.ui.qsn.domain.RangeSet
 import com.v2ray.ang.ui.qsn.domain.ScanCandidate
 import com.v2ray.ang.ui.qsn.domain.ScanRangePlanner
 import com.v2ray.ang.ui.qsn.domain.SubscriptionRules
@@ -53,6 +61,12 @@ sealed interface AutoConnectState {
     data object FilteringConfigurations : AutoConnectState
     /** Filling blank finalMask/cipherSuites on the selected config. */
     data object ApplyingConnectionSettings : AutoConnectState
+    /** Stage 1: qualifying Cloudflare ranges before any candidate is scanned. */
+    data object DiscoveringRanges : AutoConnectState
+
+    /** Stage 1 progress: [done] of [total] ranges measured, [qualified] this one. */
+    data class DiscoveryProgress(val done: Int, val total: Int, val qualified: Boolean) : AutoConnectState
+
     /** CloudflareScanner is probing candidate IPs. */
     data object ScanningCloudflareIps : AutoConnectState
     /** Scanner finished; writing best IP to the profile. */
@@ -126,6 +140,12 @@ private const val RUNNING_TIMEOUT_MS = 30_000L
 private const val SCAN_TIMEOUT_MS = 180_000L
 
 /**
+ * Safety net for Stage 1. Discovery stops on its own once five ranges qualify;
+ * this only bounds the pathological case where almost nothing qualifies.
+ */
+private const val DISCOVERY_TIMEOUT_MS = 300_000L
+
+/**
  * Pairs each GUID with its decoded [ProfileItem], dropping GUIDs whose profile
  * cannot be decoded.
  *
@@ -197,6 +217,20 @@ class ConnectionOrchestrator {
     private var ipChoice: CompletableDeferred<String?>? = null
 
     /**
+     * A candidate the user confirmed while the scan was still running.
+     *
+     * It is kept apart from [ipChoice] because the "which IP" question is only
+     * asked after the scan ends. An early pick must survive the scan's own
+     * cancellation, so it is consumed once, after the scan returns.
+     */
+    @Volatile
+    private var earlyPick: String? = null
+
+    /** Deferred for the current discovery wait, so [cancel] can end it. */
+    @Volatile
+    private var discoveryDeferred: CompletableDeferred<DiscoveryOutcome>? = null
+
+    /**
      * Runs the full auto-connect flow.
      *
      * @return [AutoConnectResult.Success] only when the daemon reports running
@@ -230,6 +264,53 @@ class ConnectionOrchestrator {
             // Never leak exception text: it may embed the subscription URL,
             // response body, or credentials.
             LogUtil.e(TAG, "autoConnect failed: " + e.javaClass.simpleName)
+            onState(AutoConnectState.Failed("Unexpected error"))
+            AutoConnectResult.Failure("Unexpected error")
+        } finally {
+            cleanup(context)
+            mutex.unlock()
+        }
+    }
+
+    /**
+     * Connects one stored configuration exactly as it is.
+     *
+     * This is the Configurations screen's action. It is a different operation
+     * from [autoConnect], not a flag on it:
+     *  - no subscription refresh,
+     *  - no Cloudflare eligibility filter,
+     *  - no discovery, no candidate scan, no edge rewrite,
+     *  - no substitution of another profile.
+     *
+     * It shares the single-flight mutex, the VPN consent check and the daemon
+     * confirmation with the automatic path, so a direct connect can never run
+     * beside a scan and can never report Connected before the core says so.
+     */
+    suspend fun directConnect(
+        context: Context,
+        guid: String,
+        onState: (AutoConnectState) -> Unit = {},
+    ): AutoConnectResult {
+        if (!mutex.tryLock()) {
+            onState(AutoConnectState.Failed("Another operation is already running"))
+            return AutoConnectResult.Failure("Already running")
+        }
+        cancelled = false
+        return try {
+            val profile = MmkvManager.decodeServerConfig(guid)
+            if (profile == null) {
+                onState(AutoConnectState.Failed("Configuration not found"))
+                AutoConnectResult.Failure("Configuration not found")
+            } else {
+                withContext(Dispatchers.IO) {
+                    connectSelected(context, guid, profile, onState, ConnectMode.Direct)
+                }
+            }
+        } catch (e: CancellationException) {
+            cancel()
+            throw e
+        } catch (e: Exception) {
+            LogUtil.e(TAG, "directConnect failed: " + e.javaClass.simpleName)
             onState(AutoConnectState.Failed("Unexpected error"))
             AutoConnectResult.Failure("Unexpected error")
         } finally {
@@ -302,6 +383,20 @@ class ConnectionOrchestrator {
         cancelled = true
         CloudflareScanner.cancel()
         scanDeferred?.complete(null)
+        discoveryDeferred?.let { deferred ->
+            if (!deferred.isCompleted) {
+                deferred.complete(
+                    DiscoveryOutcome(
+                        qualified = emptyList(),
+                        scanned = 0,
+                        total = 0,
+                        nextIndex = 0,
+                        exhausted = false,
+                        cancelled = true,
+                    ),
+                )
+            }
+        }
         coreSignals?.close()
         // A flow parked on a user question must not keep running after Cancel.
         configChoice?.complete(null)
@@ -326,6 +421,45 @@ class ConnectionOrchestrator {
      */
     fun chooseIp(ip: String) {
         ipChoice?.complete(ip)
+    }
+
+    /**
+     * Confirms a candidate while the scan is still running.
+     *
+     * The pick is stored in [earlyPick] because the "which IP" question is only
+     * asked after the scan ends; completing [ipChoice] covers the case where the
+     * scan already finished and the flow is parked. The scanner is cancelled so
+     * no further candidate is measured, and a callback that arrives afterwards
+     * cannot replace the choice: the flow reads [earlyPick] once.
+     */
+    fun chooseIpNow(ip: String) {
+        earlyPick = ip
+        ipChoice?.complete(ip)
+        CloudflareScanner.cancel()
+    }
+
+    /**
+     * Persists and applies one measured candidate outside a connect flow.
+     *
+     * Used by the standalone scan screen when the user confirms a candidate: it
+     * writes the selection and the edge, and deliberately does not start the
+     * tunnel. The profile keeps its GUID and every transport setting; only the
+     * edge field changes.
+     *
+     * @return true when the edge was written to at least one configuration.
+     */
+    fun applyCandidateNow(guid: String, ip: String): Boolean {
+        if (!IpAddress.isIpv4(ip)) return false
+        val profile = MmkvManager.decodeServerConfig(guid) ?: return false
+        QsPrefs.saveSelection(
+            IpSelection(
+                fingerprint = fingerprintFor(guid, profile),
+                ip = ip,
+                validatedAt = System.currentTimeMillis(),
+            )
+        )
+        QsPrefs.markScanned(System.currentTimeMillis())
+        return applyEdgeToScope(guid, profile, ip) > 0
     }
 
     /** True while the flow waits for the user; used by the UI to keep Cancel. */
@@ -374,15 +508,15 @@ class ConnectionOrchestrator {
                 }
 
                 !AutoConfigFilter.isEligible(pinned) -> {
-                    onState(
-                        AutoConnectState.Failed(
-                            "The selected configuration cannot be used for Cloudflare scanning"
-                        )
-                    )
-                    return AutoConnectResult.Failure("Selected configuration is not eligible")
+                    // A pin set by a direct connect may be a configuration this
+                    // flow cannot optimise (another port, another transport).
+                    // Fall through to the subscription path instead of failing
+                    // the Connect tap: the pin still belongs to the direct
+                    // path, and this path needs an eligible configuration.
+                    LogUtil.i(TAG, "Pinned configuration is not Cloudflare-eligible; using the subscription path")
                 }
 
-                else -> return connectSelected(context, pinnedGuid, pinned, onState)
+                else -> return connectSelected(context, pinnedGuid, pinned, onState, ConnectMode.Automatic)
             }
         }
 
@@ -446,7 +580,7 @@ class ConnectionOrchestrator {
         if (cancelled || pickedGuid == null) return cancelResult(onState)
         val picked = eligible.firstOrNull { it.first == pickedGuid }
             ?: return AutoConnectResult.Failure("Selected configuration is gone")
-        return connectSelected(context, picked.first, picked.second, onState)
+        return connectSelected(context, picked.first, picked.second, onState, ConnectMode.Automatic)
     }
 
     /**
@@ -462,16 +596,30 @@ class ConnectionOrchestrator {
         selectedGuid: String,
         selected: ProfileItem,
         onState: (AutoConnectState) -> Unit,
+        mode: ConnectMode,
     ): AutoConnectResult {
+        // A connect attempt supersedes background range collection: the scan
+        // this attempt may run must own the scanner, and a background pass must
+        // never compete with it for probes.
+        DiscoveryScheduler.stop()
         MmkvManager.setSelectServer(selectedGuid)
         if (cancelled) return cancelResult(onState)
 
         // Fill blank connection settings without overwriting existing ones.
+        // On the direct path this is the only write the profile receives.
         onState(AutoConnectState.ApplyingConnectionSettings)
         ensureSettings(selectedGuid, selected)
+        if (cancelled) return cancelResult(onState)
 
-        // Resolve the edge IP. A valid saved selection is reused; a scan only
-        // runs when there is nothing usable to reuse.
+        if (mode == ConnectMode.Direct) {
+            // Direct connection: this exact profile, exactly as stored. No
+            // discovery, no candidate scan, no edge rewrite, no subscription
+            // refresh, no substitution of another configuration.
+            LogUtil.i(TAG, "Direct connect: starting the core with the stored configuration")
+            return startTunnel(context, selectedGuid, onState)
+        }
+
+        // Automatic optimisation: resolve an edge, then start.
         val fingerprint = fingerprintFor(selectedGuid, selected)
         val bestIp = resolveEdgeIp(context, selectedGuid, selected, fingerprint, onState)
         if (cancelled) return cancelResult(onState)
@@ -479,8 +627,8 @@ class ConnectionOrchestrator {
             return AutoConnectResult.Failure("Cloudflare scan found no working IP")
         }
 
-        // 7. Write the confirmed edge to every eligible config of the scope:
-        //    the whole subscription, or just this manual config.
+        // Write the confirmed edge to every eligible config of the scope: the
+        // whole subscription, or just this manual config.
         onState(AutoConnectState.SelectingBestIp(bestIp))
         val applied = applyEdgeToScope(selectedGuid, selected, bestIp)
         if (applied <= 0) {
@@ -488,21 +636,39 @@ class ConnectionOrchestrator {
         }
         onState(AutoConnectState.ApplyingEdge(bestIp, applied))
 
-        // Make the core run this exact config.
-        // A missing VPN consent makes CoreVpnService.setupVpnService() return
-        // false and stopSelf() WITHOUT broadcasting START_FAILURE, so waiting
-        // would burn the full 30 s timeout and then report a misleading core
-        // start failure. Fail fast instead.
+        val result = startTunnel(context, selectedGuid, onState)
+        if (result is AutoConnectResult.Success) {
+            // The tunnel is confirmed: keep collecting ranges in the background.
+            // The scheduler only writes the range database, never the profile
+            // the tunnel is using.
+            DiscoveryScheduler.start(context, selectedGuid)
+        }
+        return result
+    }
+
+    /**
+     * Starts the core and waits for the daemon to confirm it is running.
+     *
+     * A missing VPN consent makes CoreVpnService.setupVpnService() return false
+     * and stopSelf() WITHOUT broadcasting START_FAILURE, so waiting would burn
+     * the full 30 s timeout and then report a misleading core failure. Fail
+     * fast instead.
+     */
+    private suspend fun startTunnel(
+        context: Context,
+        guid: String,
+        onState: (AutoConnectState) -> Unit,
+    ): AutoConnectResult {
         if (SettingsManager.isVpnMode() && VpnService.prepare(context) != null) {
             onState(AutoConnectState.Failed("VPN permission required"))
             return AutoConnectResult.Failure("VPN permission required")
         }
         onState(AutoConnectState.StartingVpn)
-        val connected = ensureCoreRunning(context, selectedGuid)
+        val connected = ensureCoreRunning(context, guid)
         if (cancelled) return cancelResult(onState)
         if (connected) {
-            onState(AutoConnectState.Connected(selectedGuid))
-            return AutoConnectResult.Success(selectedGuid)
+            onState(AutoConnectState.Connected(guid))
+            return AutoConnectResult.Success(guid)
         }
         onState(AutoConnectState.Failed("Core did not reach running state"))
         return AutoConnectResult.Failure("Core did not confirm running within timeout")
@@ -549,34 +715,49 @@ class ConnectionOrchestrator {
         context: Context,
         guid: String,
         onState: (AutoConnectState) -> Unit,
+        cidrs: List<String> = emptyList(),
         onCandidate: (ScanCandidate) -> Unit,
     ): CandidateResult? {
         val deferred = CompletableDeferred<CandidateResult?>()
         scanDeferred = deferred
 
-        CloudflareScanner.scan(
-            context = context,
-            guid = guid,
+        val callback = object : ScanCallback {
+            override fun onProgress(result: CandidateResult, done: Int, total: Int) {
+                // Live delivery: every measured candidate reaches the UI while
+                // the scan runs, not only when it finishes.
+                val candidate = ScanCandidate.from(result)
+                onCandidate(candidate)
+                onState(AutoConnectState.ScanCandidateFound(candidate, done, total))
+                onState(AutoConnectState.ScanProgress(done, total))
+            }
+
+            override fun onFinish(best: CandidateResult?) {
+                deferred.complete(best)
+            }
+
+            override fun onCancelled() {
+                deferred.complete(null)
+            }
+        }
+
+        if (cidrs.isEmpty()) {
             // Empty means the scanner falls back to the bundled Cloudflare
             // ranges; a non-empty list means the user configured ranges.
-            candidates = ScanRangePlanner.plan(QsPrefs.loadRanges()),
-            callback = object : ScanCallback {
-                override fun onProgress(result: CandidateResult, done: Int, total: Int) {
-                    // Live delivery: every measured candidate reaches the UI
-                    // while the scan runs, not only when it finishes.
-                    val candidate = ScanCandidate.from(result)
-                    onCandidate(candidate)
-                    onState(AutoConnectState.ScanCandidateFound(candidate, done, total))
-                    onState(AutoConnectState.ScanProgress(done, total))
-                }
-                override fun onFinish(best: CandidateResult?) {
-                    deferred.complete(best)
-                }
-                override fun onCancelled() {
-                    deferred.complete(null)
-                }
-            }
-        )
+            CloudflareScanner.scan(
+                context = context,
+                guid = guid,
+                candidates = ScanRangePlanner.plan(QsPrefs.loadRanges()),
+                callback = callback,
+            )
+        } else {
+            // Stage 2 over the qualified ranges, measured by the same runScan.
+            CloudflareScanner.scanRanges(
+                context = context,
+                guid = guid,
+                cidrs = cidrs,
+                callback = callback,
+            )
+        }
 
         val result = withTimeoutOrNull(SCAN_TIMEOUT_MS) { deferred.await() }
         if (!deferred.isCompleted) {
@@ -608,7 +789,23 @@ class ConnectionOrchestrator {
         val port = profile.serverPort?.toIntOrNull() ?: 0
         val saved = QsPrefs.loadSelection()
         val now = System.currentTimeMillis()
-        if (saved != null && saved.isUsable(now, fingerprint)) {
+        val savedUsable = saved != null && saved.isUsable(now, fingerprint)
+        val storedRanges = QsPrefs.loadQualifiedRanges()
+
+        // The decision table lives in ConnectPolicy so it is a test, not a set
+        // of booleans scattered through the flow. The refresh flag is read once
+        // here: it is a one-shot request, and reading it inside decide() would
+        // make the later discovery condition untestable.
+        val refresh = QsPrefs.consumeRangeRefresh()
+        val decision = ConnectPolicy.decide(
+            mode = ConnectMode.Automatic,
+            guid = guid,
+            savedEdgeUsable = savedUsable,
+            hasQualifiedRanges = storedRanges.isNotEmpty(),
+            refreshRequested = refresh,
+        )
+
+        if (decision == ConnectDecision.ReuseSavedEdge && saved != null) {
             if (saved.isFresh(now)) {
                 LogUtil.i(TAG, "Reusing saved edge without a scan")
                 onState(AutoConnectState.ReusingSavedIp(saved.ip))
@@ -623,10 +820,31 @@ class ConnectionOrchestrator {
             LogUtil.w(TAG, "Saved edge failed the health check; rescanning")
             QsPrefs.clearSelection()
         }
+
+        // Stage 1 only when nothing is qualified, or when a refresh was asked
+        // for. A saved edge that failed its health check does not restart
+        // discovery while the range database still has entries.
+        // Qualified ranges first; a user who configured ranges by hand keeps
+        // them as the source when discovery has nothing yet, which is the
+        // behaviour the IP Ranges screen has always had.
+        val manual = ScanRangePlanner.dedupe(QsPrefs.loadRanges()).map { it.cidr }
+        var ranges = RangeSet.cidrs(storedRanges).ifEmpty { manual }
+        // Discovery runs only when there is nothing to scan with, or when the
+        // user explicitly asked for a refresh. Ranges the user entered by hand
+        // stay authoritative: the IP Ranges screen has always scanned them
+        // directly and must not wait for a discovery pass first.
+        if (refresh || ranges.isEmpty()) {
+            onState(AutoConnectState.DiscoveringRanges)
+            ranges = RangeSet.cidrs(discoverRanges(context, guid, onState)).ifEmpty { manual }
+            if (cancelled) return null
+        }
+
         onState(AutoConnectState.ScanningCloudflareIps)
         val measured = ArrayList<ScanCandidate>()
-        val winner = scanForBestIp(context, guid, onState) { measured.add(it) } ?: return null
+        val winner = scanForBestIp(context, guid, onState, ranges) { measured.add(it) }
+        val early = consumeEarlyPick()
         if (cancelled) return null
+        if (winner == null && early == null) return null
 
         // A stable order: score first, then latency, then address. The UI shows
         // this order and marks the first row as the suggestion.
@@ -637,13 +855,19 @@ class ConnectionOrchestrator {
                     .thenBy { it.pingMs ?: Long.MAX_VALUE }
                     .thenBy { it.ip },
             )
-        onState(AutoConnectState.AwaitingIpChoice(ranked, winner.ip))
-        val chosenIp = awaitIpChoice()
-        if (cancelled || chosenIp == null) return null
 
-        // Only a candidate this scan actually measured and that answered may
-        // be applied. A fabricated or stale IP is rejected here.
-        val chosen = ranked.firstOrNull { it.ip == chosenIp && it.answered } ?: return null
+        val chosen = if (early != null) {
+            // The user confirmed while the scan was running. That choice wins
+            // over the ranker, and no later callback can replace it.
+            ranked.firstOrNull { it.ip == early && it.answered }
+        } else {
+            onState(AutoConnectState.AwaitingIpChoice(ranked, winner?.ip))
+            val chosenIp = awaitIpChoice()
+            if (cancelled || chosenIp == null) return null
+            ranked.firstOrNull { it.ip == chosenIp && it.answered }
+        }
+        if (chosen == null) return null
+
         QsPrefs.saveSelection(
             IpSelection(
                 fingerprint = fingerprint,
@@ -659,6 +883,53 @@ class ConnectionOrchestrator {
         )
         QsPrefs.markScanned(System.currentTimeMillis())
         return chosen.ip
+    }
+
+    /**
+     * Runs Stage 1 and merges what it qualified into the range database.
+     *
+     * A failed or empty run leaves the stored database untouched: a bad network
+     * must not erase ranges that were qualified earlier.
+     */
+    private suspend fun discoverRanges(
+        context: Context,
+        guid: String,
+        onState: (AutoConnectState) -> Unit,
+    ): List<QualifiedRange> {
+        val deferred = CompletableDeferred<DiscoveryOutcome>()
+        discoveryDeferred = deferred
+        CloudflareScanner.discoverRanges(
+            context = context,
+            guid = guid,
+            ispName = DiscoveryScheduler.DEFAULT_ISP,
+            target = DiscoveryQuality.TARGET_RANGES,
+            startIndex = 0,
+            onProgress = { done, total, _, qualified ->
+                onState(AutoConnectState.DiscoveryProgress(done, total, qualified))
+            },
+        ) { outcome -> deferred.complete(outcome) }
+
+        val outcome = withTimeoutOrNull(DISCOVERY_TIMEOUT_MS) { deferred.await() }
+        discoveryDeferred = null
+        if (outcome == null) {
+            LogUtil.w(TAG, "Discovery timed out; continuing with the stored ranges")
+            CloudflareScanner.cancel()
+            return QsPrefs.loadQualifiedRanges()
+        }
+        if (outcome.qualified.isEmpty()) {
+            return QsPrefs.loadQualifiedRanges()
+        }
+        val merged = RangeSet.merge(QsPrefs.loadQualifiedRanges(), outcome.qualified)
+        QsPrefs.saveQualifiedRanges(merged)
+        LogUtil.i(TAG, "Discovery qualified " + outcome.qualified.size + " range(s)")
+        return merged
+    }
+
+    /** Reads and clears the candidate the user confirmed mid-scan. */
+    private fun consumeEarlyPick(): String? {
+        val pick = earlyPick
+        earlyPick = null
+        return pick
     }
 
     /**
@@ -831,6 +1102,26 @@ class ConnectionOrchestrator {
     private fun cleanup(context: Context) {
         scanDeferred?.let { if (!it.isCompleted) it.complete(null) }
         scanDeferred = null
+        discoveryDeferred?.let { deferred ->
+            if (!deferred.isCompleted) {
+                deferred.complete(
+                    DiscoveryOutcome(
+                        qualified = emptyList(),
+                        scanned = 0,
+                        total = 0,
+                        nextIndex = 0,
+                        exhausted = false,
+                        cancelled = true,
+                    ),
+                )
+            }
+        }
+        discoveryDeferred = null
+        // No question may survive its flow: a late click must find nothing to
+        // answer, and an early pick from a finished flow must not be reused.
+        configChoice = null
+        ipChoice = null
+        earlyPick = null
         coreSignals?.close()
         coreSignals = null
         runningReceiver?.let { receiver ->

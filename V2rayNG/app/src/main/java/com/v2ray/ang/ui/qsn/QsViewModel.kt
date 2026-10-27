@@ -106,6 +106,9 @@ class QsViewModel(
     private var flowJob: Job? = null
     private var stopWatchJob: Job? = null
     private var scanJob: Job? = null
+
+    /** Configuration the standalone scan measured, so a confirmed card can be applied. */
+    private var lastScanTarget: Pair<String, ProfileItem>? = null
     private var trafficJob: Job? = null
     private var updateJob: Job? = null
 
@@ -287,91 +290,55 @@ class QsViewModel(
                 )
             }
             val result = orchestrator.autoConnect(getApplication()) { orchestratorState ->
-                // The state callback runs inside the orchestrator's own flow.
-                // A defect in the mapping must never be able to escape from
-                // here: it would be rethrown from the orchestrator's failure
-                // path and kill the process. It becomes a recoverable error
-                // instead, with the exception class only (no reason text).
-                try {
-                    _uiState.update { current ->
-                        val mapped = current.withConnectState(orchestratorState, flowText())
-                        // The orchestrator reports machine reasons; the UI never
-                        // shows them raw, so a Persian session stays Persian.
-                        if (orchestratorState is AutoConnectState.Failed) {
-                            mapped.copy(message = localizeFailure(orchestratorState.reason))
-                        } else {
-                            mapped
-                        }
-                    }
-                } catch (t: Throwable) {
-                    LogUtil.e(TAG, "connect state mapping failed: " + t.javaClass.name)
-                    _uiState.update {
-                        it.copy(
-                            status = QsStatus.Error,
-                            busy = false,
-                            message = getString(R.string.qs_error_generic),
-                        )
-                    }
-                }
+                applyOrchestratorState(orchestratorState)
             }
-            _uiState.update { current ->
-                when (result) {
-                    is AutoConnectResult.Success -> current.copy(
-                        status = QsStatus.Connected,
-                        step = QsStep.Connected,
-                        busy = false,
-                        coreRunning = true,
-                        connectedGuid = result.guid,
-                        message = null,
-                    )
-
-                    is AutoConnectResult.Failure -> current.copy(
-                        // Never claim Connected unless the core really is up.
-                        status = if (current.coreRunning) QsStatus.Connected else QsStatus.Error,
-                        busy = false,
-                        message = current.message ?: localizeFailure(result.reason),
-                    )
-
-                    AutoConnectResult.Cancelled -> current.copy(
-                        status = if (current.coreRunning) QsStatus.Connected else QsStatus.Disconnected,
-                        step = QsStep.Idle,
-                        busy = false,
-                        message = getString(R.string.qs_cancelled),
-                    )
-                }
-            }
+            applyConnectResult(result)
             refreshLocalSnapshot()
         }
     }
 
     /**
-     * Starts a connection with one explicit configuration.
+     * Connects one configuration from the Configurations screen, exactly as
+     * stored.
      *
-     * It pins the configuration and then calls [connect], so the Configurations
-     * screen uses the exact same path as the Connection screen: same
-     * eligibility check, same edge resolution, same single-flight guard and
-     * same core start. Nothing is duplicated and no second tunnel can start.
+     * This is deliberately not [connect]: no subscription refresh, no Cloudflare
+     * eligibility filter, no discovery, no candidate scan and no edge rewrite.
+     * A manual configuration on a port Cloudflare never serves still connects,
+     * because the user asked for that configuration, not for optimisation.
      *
-     * @return true when a connect attempt was actually started.
+     * @return true when a direct attempt was actually started.
      */
     fun connectConfig(guid: String): Boolean {
         if (flowJob?.isActive == true) return false
-        val profile = MmkvManager.decodeServerConfig(guid)
-        if (profile == null) {
+        if (MmkvManager.decodeServerConfig(guid) == null) {
             _uiState.update { it.copy(message = getString(R.string.qs_error_config_missing)) }
-            return false
-        }
-        val ineligibility = AutoConfigFilter.ineligibility(profile)
-        if (ineligibility != Ineligibility.Eligible) {
-            // The shared rule decides, and the user is told which rule failed.
-            _uiState.update { it.copy(message = rejectionText(ineligibility)) }
             return false
         }
         QsPrefs.setPinnedGuid(guid)
         MmkvManager.setSelectServer(guid)
         refreshLocalSnapshot()
-        connect()
-        return flowJob?.isActive == true
+        flowJob = viewModelScope.launch {
+            _uiState.update {
+                it.copy(
+                    status = QsStatus.Connecting,
+                    step = QsStep.Preparing,
+                    busy = true,
+                    message = null,
+                    inputError = null,
+                    configChoices = emptyList(),
+                    chosenConfigGuid = null,
+                    scanCandidates = emptyList(),
+                    suggestedIp = null,
+                    pendingIp = null,
+                )
+            }
+            val result = orchestrator.directConnect(getApplication(), guid) { state ->
+                applyOrchestratorState(state)
+            }
+            applyConnectResult(result)
+            refreshLocalSnapshot()
+        }
+        return true
     }
 
     /**
@@ -426,6 +393,117 @@ class QsViewModel(
     fun confirmIp() {
         val ip = _uiState.value.pendingIp ?: return
         orchestrator.chooseIp(ip)
+    }
+
+    /**
+     * Confirms a candidate while the scan is still running.
+     *
+     * Inside a connect flow the choice ends the scan and the flow continues with
+     * it, so no later candidate can replace it. In a standalone scan the
+     * selection and the edge are written and the tunnel is left untouched: an
+     * IP choice is not a connection request.
+     */
+    fun useCandidateNow(ip: String) {
+        val candidate = _uiState.value.scanCandidates.firstOrNull { it.ip == ip && it.answered } ?: return
+        _uiState.update { it.copy(pendingIp = ip, suggestedIp = ip) }
+
+        if (flowJob?.isActive == true) {
+            orchestrator.chooseIpNow(ip)
+            return
+        }
+
+        val target = lastScanTarget ?: connectTarget()
+        if (target == null) {
+            _uiState.update { it.copy(rangeError = getString(R.string.qs_range_scan_needs_config)) }
+            return
+        }
+
+        // Stop the standalone scan first: nothing may keep measuring or writing
+        // after the user has chosen.
+        scanJob?.cancel()
+        scanJob = null
+
+        viewModelScope.launch {
+            val applied = withContext(Dispatchers.IO) {
+                orchestrator.applyCandidateNow(target.first, candidate.ip)
+            }
+            _uiState.update {
+                it.copy(
+                    scanningNow = false,
+                    message = if (applied) {
+                        getString(R.string.qs_scan_applied, candidate.ip)
+                    } else {
+                        getString(R.string.qs_error_generic)
+                    },
+                )
+            }
+            refreshLocalSnapshot()
+        }
+    }
+
+    /**
+     * Maps one orchestrator state onto the UI state.
+     *
+     * The callback runs inside the orchestrator's own flow. A defect in the
+     * mapping must never be able to escape from here: it would be rethrown from
+     * the orchestrator's failure path and kill the process. It becomes a
+     * recoverable error instead, with the exception class only.
+     */
+    private fun applyOrchestratorState(orchestratorState: AutoConnectState) {
+        try {
+            _uiState.update { current ->
+                val mapped = current.withConnectState(orchestratorState, flowText(), guardStaleScan = true)
+                // The orchestrator reports machine reasons; the UI never shows
+                // them raw, so a Persian session stays Persian.
+                if (orchestratorState is AutoConnectState.Failed) {
+                    mapped.copy(message = localizeFailure(orchestratorState.reason))
+                } else {
+                    mapped
+                }
+            }
+        } catch (t: Throwable) {
+            LogUtil.e(TAG, "connect state mapping failed: " + t.javaClass.name)
+            _uiState.update {
+                it.copy(
+                    status = QsStatus.Error,
+                    busy = false,
+                    message = getString(R.string.qs_error_generic),
+                )
+            }
+        }
+    }
+
+    /** Applies the final orchestrator result. Connected is never claimed early. */
+    private fun applyConnectResult(result: AutoConnectResult) {
+        _uiState.update { current ->
+            when (result) {
+                is AutoConnectResult.Success -> current.copy(
+                    status = QsStatus.Connected,
+                    step = QsStep.Connected,
+                    busy = false,
+                    coreRunning = true,
+                    connectedGuid = result.guid,
+                    message = null,
+                )
+
+                is AutoConnectResult.Failure -> current.copy(
+                    // Never claim Connected unless the core really is up, and
+                    // never leave a stale step label (Discovering/Scanning)
+                    // under an error card.
+                    status = if (current.coreRunning) QsStatus.Connected else QsStatus.Error,
+                    step = if (current.coreRunning) QsStep.Connected else QsStep.Idle,
+                    busy = false,
+                    message = current.message ?: localizeFailure(result.reason),
+                )
+
+                AutoConnectResult.Cancelled -> current.copy(
+                    status = if (current.coreRunning) QsStatus.Connected else QsStatus.Disconnected,
+                    step = QsStep.Idle,
+                    busy = false,
+                    message = getString(R.string.qs_cancelled),
+                )
+            }
+        }
     }
 
     /** Cancels the running auto-connect attempt; the flow reports Cancelled itself. */
@@ -864,6 +942,9 @@ class QsViewModel(
     /** Forgets the saved edge so the next connect scans again. */
     fun rescanOnNextConnect() {
         QsPrefs.clearSelection()
+        // A deliberate rescan also refreshes the range database: otherwise the
+        // next attempt would scan the same qualified ranges again.
+        QsPrefs.requestRangeRefresh()
         _uiState.update { it.copy(message = getString(R.string.qs_range_rescan_queued)) }
     }
 
@@ -880,12 +961,35 @@ class QsViewModel(
             _uiState.update { it.copy(rangeError = getString(R.string.qs_range_scan_needs_config)) }
             return
         }
+        lastScanTarget = target
         scanJob = viewModelScope.launch {
-            _uiState.update { it.copy(scanningNow = true, scanDone = 0, scanTotal = 0, rangeError = null) }
+            _uiState.update {
+                it.copy(
+                    scanningNow = true,
+                    scanDone = 0,
+                    scanTotal = 0,
+                    rangeError = null,
+                    scanCandidates = emptyList(),
+                    pendingIp = null,
+                    suggestedIp = null,
+                )
+            }
             val result = orchestrator.scanOnly(getApplication(), target.first, target.second) { state ->
                 when (state) {
                     is AutoConnectState.ScanProgress -> _uiState.update {
                         it.copy(scanningNow = true, scanDone = state.done, scanTotal = state.total)
+                    }
+
+                    // Live delivery: a candidate is tappable as soon as it has
+                    // a measurement, not only when the whole scan finishes.
+                    is AutoConnectState.ScanCandidateFound -> _uiState.update { current ->
+                        current.copy(
+                            scanningNow = true,
+                            scanCandidates = rankCandidates(
+                                current.scanCandidates.filterNot { it.ip == state.candidate.ip } +
+                                    state.candidate,
+                            ),
+                        )
                     }
 
                     AutoConnectState.ScanningCloudflareIps -> _uiState.update {

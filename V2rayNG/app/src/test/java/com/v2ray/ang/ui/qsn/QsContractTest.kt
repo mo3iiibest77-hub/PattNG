@@ -1,6 +1,7 @@
 package com.v2ray.ang.ui.qsn
 
 import com.v2ray.ang.ui.connect.AutoConnectState
+import com.v2ray.ang.ui.qsn.domain.ScanCandidate
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -207,9 +208,9 @@ class QsContractTest {
     @Test
     fun progressStepsAreOrderedAndExcludeIdle() {
         val steps = QsStep.progressSteps
-        // Ten rows now: the flow gained the config choice, the IP choice and
-        // the edge application, each backed by a real orchestrator phase.
-        assertEquals(10, steps.size)
+        // Eleven rows now: the flow gained range discovery in front of the
+        // candidate scan, backed by a real orchestrator phase.
+        assertEquals(11, steps.size)
         assertFalse(steps.contains(QsStep.Idle))
         assertEquals(QsStep.Preparing, steps.first())
         assertEquals(QsStep.Connected, steps.last())
@@ -226,5 +227,76 @@ class QsContractTest {
     fun scanFractionIsNullOutsideScanStep() {
         val state = QsUiState(step = QsStep.StartingVpn, scanDone = 5, scanTotal = 10)
         assertNull(state.scanFraction)
+    }
+
+    // ---------- Late scanner callbacks ----------
+
+    private fun candidate(ip: String, upload: Long = 120L) = ScanCandidate(
+        ip = ip,
+        pingMs = 40L,
+        jitterMs = 3L,
+        downloadKBps = 900L,
+        uploadKBps = upload,
+        successes = 3,
+    )
+
+    @Test
+    fun aRepeatedCandidateReplacesItsRowInsteadOfAddingOne() {
+        var state = QsUiState(step = QsStep.ScanningIps)
+        state = state.withConnectState(AutoConnectState.ScanCandidateFound(candidate("104.16.0.1"), 1, 4))
+        state = state.withConnectState(AutoConnectState.ScanCandidateFound(candidate("104.16.0.1"), 1, 4))
+        assertEquals(1, state.scanCandidates.size)
+        assertEquals("104.16.0.1", state.scanCandidates.single().ip)
+    }
+
+    @Test
+    fun twoCandidatesProduceTwoRows() {
+        var state = QsUiState(step = QsStep.ScanningIps)
+        state = state.withConnectState(AutoConnectState.ScanCandidateFound(candidate("104.16.0.1"), 1, 4))
+        state = state.withConnectState(AutoConnectState.ScanCandidateFound(candidate("104.16.0.2"), 2, 4))
+        assertEquals(listOf("104.16.0.1", "104.16.0.2"), state.scanCandidates.map { it.ip })
+    }
+
+    @Test
+    fun aLateCandidateCannotReplaceTheConfirmedChoice() {
+        var state = QsUiState(step = QsStep.ScanningIps)
+        state = state.withConnectState(
+            AutoConnectState.AwaitingIpChoice(listOf(candidate("104.16.0.1")), "104.16.0.1"),
+        )
+        // The user confirmed this address while the scan was still running.
+        state = state.copy(pendingIp = "104.16.0.1", step = QsStep.ApplyingEdge)
+        val after = state.withConnectState(
+            AutoConnectState.ScanCandidateFound(candidate("104.16.0.9", upload = 400L), 4, 4),
+            guardStaleScan = true,
+        )
+        assertEquals(QsStep.ApplyingEdge, after.step)
+        assertEquals("104.16.0.1", after.pendingIp)
+        assertEquals(1, after.scanCandidates.size)
+    }
+
+    @Test
+    fun aLateProgressEventCannotReopenTheScanStep() {
+        val state = QsUiState(step = QsStep.ChoosingIp, pendingIp = "104.16.0.1")
+        val after = state.withConnectState(AutoConnectState.ScanProgress(3, 4), guardStaleScan = true)
+        assertEquals(QsStep.ChoosingIp, after.step)
+        assertEquals("104.16.0.1", after.pendingIp)
+    }
+
+    @Test
+    fun aNewScanStillResetsTheListAfterAReusedEdge() {
+        // Reusing a saved edge lands on SelectingIp, but a rescan that follows
+        // must still be able to start: only the applying/starting steps are
+        // closed to a new scan.
+        val state = QsUiState(step = QsStep.SelectingIp, scanCandidates = listOf(candidate("1.1.1.1")))
+        val after = state.withConnectState(AutoConnectState.ScanningCloudflareIps, guardStaleScan = true)
+        assertEquals(QsStep.ScanningIps, after.step)
+        assertTrue(after.scanCandidates.isEmpty())
+    }
+
+    @Test
+    fun aNewScanCannotRestartWhileTheEdgeIsBeingApplied() {
+        val state = QsUiState(step = QsStep.ApplyingEdge, pendingIp = "104.16.0.1")
+        val after = state.withConnectState(AutoConnectState.ScanningCloudflareIps, guardStaleScan = true)
+        assertEquals(QsStep.ApplyingEdge, after.step)
     }
 }
