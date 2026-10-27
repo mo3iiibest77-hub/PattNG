@@ -1899,3 +1899,37 @@ row stays highlighted through `pendingIp`.
 a phone. The unit tests cover the pure rules (policy, quality, range storage, probe identity, state
 mapping); the build proves compilation and the existing suite; the tunnel itself is exercised only
 by the daemon-confirmation path, which is unchanged.
+
+### 18.11 Build and test evidence
+
+| Item | Value |
+|---|---|
+| Implementation commit | `cf08a5e8` |
+| Follow-up commit (one-line compile fix) | `4c97c1bc` — `IspManager.savePartialProgress` declares `ctx`, not `context` |
+| Workflow | `Build APK` (run [40466722536](https://github.com/mo3iiibest77-hub/PattNG/actions/runs/40466722536)) |
+| Result | `completed` / `success` |
+| Unit tests | **343 executed, 0 failures, 0 errors, 0 skipped** (notice annotation of the run) |
+| Steps | `Run unit tests`, `Build APK`, `Verify APK identity, signature and features` and all three upload steps: `success` |
+
+The previous build of this branch ran 299 tests; this one runs 343, which is exactly the 44 test
+methods listed in 18.9. The count is read from the run's own annotation, not from a local run: no
+Gradle build was executed on this machine.
+
+| ABI | Artifact | APK inside | Artifact size (bytes) | Download |
+|---|---|---|---|---|
+| arm64-v8a | `arm64-v8a` | `QuietStormNG_2.3.4_arm64-v8a.apk` | 34,645,861 | [artifact](https://github.com/mo3iiibest77-hub/PattNG/actions/runs/40466722536/artifacts/12716987293) |
+| armeabi-v7a | `armeabi-v7a` | `QuietStormNG_2.3.4_armeabi-v7a.apk` | 34,998,289 | [artifact](https://github.com/mo3iiibest77-hub/PattNG/actions/runs/40466722536/artifacts/12716619912) |
+| universal | `universal-apk` | `QuietStormNG_2.3.4_universal.apk` | 74,082,281 | [artifact](https://github.com/mo3iiibest77-hub/PattNG/actions/runs/40466722536/artifacts/12717520393) |
+
+The first run of `cf08a5e8` (40466345701) **failed** in `Run unit tests` at
+`compilePlaystoreDebugKotlin`: `CloudflareScanner.kt:523 No parameter with name 'context' found`.
+That was a real defect in the new code, not a flaky step. It was fixed in `4c97c1bc` and the
+workflow was re-run once; the run above is that re-run. No other step of the failed run executed.
+
+The artifact zips themselves were not downloaded: the artifact endpoint answers `401` without a
+token, so their SHA-256 values are not stated rather than guessed. The file names come from
+`output.outputFileName` in `app/build.gradle.kts` (`QuietStormNG_${versionName}_${abi}.apk`,
+versionName 2.3.4).
+
+This section was added after that run. The commit that carries it changes this file only; the code
+described above is exactly the tree that run 40466722536 built.
