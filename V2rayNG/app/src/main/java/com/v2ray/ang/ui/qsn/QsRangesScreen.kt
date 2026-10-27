@@ -34,12 +34,17 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.v2ray.ang.R
+import com.v2ray.ang.ui.qsn.domain.DiscoveryPhase
+import com.v2ray.ang.ui.qsn.domain.DiscoveryStatus
+import com.v2ray.ang.ui.qsn.domain.MetricFormat
+import com.v2ray.ang.ui.qsn.domain.QualifiedRange
 import com.v2ray.ang.ui.qsn.domain.RangesSummary
 import com.v2ray.ang.ui.qsn.domain.ScanRange
 import com.v2ray.ang.ui.qsn.domain.ScanRangeParser
@@ -146,6 +151,13 @@ fun QsRangesScreen(
                     )
                 }
             }
+        }
+
+        item(key = "discovered") {
+            DiscoveredRangesCard(
+                ranges = state.qualifiedRanges,
+                discovery = state.discovery,
+            )
         }
 
         item(key = "input") {
@@ -281,6 +293,158 @@ fun QsRangesScreen(
             TextButton(onClick = onRescanNext, modifier = Modifier.fillMaxWidth()) {
                 Text(stringResource(R.string.qs_range_rescan))
             }
+        }
+    }
+}
+
+/**
+ * The measured range database, with the live state of the discovery run.
+ *
+ * Collapsed by default: the list can hold up to 64 CIDRs and the user came to
+ * this screen for their own ranges. The count and the run state stay visible
+ * either way, so a paused or background run is never mistaken for a finished
+ * one, and nothing spins when no run is active.
+ */
+@Composable
+private fun DiscoveredRangesCard(
+    ranges: List<QualifiedRange>,
+    discovery: DiscoveryStatus,
+) {
+    var expanded by rememberSaveable { mutableStateOf(false) }
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+    ) {
+        Column(modifier = Modifier.padding(start = 16.dp, end = 8.dp, top = 12.dp, bottom = 12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = stringResource(R.string.qs_discovered_title),
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Text(
+                        text = stringResource(R.string.qs_discovered_count, ranges.size),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                IconButton(onClick = { expanded = !expanded }) {
+                    Icon(
+                        painter = painterResource(R.drawable.ic_expand_more_24dp),
+                        contentDescription = stringResource(R.string.qs_discovered_title),
+                        modifier = Modifier
+                            .size(20.dp)
+                            .rotate(if (expanded) 180f else 0f),
+                    )
+                }
+            }
+            DiscoveryStatusLine(discovery)
+            if (expanded) {
+                if (ranges.isEmpty()) {
+                    Text(
+                        text = stringResource(R.string.qs_discovered_empty),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 8.dp, end = 8.dp),
+                    )
+                } else {
+                    ranges.forEach { range ->
+                        QualifiedRangeRow(range)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun QualifiedRangeRow(range: QualifiedRange) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 8.dp, end = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = range.cidr,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Medium,
+            )
+            Text(
+                text = stringResource(
+                    R.string.qs_discovered_meta,
+                    MetricFormat.speed(range.uploadKBps),
+                    range.latencyMs,
+                ),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        if (range.validatedAt > 0L) {
+            Text(
+                text = stringResource(
+                    R.string.qs_discovered_validated,
+                    formatTimestamp(range.validatedAt),
+                ),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+/**
+ * One truthful line about the run: running, paused, finished, cancelled or
+ * failed. Idle shows nothing, so the screen never implies a scan that is not
+ * happening.
+ */
+@Composable
+private fun DiscoveryStatusLine(status: DiscoveryStatus) {
+    val text: String? = when (status.phase) {
+        DiscoveryPhase.Running -> if (status.background) {
+            stringResource(R.string.qs_discovery_background, status.done, status.total)
+        } else {
+            stringResource(R.string.qs_discovery_running, status.done, status.total, status.qualified)
+        }
+
+        DiscoveryPhase.Paused -> stringResource(R.string.qs_discovery_paused, status.qualified)
+        DiscoveryPhase.Completed -> stringResource(R.string.qs_discovery_completed, status.qualified)
+        DiscoveryPhase.Cancelled -> stringResource(R.string.qs_discovery_cancelled)
+        DiscoveryPhase.Failed -> stringResource(R.string.qs_discovery_failed)
+        DiscoveryPhase.Idle -> null
+    }
+    if (text != null) {
+        Spacer(Modifier.height(6.dp))
+        if (status.phase == DiscoveryPhase.Running && status.total > 0) {
+            LinearProgressIndicator(
+                progress = { (status.done.toFloat() / status.total.toFloat()).coerceIn(0f, 1f) },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(4.dp),
+            )
+            Spacer(Modifier.height(4.dp))
+        }
+        Text(
+            text = text,
+            style = MaterialTheme.typography.bodySmall,
+            color = if (status.phase == DiscoveryPhase.Failed) {
+                MaterialTheme.colorScheme.error
+            } else {
+                MaterialTheme.colorScheme.onSurfaceVariant
+            },
+            modifier = Modifier.padding(end = 8.dp),
+        )
+        val last = status.lastCidr
+        if (status.phase == DiscoveryPhase.Running && !last.isNullOrBlank()) {
+            Text(
+                text = stringResource(R.string.qs_discovery_last, last),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(end = 8.dp),
+            )
         }
     }
 }

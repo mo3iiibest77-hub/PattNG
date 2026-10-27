@@ -93,6 +93,7 @@ fun QsConfigScreen(
     onConfigAction: (String) -> Unit,
     onEditConfig: (String) -> Unit,
     onDuplicateConfig: (String) -> Unit,
+    onCopyConfig: (String) -> Unit,
     onRequestDeleteConfig: (String) -> Unit,
     onDeleteConfig: (String) -> Unit,
     onDismissDeleteConfig: () -> Unit,
@@ -211,6 +212,7 @@ fun QsConfigScreen(
                             onSelect = { onSelectConfig(row.guid) },
                             onAction = { onConfigAction(row.guid) },
                             onEdit = { onEditConfig(row.guid) },
+                            onCopy = { onCopyConfig(row.guid) },
                             onDuplicate = { onDuplicateConfig(row.guid) },
                             onDelete = { onRequestDeleteConfig(row.guid) },
                         )
@@ -616,6 +618,7 @@ private fun ConfigCard(
     onSelect: () -> Unit,
     onAction: () -> Unit,
     onEdit: () -> Unit,
+    onCopy: () -> Unit,
     onDuplicate: () -> Unit,
     onDelete: () -> Unit,
 ) {
@@ -672,10 +675,11 @@ private fun ConfigCard(
                     modifier = Modifier.size(18.dp),
                 )
             }
-            IconButton(onClick = onDuplicate) {
+            // Copy means clipboard: it must never create a configuration.
+            IconButton(onClick = onCopy) {
                 Icon(
                     painter = painterResource(R.drawable.ic_copy),
-                    contentDescription = stringResource(R.string.qs_duplicate_manual),
+                    contentDescription = stringResource(R.string.qs_copy_config),
                     modifier = Modifier.size(18.dp),
                 )
             }
@@ -715,6 +719,12 @@ private fun ConfigCard(
                     },
                 )
                 Spacer(Modifier.weight(1f))
+                // The manual duplicate is a separate, labelled action: the
+                // copy icon above is only the clipboard.
+                TextButton(onClick = onDuplicate, enabled = !busy) {
+                    Text(stringResource(R.string.qs_duplicate_manual))
+                }
+                Spacer(Modifier.width(4.dp))
                 Button(
                     onClick = onAction,
                     enabled = !busy,

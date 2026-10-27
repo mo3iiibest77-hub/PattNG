@@ -744,4 +744,18 @@
     <string name="qs_copy">کپی</string>
     <string name="qs_crash_title">نشست قبلی به‌طور غیرمنتظره پایان یافت</string>
     <string name="qs_crash_hint">این علت ثبت‌شده است. آن را کپی کنید و بفرستید تا اشکال برطرف شود.</string>
+    <string name="qs_copy_config">کپی کانفیگ در کلیپ‌بورد</string>
+    <string name="qs_copied_clipboard">کانفیگ در کلیپ‌بورد کپی شد</string>
+    <string name="qs_discovered_title">رنج‌های کشف‌شده</string>
+    <string name="qs_discovered_count">%1$d تأییدشده</string>
+    <string name="qs_discovered_empty">هنوز رنجی تأیید نشده است. یک بار اسکن کنید یا وصل شوید.</string>
+    <string name="qs_discovered_meta">آپلود %1$s · %2$d میلی‌ثانیه</string>
+    <string name="qs_discovered_validated">تأیید در %1$s</string>
+    <string name="qs_discovery_running">کشف در حال اجراست: %1$d از %2$d رنج، %3$d تأییدشده</string>
+    <string name="qs_discovery_background">کشف پس‌زمینه: %1$d از %2$d رنج</string>
+    <string name="qs_discovery_paused">پس از %1$d رنج تأییدشده موقتاً متوقف شد. بقیه پس از اتصال در پس‌زمینه ادامه می‌یابد.</string>
+    <string name="qs_discovery_completed">کشف پایان یافت: %1$d رنج تأییدشده</string>
+    <string name="qs_discovery_cancelled">کشف لغو شد</string>
+    <string name="qs_discovery_failed">کشف ناموفق بود</string>
+    <string name="qs_discovery_last">آخرین رنج: %1$s</string>
 </resources>

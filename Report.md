@@ -1933,3 +1933,97 @@ versionName 2.3.4).
 
 This section was added after that run. The commit that carries it changes this file only; the code
 described above is exactly the tree that run 40466722536 built.
+
+## 19. Connection flow after the scan, one edge for the whole subscription, persistent discovery, and Copy that copies
+
+This pass answers five reported defects on `feature/minimal-cloudflare-vpn`:
+
+1. after the Cloudflare IP scan the connection sometimes errored out and never reached selection, apply or start;
+2. the selected IP reached only the scanned configuration instead of every eligible configuration of that subscription;
+3. discovered ranges were not persisted and not shown in the IP Ranges tab;
+4. the IP Ranges tab had no honest live view of a discovery run;
+5. the Copy icon in Configurations created a configuration in "Added by You" instead of copying to the clipboard.
+
+### 19.1 Bug A — the flow stopped after Stage 2
+
+**What the code did.** `ConnectionOrchestrator.connectSelected` called `resolveEdgeIp`, which ran Stage 1, then Stage 2 (`scanForBestIp`), then read the ranker's winner. Three independent defects sat on that path, and any one of them ended the flow with "Cloudflare scan found no working IP":
+
+* **The scan was cut off.** `SCAN_TIMEOUT_MS` was 180 s. Thirty candidates at concurrency four, each with three latency probes plus a bounded 1 MiB up and 1 MiB down test, do not fit in three minutes on a slow mobile link. `withTimeoutOrNull` returned null while candidates were still being measured, and every measurement already taken was thrown away. It is now 300 s, and a timeout keeps the partial batch.
+* **A measured batch could still count as a failure.** `scanForBestIp` returns the ranker's winner, and `CandidateRanker.best()` deliberately drops unreachable candidates. If the winner was null but candidates had answered, the old condition `winner == null && early == null` reported a failure even though there was something valid to offer. The rule now lives in `ui/qsn/domain/CandidateSelection.kt`: `suggestion()` falls back to the fastest answered candidate, and `canContinue()` is false only when nothing answered and the user did not already pick.
+* **A click could be dropped.** `chooseIp`/`chooseConfig` completed a `CompletableDeferred` that only exists after the state broadcast. A tap that landed between `onState(AwaitingIpChoice(...))` and `awaitIpChoice()` found no deferred, so the answer was lost and the flow stayed parked forever with the UI showing "choose an IP". The orchestrator now buffers an answer (`pendingIpPick`, `pendingConfigPick`) while a flow owns it (`flowActive`), and `awaitIpChoice()`/`awaitConfigChoice()` consume the buffer both before and after creating the deferred. `cleanup()` clears both buffers.
+
+**The sequence now.** subscription fetch → eligibility → optional config choice → Stage 1 (only when needed) → Stage 2 → `AwaitingIpChoice(ranked, suggestion)` → user confirms → write the edge to the scope → `ApplyingEdge` → start the core → `Connected` only after the daemon confirms. A cancel at any point produces `Cancelled`, not a failure; a genuine empty scan produces a failure with a real reason. Nothing is auto-applied: `suggestion` only pre-highlights a row, and `confirmIp()` is the only thing that resumes the flow.
+
+### 19.2 Bug B — one edge, every eligible configuration of that subscription
+
+`applyEdgeToScope` used to return an `Int` and could report success while the write to the selected profile had actually thrown. It now returns `EdgeApplyResult(applied, failed, selectedApplied)`, and `connectSelected` fails only when `selectedApplied` is false; sibling failures are counted and logged instead of being hidden.
+
+The scope is decided by `edgeScopeOf`: the profile's own `subscriptionId` when it is a real subscription, otherwise the subscription whose server list contains the GUID, otherwise a single configuration. Targets are the subscription's own server list, with scanner probes removed, then filtered by the one eligibility rule the rest of the app uses (`AutoConfigFilter.isEligible`). `EdgeApplication.apply` writes only `qsEdgeIp`; GUID, credentials, origin server, port, transport, TLS, SNI, Host, path, XHTTP parameters, flow, fingerprint, remarks and subscription membership are untouched.
+
+Cipher Suites and Final Mask are real `ProfileItem` fields consumed by `CoreOutboundBuilder` (fragment mask at build time, cipher list in the TLS settings), so they are filled **only when blank**, with the same production values the scanner measures through. A stored value is user data and is never overwritten. Nothing is invented: no new field, no new key, no placeholder value.
+
+Re-applying the same address writes nothing (the changed set is empty), so a repeated connect cannot duplicate or churn profiles.
+
+### 19.3 Bug C — one canonical range store
+
+The split was real: discovery wrote through `IspManager`/`QsPrefs.saveQualifiedRanges` while the connection flow read `QsPrefs.loadQualifiedRanges()` at a different moment. `ui/qsn/data/QualifiedRangeStore.kt` is now the only writer and the only reader:
+
+* `add(found)` merges with `RangeSet.merge` (sanitise, dedupe by CIDR, keep the better upload, cap at 64) and saves the merged set, so a later smaller or cancelled run can never shrink the database;
+* `snapshot()` returns the sanitised list, and a corrupt entry is dropped by `RangeSet.sanitize` instead of failing the read.
+
+`CloudflareScanner` persists each range the moment it qualifies (not at the end), `DiscoveryScheduler` merges into the same store, and `ConnectionOrchestrator.resolveEdgeIp` reads `snapshot()`. `RangeStoreWiringTest` pins that there is exactly one writer.
+
+### 19.4 IP Ranges — discovered ranges and the live run
+
+`QsRangesScreen` gained a collapsible "Discovered ranges" card above the input card: count, chevron, the saved CIDRs, upload and latency per range, and the validation time. The user's own ranges keep their own card and their own controls; the two are visually distinct and never merged.
+
+The live line comes from `CloudflareScanner.discovery`, a `StateFlow<DiscoveryStatus>` published by the scanner for both the foreground run and the background pass, and collected once in `QsViewModel`. It reports running (with done/total/qualified and a determinate progress bar), background, paused-after-target, completed, cancelled and failed. `Paused` is deliberately not `Completed`: the rest of the dataset is still unmeasured. `Idle` renders nothing, so no spinner can be left behind, and a recreated screen reads the current value instead of starting another job.
+
+### 19.5 Bug D — Copy copies
+
+The copy icon called `onDuplicate`, which is `duplicateConfigToManual`: that is why a new profile appeared in "Added by You". The icon now calls `copyConfigToClipboard(guid)`, which runs the existing canonical export `AngConfigManager.share2Clipboard` → `shareConfig` → `Fmt.toUri` → `Utils.setClipboard`, and shows one short confirmation. It creates no configuration, mints no GUID, writes nothing to `AppConfig.DEFAULT_SUBSCRIPTION_ID`, does not touch the original, does not refresh a subscription, does not change the active or pinned configuration and does not import anything. The text is the same share link the Add/Import dialog accepts.
+
+The manual duplicate is still available, now as a labelled `TextButton` ("Copy to manual") next to the Connect button, so the two actions can no longer be confused.
+
+### 19.6 Decision table after the fix
+
+| Situation | Behaviour |
+|---|---|
+| Saved IP usable for this fingerprint | reused, no scan, no discovery, background pass left alone |
+| Saved IP stale but healthy | health check passes, selection refreshed, reused |
+| Saved IP unhealthy, ranges exist | Stage 2 only |
+| No ranges at all | Stage 1, then Stage 2 |
+| Explicit refresh requested | Stage 1 even when ranges and a selection exist |
+| Background pass already running | not duplicated; it is stopped only when this attempt needs the scanner, and its ranges are already persisted |
+
+### 19.7 Tests added in this pass
+
+| File | Tests | What they pin |
+|---|---|---|
+| `ui/qsn/domain/CandidateSelectionTest.kt` | 9 | winner is the suggestion, fastest answered fallback, unanswered never suggested, empty batch fails, early pick keeps the flow alive, stable tie-break, blank winner |
+| `ui/qsn/domain/DiscoveryStatusTest.kt` | 6 | running is active, paused is neither active nor finished, completed/cancelled/failed are terminal, idle is quiet, background flag |
+| `ui/qsn/domain/EdgeApplicationTest.kt` (extended) | +5 | three eligible configs and nothing else, GUIDs and credentials survive, idempotent re-apply, a probe is never a target, a single scope cannot touch a sibling |
+| `ui/qsn/CopyButtonWiringTest.kt` | 5 | the icon calls the copy action, the activity wires it, the copy body uses the canonical serialiser and none of `encodeServerConfig`/`duplicateConfigToManual`/`getUuid`/`setPinnedGuid`/`setSelectServer`, the duplicate stays a labelled separate action, the serialiser is the export path |
+| `ui/qsn/RangeStoreWiringTest.kt` | 5 | discovery persists through the store, the background pass uses the same store and touches no profile, the flow reads the store, the store merges and is the only writer, screen and store share one state source |
+
+That is 30 new test methods. The filtered packages (`ui.connect`, `ui.qsn`, `ui.qsn.domain`, `ui.qsn.data`) now hold 373 `@Test` methods, against the 343 the previous run executed.
+
+### 19.8 Files changed
+
+Modified: `senpai/CloudflareScanner.kt`, `ui/connect/ConnectionOrchestrator.kt`, `ui/connect/DiscoveryScheduler.kt`, `ui/qsn/QsConfigScreen.kt`, `ui/qsn/QsContract.kt`, `ui/qsn/QsRangesScreen.kt`, `ui/qsn/QsViewModel.kt`, `ui/qsn/QuietStormActivity.kt`, `ui/qsn/domain/Discovery.kt`, `ui/qsn/domain/EdgeApplication.kt`, `res/values/strings.xml`, `res/values-fa/strings.xml`, `ui/qsn/domain/EdgeApplicationTest.kt`.
+Added: `ui/qsn/data/QualifiedRangeStore.kt`, `ui/qsn/domain/CandidateSelection.kt`, `ui/qsn/CopyButtonWiringTest.kt`, `ui/qsn/RangeStoreWiringTest.kt`, `ui/qsn/SourceFiles.kt`, `ui/qsn/domain/CandidateSelectionTest.kt`, `ui/qsn/domain/DiscoveryStatusTest.kt`.
+
+Fourteen new string resources, in English and Persian, with identical placeholders.
+
+### 19.9 Deliberately not changed
+
+* `CloudflareScanner.applyBestIp` and its two legacy callers (`MainViewModel` scan panel, `CfScanActivity`) still write one profile. They are the pre-existing Cloudflare screen, not the Quiet Storm NG connection flow, and changing them would alter an unrelated feature.
+* Subscription parsing, the parsers, the native AARs, Per-App Proxy, manual import, user-entered ranges, the scanner ranking and the storage keys are untouched.
+
+### 19.10 What is not verified
+
+**No physical-device VPN test was performed in this pass.** Nothing here claims that a tunnel was established, that a real subscription produced three eligible configurations, or that the clipboard content was pasted into the import dialog on a phone. The tests cover the pure rules and the wiring; compilation and the full suite are proven only by the GitHub Actions run of this commit. The Android clipboard itself needs an instrumented test, and the end-to-end connection needs a device.
+
+### 19.11 Build of record
+
+The build of record for this section is the `Build APK` run of the commit that carries it. The run URL, the executed-test annotation and the artifact names and sizes are reported with the delivery of this pass; they are not pre-written here, because a run result that does not exist yet is not evidence.

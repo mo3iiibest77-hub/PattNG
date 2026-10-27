@@ -6,6 +6,8 @@ import com.v2ray.ang.ui.qsn.domain.ConfigChoice
 import com.v2ray.ang.ui.qsn.domain.ConfigFilter
 import com.v2ray.ang.ui.qsn.domain.ConfigFilterEngine
 import com.v2ray.ang.ui.qsn.domain.ConfigRow
+import com.v2ray.ang.ui.qsn.domain.DiscoveryStatus
+import com.v2ray.ang.ui.qsn.domain.QualifiedRange
 import com.v2ray.ang.ui.qsn.domain.ScanCandidate
 import com.v2ray.ang.ui.qsn.domain.ScanRange
 import com.v2ray.ang.ui.qsn.domain.SubscriptionRow
@@ -95,6 +97,14 @@ data class QsUiState(
     val subscriptionsExpanded: Boolean = false,
     /** Configured CIDR ranges, in insertion order. */
     val ranges: List<ScanRange> = emptyList(),
+    /**
+     * Ranges a real measurement qualified, read from the canonical store.
+     *
+     * Kept apart from [ranges]: those are the user's input, these are results.
+     */
+    val qualifiedRanges: List<QualifiedRange> = emptyList(),
+    /** Live Stage 1 state, published by the scanner for both runs. */
+    val discovery: DiscoveryStatus = DiscoveryStatus(),
     /** Persian/English text explaining why the last range was rejected. */
     val rangeError: String? = null,
     /** Text explaining why the last manual import was rejected. */

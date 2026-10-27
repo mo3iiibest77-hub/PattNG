@@ -4,8 +4,7 @@ import android.content.Context
 import com.v2ray.ang.senpai.CloudflareScanner
 import com.v2ray.ang.senpai.DiscoveryOutcome
 import com.v2ray.ang.senpai.IspManager
-import com.v2ray.ang.ui.qsn.data.QsPrefs
-import com.v2ray.ang.ui.qsn.domain.RangeSet
+import com.v2ray.ang.ui.qsn.data.QualifiedRangeStore
 import com.v2ray.ang.util.LogUtil
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
@@ -71,8 +70,10 @@ object DiscoveryScheduler {
                 val resumeFrom = IspManager.getProfile(app, ispName)?.lastScannedIndex ?: 0
                 val outcome = discover(app, guid, ispName, resumeFrom) ?: return@launch
                 if (outcome.cancelled || outcome.qualified.isEmpty()) return@launch
-                val merged = RangeSet.merge(QsPrefs.loadQualifiedRanges(), outcome.qualified)
-                QsPrefs.saveQualifiedRanges(merged)
+                // The scanner already persisted each range as it qualified;
+                // this is the same canonical store, so a second merge here
+                // only confirms the count for the log line.
+                val merged = QualifiedRangeStore.add(outcome.qualified)
                 LogUtil.i(
                     TAG,
                     "Background discovery qualified " + outcome.qualified.size +
@@ -110,6 +111,7 @@ object DiscoveryScheduler {
             ispName = ispName,
             target = BACKGROUND_TARGET,
             startIndex = startIndex,
+            background = true,
         ) { outcome -> deferred.complete(outcome) }
         val outcome = withTimeoutOrNull(BACKGROUND_TIMEOUT_MS) { deferred.await() }
         if (outcome == null) {

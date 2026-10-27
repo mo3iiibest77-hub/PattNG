@@ -145,4 +145,84 @@ class EdgeApplicationTest {
         assertTrue(changed.isEmpty())
         assertFalse(inScope("sub-1", emptyList()).isNotEmpty())
     }
+
+    // ---------- The whole subscription, and nothing else ----------
+
+    @Test
+    fun `three eligible configs all receive the same edge`() {
+        val targets = listOf(
+            target("a", profile("sub-1", remarks = "one")),
+            target("b", profile("sub-1", remarks = "two")),
+            target("c", profile("sub-1", remarks = "three")),
+            target("d", profile("sub-1", eligible = false, remarks = "tcp")),
+            target("e", profile("sub-2", remarks = "other sub")),
+        )
+        val changed = EdgeApplication.apply(inScope("sub-1", targets), "104.16.9.9")
+
+        assertEquals(3, changed.size)
+        assertEquals("104.16.9.9", targets[0].profile.qsEdgeIp)
+        assertEquals("104.16.9.9", targets[1].profile.qsEdgeIp)
+        assertEquals("104.16.9.9", targets[2].profile.qsEdgeIp)
+        assertNull("ineligible config must not change", targets[3].profile.qsEdgeIp)
+        assertNull("another subscription must not change", targets[4].profile.qsEdgeIp)
+    }
+
+    @Test
+    fun `guids and credentials survive the application`() {
+        val one = target("guid-one", profile("sub-1"))
+        val two = target("guid-two", profile("sub-1"))
+        EdgeApplication.apply(inScope("sub-1", listOf(one, two)), "104.16.9.9")
+
+        assertEquals("guid-one", one.guid)
+        assertEquals("guid-two", two.guid)
+        listOf(one, two).forEach { target ->
+            assertEquals("origin.example.com", target.profile.server)
+            assertEquals("443", target.profile.serverPort)
+            assertEquals("ws", target.profile.network)
+            assertEquals("tls", target.profile.security)
+            assertEquals("uuid-1234", target.profile.password)
+            assertEquals("sni.example.com", target.profile.sni)
+            assertEquals("host.example.com", target.profile.host)
+            assertEquals("/ws", target.profile.path)
+            assertEquals("CUSTOM_CIPHERS", target.profile.cipherSuites)
+            assertEquals("{\"custom\":true}", target.profile.finalMask)
+        }
+    }
+
+    @Test
+    fun `applying the same edge twice is idempotent`() {
+        val targets = listOf(
+            target("a", profile("sub-1")),
+            target("b", profile("sub-1")),
+        )
+        val first = EdgeApplication.apply(inScope("sub-1", targets), "104.16.9.9")
+        val second = EdgeApplication.apply(inScope("sub-1", targets), "104.16.9.9")
+
+        assertEquals(2, first.size)
+        assertTrue("a repeat must not report a change", second.isEmpty())
+        assertEquals(2, targets.size)
+    }
+
+    @Test
+    fun `a scanner probe is never a target`() {
+        val probe = target("cfscanner-guid-one-104-16-0-1", profile("sub-1"))
+        val real = target("guid-one", profile("sub-1"))
+        EdgeApplication.apply(inScope("sub-1", listOf(probe, real)), "104.16.9.9")
+
+        assertNull(probe.profile.qsEdgeIp)
+        assertEquals("104.16.9.9", real.profile.qsEdgeIp)
+    }
+
+    @Test
+    fun `a single scope cannot touch a sibling`() {
+        val mine = target("a", profile("sub-1"))
+        val sibling = target("b", profile("sub-1"))
+        val scope = EdgeApplication.Scope.Single("a")
+        EdgeApplication.apply(
+            EdgeApplication.targets(scope, listOf(mine, sibling), AutoConfigFilter::isEligible),
+            "104.16.9.9",
+        )
+        assertEquals("104.16.9.9", mine.profile.qsEdgeIp)
+        assertNull(sibling.profile.qsEdgeIp)
+    }
 }

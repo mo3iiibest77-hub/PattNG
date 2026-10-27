@@ -140,3 +140,52 @@ object RangeSet {
     fun cidrs(ranges: List<QualifiedRange>): List<String> =
         sanitize(ranges).map { it.cidr }
 }
+
+/**
+ * Where a discovery run is right now.
+ *
+ * Paused is not Completed: the foreground run stops as soon as the target
+ * number of ranges qualifies, and the rest of the dataset is left for the
+ * background pass. Reporting that as "finished" would hide work that is still
+ * pending.
+ */
+enum class DiscoveryPhase {
+    /** Nothing has run in this process. */
+    Idle,
+    /** Measuring ranges right now. */
+    Running,
+    /** Stopped after reaching the target; more of the dataset is still unmeasured. */
+    Paused,
+    /** Reached the end of the dataset. */
+    Completed,
+    /** Cancelled by the user or by a newer operation. */
+    Cancelled,
+    /** Aborted by an error. */
+    Failed,
+}
+
+/**
+ * Live state of Stage 1, shared by every screen that shows it.
+ *
+ * It is produced by the scanner itself, so the foreground run and the
+ * background pass publish through the same source. A screen that is recreated
+ * reads the current value instead of starting another run.
+ */
+data class DiscoveryStatus(
+    val phase: DiscoveryPhase = DiscoveryPhase.Idle,
+    /** True when the run was started by [com.v2ray.ang.ui.connect.DiscoveryScheduler]. */
+    val background: Boolean = false,
+    /** Ranges measured so far, counting from the resume point. */
+    val done: Int = 0,
+    /** Total ranges in the bundled dataset. */
+    val total: Int = 0,
+    /** Distinct ranges qualified during this run. */
+    val qualified: Int = 0,
+    /** The range most recently measured, for a truthful "where is it now". */
+    val lastCidr: String? = null,
+) {
+    val isActive: Boolean get() = phase == DiscoveryPhase.Running
+    val isTerminal: Boolean get() =
+        phase == DiscoveryPhase.Completed || phase == DiscoveryPhase.Cancelled ||
+            phase == DiscoveryPhase.Failed
+}

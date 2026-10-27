@@ -744,4 +744,18 @@
     <string name="qs_copy">Copy</string>
     <string name="qs_crash_title">The previous session ended unexpectedly</string>
     <string name="qs_crash_hint">This is the recorded cause. Copy it and send it back so the defect can be fixed.</string>
+    <string name="qs_copy_config">Copy configuration to the clipboard</string>
+    <string name="qs_copied_clipboard">Configuration copied to the clipboard</string>
+    <string name="qs_discovered_title">Discovered ranges</string>
+    <string name="qs_discovered_count">%1$d qualified</string>
+    <string name="qs_discovered_empty">No range has been qualified yet. Run a scan or connect once.</string>
+    <string name="qs_discovered_meta">Upload %1$s · %2$d ms</string>
+    <string name="qs_discovered_validated">Validated %1$s</string>
+    <string name="qs_discovery_running">Discovery running: %1$d of %2$d ranges, %3$d qualified</string>
+    <string name="qs_discovery_background">Background discovery: %1$d of %2$d ranges</string>
+    <string name="qs_discovery_paused">Paused after %1$d qualified ranges. The rest continues in the background after connecting.</string>
+    <string name="qs_discovery_completed">Discovery finished: %1$d qualified ranges</string>
+    <string name="qs_discovery_cancelled">Discovery was cancelled</string>
+    <string name="qs_discovery_failed">Discovery failed</string>
+    <string name="qs_discovery_last">Last range: %1$s</string>
 </resources>

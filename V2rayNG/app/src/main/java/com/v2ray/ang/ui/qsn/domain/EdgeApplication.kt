@@ -1,6 +1,7 @@
 package com.v2ray.ang.ui.qsn.domain
 
 import com.v2ray.ang.dto.entities.ProfileItem
+import com.v2ray.ang.senpai.ProbeProfile
 
 /**
  * Applies one selected Cloudflare edge to the configurations that may use it.
@@ -40,9 +41,16 @@ object EdgeApplication {
         candidates: List<Target>,
         isEligible: (ProfileItem) -> Boolean,
     ): List<Target> = when (scope) {
-        is Scope.Single -> candidates.filter { it.guid == scope.guid && isEligible(it.profile) }
+        is Scope.Single -> candidates.filter {
+            it.guid == scope.guid && !ProbeProfile.isProbe(it.guid) && isEligible(it.profile)
+        }
         is Scope.Subscription -> candidates.filter { target ->
-            target.profile.subscriptionId == scope.subscriptionId && isEligible(target.profile)
+            // A scanner probe is a measurement vehicle, never a user
+            // configuration, so it can never be a target even if one leaked
+            // into a list.
+            !ProbeProfile.isProbe(target.guid) &&
+                target.profile.subscriptionId == scope.subscriptionId &&
+                isEligible(target.profile)
         }
     }
 

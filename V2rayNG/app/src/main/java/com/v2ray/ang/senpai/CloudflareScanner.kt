@@ -6,10 +6,13 @@ import com.v2ray.ang.core.CoreConfigManager
 import com.v2ray.ang.core.CoreNativeManager
 import com.v2ray.ang.dto.entities.ProfileItem
 import com.v2ray.ang.handler.MmkvManager
+import com.v2ray.ang.ui.qsn.data.QualifiedRangeStore
 import com.v2ray.ang.ui.qsn.domain.CandidateMetrics
 import com.v2ray.ang.ui.qsn.domain.CandidateRanker
 import com.v2ray.ang.ui.qsn.domain.DiscoveryAccumulator
+import com.v2ray.ang.ui.qsn.domain.DiscoveryPhase
 import com.v2ray.ang.ui.qsn.domain.DiscoveryQuality
+import com.v2ray.ang.ui.qsn.domain.DiscoveryStatus
 import com.v2ray.ang.ui.qsn.domain.QualifiedRange
 import com.v2ray.ang.ui.qsn.domain.RangeVerdict
 import com.v2ray.ang.ui.qsn.domain.Statistics
@@ -17,6 +20,10 @@ import com.v2ray.ang.util.LogUtil
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.joinAll
@@ -132,6 +139,15 @@ object CloudflareScanner {
     private var scanJob = SupervisorJob()
 
     /**
+     * Live Stage 1 state, shared by the foreground flow and the background pass.
+     *
+     * It is the single source the IP Ranges screen reads, so a recreated
+     * activity shows the real state instead of starting another run.
+     */
+    private val _discovery = MutableStateFlow(DiscoveryStatus())
+    val discovery: StateFlow<DiscoveryStatus> = _discovery.asStateFlow()
+
+    /**
      * Last line of defence for the scan scope.
      *
      * The scan calls native code in the UI process. A native failure arrives as
@@ -235,7 +251,14 @@ object CloudflareScanner {
         }
     }
 
-    fun cancel() { scanJob.cancel() }
+    fun cancel() {
+        scanJob.cancel()
+        // A run that was measuring is now over. Paused/Completed are left
+        // alone: they describe a finished run, not a cancellation.
+        _discovery.update {
+            if (it.phase == DiscoveryPhase.Running) it.copy(phase = DiscoveryPhase.Cancelled) else it
+        }
+    }
 
     /** True while a scan or a discovery run is active in this process. */
     val isBusy: Boolean get() = scanJob.isActive
@@ -453,10 +476,15 @@ object CloudflareScanner {
         ispName: String,
         target: Int = DiscoveryQuality.TARGET_RANGES,
         startIndex: Int = 0,
+        background: Boolean = false,
         onProgress: (done: Int, total: Int, cidr: String, qualified: Boolean) -> Unit = { _, _, _, _ -> },
         onFinish: (DiscoveryOutcome) -> Unit,
     ) {
         cancel()
+        _discovery.value = DiscoveryStatus(
+            phase = DiscoveryPhase.Running,
+            background = background,
+        )
         scanJob = SupervisorJob()
         scanScope = CoroutineScope(scanJob + Dispatchers.IO + scanExceptionHandler)
         scanScope.launch {
@@ -464,10 +492,28 @@ object CloudflareScanner {
                 purgeStaleTempProfiles()
                 runDiscovery(context, guid, ispName, target, startIndex, onProgress)
             } catch (e: CancellationException) {
+                _discovery.update { it.copy(phase = DiscoveryPhase.Cancelled) }
                 DiscoveryOutcome(emptyList(), 0, 0, startIndex, exhausted = false, cancelled = true)
             } catch (t: Throwable) {
                 LogUtil.e(TAG, "Discovery failed: " + t.javaClass.name, t)
+                _discovery.update { it.copy(phase = DiscoveryPhase.Failed) }
                 DiscoveryOutcome(emptyList(), 0, 0, startIndex, exhausted = false, cancelled = false)
+            }
+            // Paused and Completed are decided while the run is still going;
+            // only a run that never got there is still Running at this point.
+            _discovery.update { current ->
+                if (current.phase != DiscoveryPhase.Running) {
+                    current
+                } else {
+                    current.copy(
+                        phase = when {
+                            outcome.cancelled -> DiscoveryPhase.Cancelled
+                            outcome.qualified.isNotEmpty() && !outcome.exhausted -> DiscoveryPhase.Paused
+                            else -> DiscoveryPhase.Completed
+                        },
+                        qualified = outcome.qualified.size,
+                    )
+                }
             }
             onFinish(outcome)
         }
@@ -486,7 +532,10 @@ object CloudflareScanner {
             return DiscoveryOutcome(emptyList(), 0, 0, startIndex, exhausted = true, cancelled = false)
         }
         val base = MmkvManager.decodeServerConfig(guid)
-            ?: return DiscoveryOutcome(emptyList(), 0, 0, startIndex, exhausted = false, cancelled = false)
+        if (base == null) {
+            _discovery.update { it.copy(phase = DiscoveryPhase.Failed) }
+            return DiscoveryOutcome(emptyList(), 0, 0, startIndex, exhausted = false, cancelled = false)
+        }
 
         val total = lines.size
         val from = startIndex.coerceIn(0, total)
@@ -495,6 +544,7 @@ object CloudflareScanner {
         val done = AtomicInteger(from)
         val stopped = AtomicBoolean(false)
         val semaphore = Semaphore(DISCOVERY_CONCURRENCY)
+        _discovery.update { it.copy(total = total, done = from, qualified = 0) }
 
         val jobs = work.map { cidr ->
             scanScope.launch {
@@ -504,11 +554,32 @@ object CloudflareScanner {
                         if (qualified != null) {
                             // Three coroutines share the accumulator.
                             synchronized(accumulator) {
-                                accumulator.offer(qualified)
-                                if (accumulator.reachedTarget) stopped.set(true)
+                                if (accumulator.offer(qualified)) {
+                                    // Persist the moment a range qualifies, so a
+                                    // cancel, a crash or a later run finding
+                                    // nothing cannot lose it. One canonical
+                                    // store, read by the next connection.
+                                    QualifiedRangeStore.add(listOf(qualified))
+                                }
+                                if (accumulator.reachedTarget) {
+                                    stopped.set(true)
+                                    _discovery.update {
+                                        it.copy(
+                                            phase = DiscoveryPhase.Paused,
+                                            qualified = accumulator.size,
+                                        )
+                                    }
+                                }
                             }
                         }
                         val scanned = done.incrementAndGet()
+                        _discovery.update {
+                            it.copy(
+                                done = scanned,
+                                lastCidr = cidr.trim(),
+                                qualified = accumulator.size,
+                            )
+                        }
                         onProgress(scanned, total, cidr.trim(), qualified != null)
                     }
                 }

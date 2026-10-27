@@ -179,6 +179,9 @@ class QuietStormActivity : HelperBaseComponentActivity() {
         // the scan, confirming the IP, and the short write/start phases.
         val showScanStep = state.status == QsStatus.Connecting && (
             state.step == QsStep.ChoosingConfig ||
+                // Stage 1 owns the screen too: it is the step the user waits
+                // through before any candidate exists.
+                state.step == QsStep.Discovering ||
                 state.step == QsStep.ScanningIps ||
                 state.step == QsStep.ChoosingIp ||
                 state.step == QsStep.SelectingIp ||
@@ -311,6 +314,7 @@ class QuietStormActivity : HelperBaseComponentActivity() {
                                 if (qsViewModel.configAction(guid)) tab = 0
                             },
                             onEditConfig = { openEditor(it) },
+                            onCopyConfig = { qsViewModel.copyConfigToClipboard(it) },
                             onDuplicateConfig = { qsViewModel.duplicateConfigToManual(it) },
                             onRequestDeleteConfig = { qsViewModel.requestDeleteConfig(it) },
                             onDeleteConfig = { qsViewModel.deleteConfig(it) },

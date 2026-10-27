@@ -16,9 +16,12 @@ import com.v2ray.ang.helper.MessageHelper
 import com.v2ray.ang.senpai.CandidateResult
 import com.v2ray.ang.senpai.CloudflareScanner
 import com.v2ray.ang.senpai.DiscoveryOutcome
+import com.v2ray.ang.senpai.ProbeProfile
 import com.v2ray.ang.senpai.ScanCallback
 import com.v2ray.ang.ui.qsn.data.IpHealthChecker
+import com.v2ray.ang.ui.qsn.data.QualifiedRangeStore
 import com.v2ray.ang.ui.qsn.data.QsPrefs
+import com.v2ray.ang.ui.qsn.domain.CandidateSelection
 import com.v2ray.ang.ui.qsn.domain.ConfigChoice
 import com.v2ray.ang.ui.qsn.domain.ConnectDecision
 import com.v2ray.ang.ui.qsn.domain.ConnectMode
@@ -136,8 +139,17 @@ private const val PROBE_TIMEOUT_MS = 1_500L
 /** How long to wait for MSG_STATE_RUNNING after asking the service to start. */
 private const val RUNNING_TIMEOUT_MS = 30_000L
 
-/** Safety net for a full Cloudflare scan. */
-private const val SCAN_TIMEOUT_MS = 180_000L
+/**
+ * Safety net for a full Cloudflare scan.
+ *
+ * Thirty candidates at concurrency four, each with three latency probes and a
+ * bounded 1 MiB up + 1 MiB down test, do not fit in three minutes on a slow
+ * mobile link. When this expired the flow reported "no working IP" while
+ * candidates were still being measured, which is the post-scan failure. A
+ * timeout now keeps the measurements that already arrived instead of throwing
+ * them away.
+ */
+private const val SCAN_TIMEOUT_MS = 300_000L
 
 /**
  * Safety net for Stage 1. Discovery stops on its own once five ranges qualify;
@@ -231,6 +243,23 @@ class ConnectionOrchestrator {
     private var discoveryDeferred: CompletableDeferred<DiscoveryOutcome>? = null
 
     /**
+     * Answers that arrived before the flow started waiting for them.
+     *
+     * The state broadcast and the suspending await are two steps: a click in
+     * between used to find no deferred and be dropped, leaving the flow parked
+     * forever. Buffering the answer closes that window in both directions.
+     */
+    @Volatile
+    private var pendingConfigPick: String? = null
+
+    @Volatile
+    private var pendingIpPick: String? = null
+
+    /** True while a flow owns this orchestrator; a stale click cannot buffer. */
+    @Volatile
+    private var flowActive: Boolean = false
+
+    /**
      * Runs the full auto-connect flow.
      *
      * @return [AutoConnectResult.Success] only when the daemon reports running
@@ -248,6 +277,7 @@ class ConnectionOrchestrator {
             return AutoConnectResult.Failure("Already running")
         }
         cancelled = false
+        flowActive = true
         return try {
             // The subscription fetch is blocking network I/O, so the flow must
             // never run on the caller thread (a caller on Dispatchers.Main
@@ -296,6 +326,7 @@ class ConnectionOrchestrator {
             return AutoConnectResult.Failure("Already running")
         }
         cancelled = false
+        flowActive = true
         return try {
             val profile = MmkvManager.decodeServerConfig(guid)
             if (profile == null) {
@@ -341,6 +372,7 @@ class ConnectionOrchestrator {
             return null
         }
         cancelled = false
+        flowActive = true
         return try {
             withContext(Dispatchers.IO) {
                 onState(AutoConnectState.ScanningCloudflareIps)
@@ -410,7 +442,9 @@ class ConnectionOrchestrator {
      * flow that already moved on.
      */
     fun chooseConfig(guid: String) {
-        configChoice?.complete(guid)
+        if (configChoice?.complete(guid) != true && flowActive) {
+            pendingConfigPick = guid
+        }
     }
 
     /**
@@ -420,7 +454,9 @@ class ConnectionOrchestrator {
      * an IP that was never measured is rejected there.
      */
     fun chooseIp(ip: String) {
-        ipChoice?.complete(ip)
+        if (ipChoice?.complete(ip) != true && flowActive) {
+            pendingIpPick = ip
+        }
     }
 
     /**
@@ -434,7 +470,11 @@ class ConnectionOrchestrator {
      */
     fun chooseIpNow(ip: String) {
         earlyPick = ip
-        ipChoice?.complete(ip)
+        if (ipChoice?.complete(ip) != true && flowActive) {
+            // The scan may already have finished and the flow may not be
+            // parked yet: keep the answer for the waiter.
+            pendingIpPick = ip
+        }
         CloudflareScanner.cancel()
     }
 
@@ -459,7 +499,9 @@ class ConnectionOrchestrator {
             )
         )
         QsPrefs.markScanned(System.currentTimeMillis())
-        return applyEdgeToScope(guid, profile, ip) > 0
+        // The standalone scan is confirmed for the configuration it ran
+        // against: report success only when that one really holds the edge.
+        return applyEdgeToScope(guid, profile, ip).selectedApplied
     }
 
     /** True while the flow waits for the user; used by the UI to keep Cancel. */
@@ -467,8 +509,18 @@ class ConnectionOrchestrator {
         get() = configChoice != null || ipChoice != null
 
     private suspend fun awaitConfigChoice(): String? {
+        pendingConfigPick?.let {
+            pendingConfigPick = null
+            return it
+        }
         val deferred = CompletableDeferred<String?>()
         configChoice = deferred
+        // A click between publishing the question and this line found no
+        // deferred; deliver it now instead of waiting forever.
+        pendingConfigPick?.let {
+            pendingConfigPick = null
+            deferred.complete(it)
+        }
         return try {
             deferred.await()
         } finally {
@@ -477,8 +529,16 @@ class ConnectionOrchestrator {
     }
 
     private suspend fun awaitIpChoice(): String? {
+        pendingIpPick?.let {
+            pendingIpPick = null
+            return it
+        }
         val deferred = CompletableDeferred<String?>()
         ipChoice = deferred
+        pendingIpPick?.let {
+            pendingIpPick = null
+            deferred.complete(it)
+        }
         return try {
             deferred.await()
         } finally {
@@ -598,10 +658,6 @@ class ConnectionOrchestrator {
         onState: (AutoConnectState) -> Unit,
         mode: ConnectMode,
     ): AutoConnectResult {
-        // A connect attempt supersedes background range collection: the scan
-        // this attempt may run must own the scanner, and a background pass must
-        // never compete with it for probes.
-        DiscoveryScheduler.stop()
         MmkvManager.setSelectServer(selectedGuid)
         if (cancelled) return cancelResult(onState)
 
@@ -631,10 +687,21 @@ class ConnectionOrchestrator {
         // whole subscription, or just this manual config.
         onState(AutoConnectState.SelectingBestIp(bestIp))
         val applied = applyEdgeToScope(selectedGuid, selected, bestIp)
-        if (applied <= 0) {
-            return AutoConnectResult.Failure("Failed to apply best IP to profile")
+        if (!applied.selectedApplied) {
+            // The tunnel would dial the old address: this is a real failure,
+            // not a partial success.
+            return AutoConnectResult.Failure("Failed to apply the edge to the selected configuration")
         }
-        onState(AutoConnectState.ApplyingEdge(bestIp, applied))
+        if (applied.failed > 0) {
+            // Some sibling configurations kept the previous edge. The selected
+            // one is correct, so the connection can proceed, but the count is
+            // reported truthfully instead of claiming every profile changed.
+            LogUtil.w(
+                TAG,
+                "Edge applied to " + applied.applied + " configuration(s), " + applied.failed + " failed",
+            )
+        }
+        onState(AutoConnectState.ApplyingEdge(bestIp, applied.applied))
 
         val result = startTunnel(context, selectedGuid, onState)
         if (result is AutoConnectResult.Success) {
@@ -681,6 +748,23 @@ class ConnectionOrchestrator {
      * load-bearing and must not be overwritten blindly.
      */
     private fun ensureSettings(guid: String, profile: ProfileItem) {
+        if (fillBlankSettings(profile)) {
+            MmkvManager.encodeServerConfig(guid, profile)
+            LogUtil.i(TAG, "ensureSettings: filled blank connection settings")
+        }
+    }
+
+    /**
+     * Fills the connection settings this flow needs when the profile has none.
+     *
+     * finalMask and cipherSuites are real ProfileItem fields and are part of the
+     * outbound this flow measures through. A stored value is never overwritten:
+     * it is user data, and replacing it would silently change a working
+     * transport. Only blanks are filled.
+     *
+     * @return true when the profile changed and must be persisted.
+     */
+    private fun fillBlankSettings(profile: ProfileItem): Boolean {
         var changed = false
         if (profile.finalMask.isNullOrBlank()) {
             profile.finalMask = CloudflareScanner.PRODUCTION_FINALMASK_VALUE
@@ -694,10 +778,7 @@ class ConnectionOrchestrator {
             profile.fingerPrint = "unsafe"
             changed = true
         }
-        if (changed) {
-            MmkvManager.encodeServerConfig(guid, profile)
-            LogUtil.i(TAG, "ensureSettings: filled blank connection settings")
-        }
+        return changed
     }
 
     /**
@@ -790,7 +871,7 @@ class ConnectionOrchestrator {
         val saved = QsPrefs.loadSelection()
         val now = System.currentTimeMillis()
         val savedUsable = saved != null && saved.isUsable(now, fingerprint)
-        val storedRanges = QsPrefs.loadQualifiedRanges()
+        val storedRanges = QualifiedRangeStore.snapshot()
 
         // The decision table lives in ConnectPolicy so it is a test, not a set
         // of booleans scattered through the flow. The refresh flag is read once
@@ -821,18 +902,21 @@ class ConnectionOrchestrator {
             QsPrefs.clearSelection()
         }
 
-        // Stage 1 only when nothing is qualified, or when a refresh was asked
-        // for. A saved edge that failed its health check does not restart
-        // discovery while the range database still has entries.
-        // Qualified ranges first; a user who configured ranges by hand keeps
-        // them as the source when discovery has nothing yet, which is the
-        // behaviour the IP Ranges screen has always had.
+        // From here on this attempt may need the scanner. A background pass
+        // must not compete with it for probes, so it is stopped first; its
+        // qualified ranges are already persisted, so nothing is lost.
+        DiscoveryScheduler.stop()
+
+        // Qualified ranges are the canonical source, read from the same store
+        // discovery writes. A user who configured ranges by hand keeps them as
+        // the fallback, which is what the IP Ranges screen has always done.
         val manual = ScanRangePlanner.dedupe(QsPrefs.loadRanges()).map { it.cidr }
         var ranges = RangeSet.cidrs(storedRanges).ifEmpty { manual }
-        // Discovery runs only when there is nothing to scan with, or when the
-        // user explicitly asked for a refresh. Ranges the user entered by hand
-        // stay authoritative: the IP Ranges screen has always scanned them
-        // directly and must not wait for a discovery pass first.
+
+        // Stage 1 runs only when there is nothing to scan with, or when the
+        // user explicitly asked for a refresh. A saved edge that failed its
+        // health check does not restart discovery while the range database
+        // still has entries.
         if (refresh || ranges.isEmpty()) {
             onState(AutoConnectState.DiscoveringRanges)
             ranges = RangeSet.cidrs(discoverRanges(context, guid, onState)).ifEmpty { manual }
@@ -844,7 +928,16 @@ class ConnectionOrchestrator {
         val winner = scanForBestIp(context, guid, onState, ranges) { measured.add(it) }
         val early = consumeEarlyPick()
         if (cancelled) return null
-        if (winner == null && early == null) return null
+
+        // The ranker needs a reachable candidate. If it has none but the scan
+        // still measured something that answered (a timeout keeps partial
+        // results), the user chooses from those: a finished scan is not a
+        // failed connection, and the flow stays in a valid waiting state.
+        val suggestion = CandidateSelection.suggestion(winner?.ip, measured)
+        if (!CandidateSelection.canContinue(winner?.ip, measured, early)) {
+            LogUtil.w(TAG, "Scan finished without a single answering candidate")
+            return null
+        }
 
         // A stable order: score first, then latency, then address. The UI shows
         // this order and marks the first row as the suggestion.
@@ -861,7 +954,7 @@ class ConnectionOrchestrator {
             // over the ranker, and no later callback can replace it.
             ranked.firstOrNull { it.ip == early && it.answered }
         } else {
-            onState(AutoConnectState.AwaitingIpChoice(ranked, winner?.ip))
+            onState(AutoConnectState.AwaitingIpChoice(ranked, suggestion))
             val chosenIp = awaitIpChoice()
             if (cancelled || chosenIp == null) return null
             ranked.firstOrNull { it.ip == chosenIp && it.answered }
@@ -914,15 +1007,16 @@ class ConnectionOrchestrator {
         if (outcome == null) {
             LogUtil.w(TAG, "Discovery timed out; continuing with the stored ranges")
             CloudflareScanner.cancel()
-            return QsPrefs.loadQualifiedRanges()
+            return QualifiedRangeStore.snapshot()
         }
-        if (outcome.qualified.isEmpty()) {
-            return QsPrefs.loadQualifiedRanges()
+        // The scanner persisted every qualified range as it found it, so this
+        // is the same canonical set a later connection reads. Nothing to merge
+        // here: a cancelled or empty run must not shrink what is stored.
+        if (outcome.qualified.isNotEmpty()) {
+            QualifiedRangeStore.add(outcome.qualified)
+            LogUtil.i(TAG, "Discovery qualified " + outcome.qualified.size + " range(s)")
         }
-        val merged = RangeSet.merge(QsPrefs.loadQualifiedRanges(), outcome.qualified)
-        QsPrefs.saveQualifiedRanges(merged)
-        LogUtil.i(TAG, "Discovery qualified " + outcome.qualified.size + " range(s)")
-        return merged
+        return QualifiedRangeStore.snapshot()
     }
 
     /** Reads and clears the candidate the user confirmed mid-scan. */
@@ -932,6 +1026,16 @@ class ConnectionOrchestrator {
         return pick
     }
 
+    /** What one edge application actually did. */
+    internal data class EdgeApplyResult(
+        /** Configurations that now hold the edge (written or already correct). */
+        val applied: Int,
+        /** Configurations whose write threw. */
+        val failed: Int,
+        /** True when the configuration the tunnel will use holds the edge. */
+        val selectedApplied: Boolean,
+    )
+
     /**
      * Writes [ip] to every eligible configuration the selected profile covers.
      *
@@ -939,47 +1043,92 @@ class ConnectionOrchestrator {
      * configs switch to the same edge, as required); a manual config takes only
      * itself. Nothing outside that scope is read, written or re-saved.
      *
-     * @return how many configurations were persisted, 0 when the scope was empty.
+     * @return what actually happened, including the count that failed.
      */
-    private fun applyEdgeToScope(selectedGuid: String, selected: ProfileItem, ip: String): Int {
-        val subscriptionId = selected.subscriptionId
-        val manual = subscriptionId.isBlank() ||
-            subscriptionId == AppConfig.DEFAULT_SUBSCRIPTION_ID
-        val scope = if (manual) {
-            EdgeApplication.Scope.Single(selectedGuid)
-        } else {
-            EdgeApplication.Scope.Subscription(subscriptionId)
+    private fun applyEdgeToScope(
+        selectedGuid: String,
+        selected: ProfileItem,
+        ip: String,
+    ): EdgeApplyResult {
+        val scope = edgeScopeOf(selectedGuid, selected)
+        val guids = when (scope) {
+            is EdgeApplication.Scope.Single -> listOf(selectedGuid)
+            is EdgeApplication.Scope.Subscription ->
+                MmkvManager.decodeServerList(scope.subscriptionId).distinct()
         }
-        val guids = if (manual) {
-            listOf(selectedGuid)
-        } else {
-            MmkvManager.decodeServerList(subscriptionId).distinct()
-        }
-        val targets = guids.mapNotNull { guid ->
-            val profile = if (guid == selectedGuid) {
-                selected
-            } else {
-                MmkvManager.decodeServerConfig(guid)
+        val targets = guids
+            // A probe is never a user configuration, even if one leaked into a
+            // list from an older build.
+            .filterNot { ProbeProfile.isProbe(it) }
+            .mapNotNull { guid ->
+                val profile = if (guid == selectedGuid) {
+                    selected
+                } else {
+                    MmkvManager.decodeServerConfig(guid)
+                }
+                profile?.let { EdgeApplication.Target(guid, it) }
             }
-            profile?.let { EdgeApplication.Target(guid, it) }
-        }
         val inScope = EdgeApplication.targets(scope, targets, AutoConfigFilter::isEligible)
-        if (inScope.isEmpty()) return 0
-        EdgeApplication.apply(inScope, ip)
-        var persisted = 0
+        if (inScope.isEmpty()) return EdgeApplyResult(0, 0, false)
+
+        val changed = EdgeApplication.apply(inScope, ip).toHashSet()
+        var applied = 0
+        var failed = 0
+        var selectedApplied = false
         inScope.forEach { target ->
-            // Fill blanks only; an existing cs / finalMask / fingerprint is
-            // user data and is never overwritten.
-            ensureSettings(target.guid, target.profile)
+            // Fill blanks only; an existing cipherSuites / finalMask /
+            // fingerprint is user data and is never overwritten.
+            val settingsChanged = fillBlankSettings(target.profile)
+            val needsWrite = target.guid in changed || settingsChanged
+            if (!needsWrite) {
+                // Re-applying the same edge is a no-op, not a duplicate write.
+                applied++
+                if (target.guid == selectedGuid) selectedApplied = true
+                return@forEach
+            }
             try {
                 MmkvManager.encodeServerConfig(target.guid, target.profile)
-                persisted++
+                applied++
+                if (target.guid == selectedGuid) selectedApplied = true
             } catch (e: Exception) {
+                failed++
                 LogUtil.e(TAG, "applyEdgeToScope: failed to persist " + target.guid)
             }
         }
-        LogUtil.i(TAG, "applyEdgeToScope: applied edge to " + persisted + " configs")
-        return persisted
+        LogUtil.i(
+            TAG,
+            "applyEdgeToScope: " + applied + " applied, " + failed + " failed, scope=" + scope,
+        )
+        return EdgeApplyResult(applied, failed, selectedApplied)
+    }
+
+    /**
+     * The configurations [selectedGuid] may share an edge with.
+     *
+     * A subscription profile takes its whole subscription, so every eligible
+     * sibling is updated and the chosen address is available whichever one the
+     * user connects with later. A manual profile takes only itself.
+     *
+     * The profile's own subscriptionId is authoritative. When it is missing
+     * (older storage, an import), the subscription lists are asked which one
+     * owns the GUID, so the scope is not silently narrowed to one config.
+     */
+    private fun edgeScopeOf(
+        selectedGuid: String,
+        selected: ProfileItem,
+    ): EdgeApplication.Scope {
+        val declared = selected.subscriptionId
+        if (declared.isNotBlank() && declared != AppConfig.DEFAULT_SUBSCRIPTION_ID) {
+            return EdgeApplication.Scope.Subscription(declared)
+        }
+        val owner = MmkvManager.decodeSubscriptions()
+            .map { it.guid }
+            .firstOrNull { id ->
+                id != AppConfig.DEFAULT_SUBSCRIPTION_ID &&
+                    MmkvManager.decodeServerList(id).contains(selectedGuid)
+            }
+        return owner?.let { EdgeApplication.Scope.Subscription(it) }
+            ?: EdgeApplication.Scope.Single(selectedGuid)
     }
 
     /**
@@ -1122,6 +1271,9 @@ class ConnectionOrchestrator {
         configChoice = null
         ipChoice = null
         earlyPick = null
+        pendingConfigPick = null
+        pendingIpPick = null
+        flowActive = false
         coreSignals?.close()
         coreSignals = null
         runningReceiver?.let { receiver ->

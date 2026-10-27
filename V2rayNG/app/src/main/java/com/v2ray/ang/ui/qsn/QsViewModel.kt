@@ -12,8 +12,10 @@ import com.v2ray.ang.dto.TrafficSnapshot
 import com.v2ray.ang.dto.entities.ProfileItem
 import com.v2ray.ang.dto.entities.SubscriptionCache
 import com.v2ray.ang.dto.entities.SubscriptionItem
+import com.v2ray.ang.handler.AngConfigManager
 import com.v2ray.ang.handler.AppLocaleManager
 import com.v2ray.ang.handler.MmkvManager
+import com.v2ray.ang.senpai.CloudflareScanner
 import com.v2ray.ang.ui.connect.AutoConfigFilter
 import com.v2ray.ang.ui.connect.AutoConnectResult
 import com.v2ray.ang.ui.connect.AutoConnectState
@@ -23,6 +25,7 @@ import com.v2ray.ang.ui.main.MainDataSource
 import com.v2ray.ang.ui.main.MainServiceEvent
 import com.v2ray.ang.ui.qsn.data.QsCrashRecorder
 import com.v2ray.ang.ui.qsn.data.QsPrefs
+import com.v2ray.ang.ui.qsn.data.QualifiedRangeStore
 import com.v2ray.ang.ui.qsn.domain.ConfigFilter
 import com.v2ray.ang.ui.qsn.domain.ConfigFilterEngine
 import com.v2ray.ang.ui.qsn.domain.ConfigRow
@@ -135,6 +138,23 @@ class QsViewModel(
         }
         viewModelScope.launch {
             dataSource.mainServiceEvent.collect { event -> onServiceEvent(event) }
+        }
+        // Stage 1 publishes through the scanner itself, so the IP Ranges screen
+        // shows the foreground run and the background pass from one source,
+        // and a recreated activity reads the current state instead of starting
+        // another run.
+        viewModelScope.launch {
+            CloudflareScanner.discovery.collect { status ->
+                val previous = _uiState.value.discovery
+                val qualified = if (
+                    status.qualified != previous.qualified || status.isTerminal
+                ) {
+                    withContext(Dispatchers.IO) { QualifiedRangeStore.snapshot() }
+                } else {
+                    _uiState.value.qualifiedRanges
+                }
+                _uiState.update { it.copy(discovery = status, qualifiedRanges = qualified) }
+            }
         }
         viewModelScope.launch(Dispatchers.IO) {
             try {
@@ -656,6 +676,36 @@ class QsViewModel(
                 )
             }
             refreshLocalSnapshot()
+        }
+    }
+
+    /**
+     * Copies the configuration's share link to the system clipboard.
+     *
+     * This is the Copy action: it uses the same canonical serialisation the app
+     * shares and exports with, writes nothing to storage, creates no GUID and
+     * leaves the selection, the pin and the subscription untouched. The text
+     * can be pasted into the Add/Import dialog.
+     */
+    fun copyConfigToClipboard(guid: String) {
+        viewModelScope.launch {
+            val copied = withContext(Dispatchers.IO) {
+                try {
+                    AngConfigManager.share2Clipboard(getApplication(), guid) == 0
+                } catch (e: Exception) {
+                    LogUtil.e(TAG, "copyConfigToClipboard failed: " + e.javaClass.simpleName)
+                    false
+                }
+            }
+            _uiState.update {
+                it.copy(
+                    message = if (copied) {
+                        getString(R.string.qs_copied_clipboard)
+                    } else {
+                        getString(R.string.qs_error_copy_failed)
+                    },
+                )
+            }
         }
     }
 
@@ -1262,7 +1312,12 @@ class QsViewModel(
     }
 
     private fun refreshRanges() {
-        _uiState.update { it.copy(ranges = QsPrefs.loadRanges()) }
+        _uiState.update {
+            it.copy(
+                ranges = QsPrefs.loadRanges(),
+                qualifiedRanges = QualifiedRangeStore.snapshot(),
+            )
+        }
     }
 
     private fun refreshSelectedProfile() {
