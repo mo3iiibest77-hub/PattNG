@@ -70,6 +70,10 @@ class MainRepository(
                     safeIntent.getStringExtra("content")
                 )
 
+                AppConfig.MSG_TRAFFIC_RESULT -> safeIntent
+                    .serializable<com.v2ray.ang.dto.TrafficSnapshot>("content")
+                    ?.let { MainServiceEvent.TrafficUpdate(it) }
+
                 else -> null
             }
             event?.let { _mainServiceEvent.tryEmit(it) }

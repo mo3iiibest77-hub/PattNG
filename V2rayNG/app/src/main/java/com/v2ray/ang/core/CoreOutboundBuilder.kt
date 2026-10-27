@@ -669,6 +669,14 @@ object CoreOutboundBuilder {
     }
 
     private fun getServerAddress(profileItem: ProfileItem): String {
+        // Quiet Storm NG: the user-selected Cloudflare edge replaces the
+        // destination address only. SNI, Host, Path, TLS and every other
+        // transport setting keep using the original profile, which is what
+        // makes an edge usable against a CDN-fronted origin.
+        val edge = profileItem.qsEdgeIp?.trim()
+        if (!edge.isNullOrEmpty()) {
+            return edge
+        }
         if (Utils.isPureIpAddress(profileItem.server.orEmpty())) {
             return profileItem.server.orEmpty()
         }

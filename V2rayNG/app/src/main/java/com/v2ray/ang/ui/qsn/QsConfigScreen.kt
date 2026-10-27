@@ -39,6 +39,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -46,6 +47,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.v2ray.ang.R
 import com.v2ray.ang.ui.qsn.domain.ConfigFilter
+import com.v2ray.ang.ui.qsn.domain.ConfigFilterEngine
+import com.v2ray.ang.ui.qsn.domain.ConfigGroup
+import com.v2ray.ang.ui.qsn.domain.ConfigGrouping
 import com.v2ray.ang.ui.qsn.domain.ConfigRow
 import com.v2ray.ang.ui.qsn.domain.ConfigSource
 import com.v2ray.ang.ui.qsn.domain.SubscriptionRow
@@ -53,10 +57,16 @@ import com.v2ray.ang.ui.qsn.domain.SubscriptionRow
 /**
  * The Configurations tab.
  *
- * Three independent sections, top to bottom:
+ * Four sections, top to bottom:
  *  1. the collapsible subscription panel (add / enable / update / delete),
  *  2. the filter chips, combined with AND,
- *  3. the configuration list itself.
+ *  3. one collapsible section per subscription, holding only the
+ *     Cloudflare-ready configurations of that subscription,
+ *  4. the "Added by You" section for manual imports.
+ *
+ * The list is a view, not a delete tool: configurations that are not
+ * Cloudflare-ready are hidden here but stay in storage and stay editable
+ * through the normal editor, so no protocol support is lost.
  *
  * Every action is a callback into [QsViewModel]; this file holds no state that
  * outlives the screen except the text of the open dialogs.
@@ -76,6 +86,7 @@ fun QsConfigScreen(
     onDismissDeleteSubscription: () -> Unit,
     onToggleFilter: (ConfigFilter) -> Unit,
     onClearFilters: () -> Unit,
+    onToggleGroup: (String) -> Unit,
     onSelectConfig: (String) -> Unit,
     onEditConfig: (String) -> Unit,
     onDuplicateConfig: (String) -> Unit,
@@ -85,17 +96,34 @@ fun QsConfigScreen(
     onOpenImport: () -> Unit,
     onCloseImport: () -> Unit,
     onImport: (String) -> Unit,
+    onToggleLanguage: () -> Unit,
 ) {
     var addDialogOpen by rememberSaveable { mutableStateOf(false) }
     var renameTarget by remember { mutableStateOf<SubscriptionRow?>(null) }
 
-    val filtered = state.filteredConfigs
+    val groups = ConfigGrouping.groups(
+        subscriptions = state.subscriptions,
+        rows = state.configRows,
+        manualTitle = stringResource(R.string.qs_group_added_by_you),
+    )
+    val readyCount = state.configRows.count { it.eligible }
+    val shownCount = groups.sumOf { group ->
+        ConfigFilterEngine.apply(state.filters, group.rows).size
+    }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 24.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
+        item(key = "header") {
+            QsScreenHeader(
+                title = stringResource(R.string.qs_tab_configs),
+                languageCode = state.languageCode,
+                onToggleLanguage = onToggleLanguage,
+            )
+        }
+
         item(key = "subscriptions") {
             SubscriptionPanel(
                 state = state,
@@ -118,55 +146,61 @@ fun QsConfigScreen(
             )
         }
 
-        item(key = "header") {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = stringResource(R.string.qs_configs_title),
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                    Text(
-                        text = stringResource(
-                            R.string.qs_configs_summary,
-                            filtered.size,
-                            state.configRows.size,
-                            state.eligibleCount,
-                        ),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                TextButton(onClick = onOpenImport) {
-                    Icon(
-                        painter = painterResource(R.drawable.ic_add_24dp),
-                        contentDescription = null,
-                        modifier = Modifier.size(18.dp),
-                    )
-                    Spacer(Modifier.width(4.dp))
-                    Text(stringResource(R.string.qs_import_manual))
-                }
-            }
+        item(key = "summary") {
+            Text(
+                text = stringResource(
+                    R.string.qs_configs_summary,
+                    shownCount,
+                    state.configRows.size,
+                    readyCount,
+                ),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
 
-        if (filtered.isEmpty()) {
+        if (groups.isEmpty()) {
             item(key = "empty") {
                 EmptyConfigs(hasRows = state.configRows.isNotEmpty())
             }
-        } else {
-            items(items = filtered, key = { it.guid }) { row ->
-                ConfigCard(
-                    row = row,
-                    onSelect = { onSelectConfig(row.guid) },
-                    onEdit = { onEditConfig(row.guid) },
-                    onDuplicate = { onDuplicateConfig(row.guid) },
-                    onDelete = { onRequestDeleteConfig(row.guid) },
+        }
+
+        groups.forEach { group ->
+            val collapsed = state.collapsedGroups.contains(group.key)
+            item(key = "group-" + group.key) {
+                GroupHeader(
+                    group = group,
+                    collapsed = collapsed,
+                    onToggle = { onToggleGroup(group.key) },
+                    onImport = if (group.manual) onOpenImport else null,
                 )
+            }
+            if (!collapsed) {
+                val visible = ConfigFilterEngine.apply(state.filters, group.rows)
+                if (visible.isEmpty()) {
+                    item(key = "group-empty-" + group.key) {
+                        Text(
+                            text = if (group.manual) {
+                                stringResource(R.string.qs_configs_filter_empty)
+                            } else {
+                                stringResource(R.string.qs_group_none_ready)
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(start = 4.dp, top = 2.dp),
+                        )
+                    }
+                } else {
+                    items(items = visible, key = { it.guid }) { row ->
+                        ConfigCard(
+                            row = row,
+                            onSelect = { onSelectConfig(row.guid) },
+                            onEdit = { onEditConfig(row.guid) },
+                            onDuplicate = { onDuplicateConfig(row.guid) },
+                            onDelete = { onRequestDeleteConfig(row.guid) },
+                        )
+                    }
+                }
             }
         }
     }
@@ -219,6 +253,82 @@ fun QsConfigScreen(
             onDismiss = onDismissDeleteSubscription,
             onConfirm = { onDeleteSubscription(pendingSubscription) },
         )
+    }
+}
+
+/** Stable identity for a collapsible section. */
+private val ConfigGroup.key: String
+    get() = if (manual) "manual" else "sub-" + subscriptionId
+
+@Composable
+private fun GroupHeader(
+    group: ConfigGroup,
+    collapsed: Boolean,
+    onToggle: () -> Unit,
+    onImport: (() -> Unit)?,
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onToggle),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(
+            // Translucent so the animated network field stays visible behind
+            // the list without hurting the contrast of the text.
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.92f),
+        ),
+    ) {
+        Row(
+            modifier = Modifier.padding(start = 16.dp, top = 12.dp, end = 8.dp, bottom = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = group.title,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = if (group.manual) {
+                        stringResource(R.string.qs_group_manual_hint)
+                    } else {
+                        stringResource(
+                            R.string.qs_group_ready,
+                            group.rows.size,
+                            group.totalConfigs,
+                        )
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            if (onImport != null) {
+                TextButton(onClick = onImport) {
+                    Icon(
+                        painter = painterResource(R.drawable.ic_add_24dp),
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp),
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    Text(stringResource(R.string.qs_import_manual))
+                }
+            }
+            IconButton(onClick = onToggle) {
+                Icon(
+                    painter = painterResource(R.drawable.ic_expand_more_24dp),
+                    contentDescription = stringResource(
+                        if (collapsed) R.string.qs_expand else R.string.qs_collapse,
+                    ),
+                    modifier = Modifier
+                        .size(22.dp)
+                        .rotate(if (collapsed) 0f else 180f),
+                )
+            }
+        }
     }
 }
 
@@ -388,6 +498,14 @@ private fun SubscriptionItemRow(
     }
 }
 
+/**
+ * Curated chips.
+ *
+ * "Other transport", "Not eligible", "Manual" and "Subscription" are gone as
+ * top-level categories: the sections already say where a config came from, and
+ * a config that is not Cloudflare-ready is simply not listed under a
+ * subscription.
+ */
 @Composable
 private fun FilterRow(
     selected: Set<ConfigFilter>,
@@ -399,11 +517,7 @@ private fun FilterRow(
         ConfigFilter.CloudflareEligible to R.string.qs_filter_eligible,
         ConfigFilter.WebSocketTls to R.string.qs_filter_ws_tls,
         ConfigFilter.XhttpTls to R.string.qs_filter_xhttp_tls,
-        ConfigFilter.OtherTransport to R.string.qs_filter_other,
-        ConfigFilter.Manual to R.string.qs_filter_manual,
-        ConfigFilter.Subscription to R.string.qs_filter_subscription,
         ConfigFilter.Active to R.string.qs_filter_active,
-        ConfigFilter.NotEligible to R.string.qs_filter_not_eligible,
     )
     Row(
         modifier = Modifier
@@ -439,9 +553,9 @@ private fun ConfigCard(
         shape = RoundedCornerShape(14.dp),
         colors = CardDefaults.cardColors(
             containerColor = if (row.active) {
-                MaterialTheme.colorScheme.secondaryContainer
+                MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.95f)
             } else {
-                MaterialTheme.colorScheme.surface
+                qsCardSurface()
             },
         ),
     ) {
@@ -526,7 +640,7 @@ private fun EmptyConfigs(hasRows: Boolean) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(14.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        colors = CardDefaults.cardColors(containerColor = qsCardSurface()),
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
             Text(

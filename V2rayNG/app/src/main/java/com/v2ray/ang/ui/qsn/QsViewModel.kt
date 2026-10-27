@@ -8,9 +8,11 @@ import androidx.lifecycle.viewModelScope
 import com.v2ray.ang.AppConfig
 import com.v2ray.ang.R
 import com.v2ray.ang.core.LauncherManager
+import com.v2ray.ang.dto.TrafficSnapshot
 import com.v2ray.ang.dto.entities.ProfileItem
 import com.v2ray.ang.dto.entities.SubscriptionCache
 import com.v2ray.ang.dto.entities.SubscriptionItem
+import com.v2ray.ang.handler.AppLocaleManager
 import com.v2ray.ang.handler.MmkvManager
 import com.v2ray.ang.ui.connect.AutoConfigFilter
 import com.v2ray.ang.ui.connect.AutoConnectResult
@@ -23,7 +25,10 @@ import com.v2ray.ang.ui.qsn.domain.ConfigFilter
 import com.v2ray.ang.ui.qsn.domain.ConfigFilterEngine
 import com.v2ray.ang.ui.qsn.domain.ConfigRow
 import com.v2ray.ang.ui.qsn.domain.ConfigSource
+import com.v2ray.ang.ui.qsn.domain.LanguageToggle
 import com.v2ray.ang.ui.qsn.domain.ManualConfigRules
+import com.v2ray.ang.ui.qsn.domain.NotificationDefaults
+import com.v2ray.ang.ui.qsn.domain.SubscriptionPanelRules
 import com.v2ray.ang.ui.qsn.domain.RangeError
 import com.v2ray.ang.ui.qsn.domain.RangeParseResult
 import com.v2ray.ang.ui.qsn.domain.ScanRange
@@ -35,6 +40,7 @@ import com.v2ray.ang.util.Utils
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -52,6 +58,13 @@ private const val PROBE_GRACE_MS = 1_500L
 
 /** Remarks used when a subscription is created from the URL field. */
 private const val DEFAULT_SUBSCRIPTION_REMARKS = "Quiet Storm"
+
+/**
+ * How often the Connection screen asks the core for traffic counters while it
+ * is on screen. The service throttles the native read to ~1 Hz, so this never
+ * turns into a busy loop.
+ */
+private const val TRAFFIC_POLL_MS = 1_000L
 
 /** Outcome of a manual import, kept small so it can be logged safely. */
 private data class ImportOutcome(
@@ -86,11 +99,20 @@ class QsViewModel(
     private var flowJob: Job? = null
     private var stopWatchJob: Job? = null
     private var scanJob: Job? = null
+    private var trafficJob: Job? = null
+
+    /** True while a Quiet Storm NG screen is actually on screen. */
+    private var foreground = false
 
     /** Last URL persisted to MMKV, used to detect unsaved edits before connecting. */
     private var storedUrl: String = ""
 
     init {
+        // Fresh installs show Receive/Send in the notification. An existing
+        // value is never overwritten: the key is only written when it has
+        // never been set.
+        ensureNotificationTrafficDefault()
+        _uiState.update { it.copy(languageCode = currentLanguageCode()) }
         viewModelScope.launch {
             dataSource.mainServiceEvent.collect { event -> onServiceEvent(event) }
         }
@@ -131,7 +153,16 @@ class QsViewModel(
     fun saveSubscription(raw: String): Boolean {
         val url = QsUrlValidator.normalize(raw)
         if (url == null) {
-            _uiState.update { it.copy(inputError = getString(R.string.qs_error_bad_url)) }
+            // A rejected URL must not close the form: the user has to see the
+            // error next to the field they have to fix.
+            val expanded = SubscriptionPanelRules.expandedAfterSave(false)
+            QsPrefs.setSubPanelExpanded(expanded)
+            _uiState.update {
+                it.copy(
+                    inputError = getString(R.string.qs_error_bad_url),
+                    subscriptionPanelExpanded = expanded,
+                )
+            }
             return false
         }
         val subs = MmkvManager.decodeSubscriptions()
@@ -143,16 +174,29 @@ class QsViewModel(
         MmkvManager.encodeSubscription(guid, item)
         QsPrefs.setActiveSubscriptionGuid(guid)
         storedUrl = url
+        // The write above is the real success condition: only now does the
+        // panel collapse, and the collapsed state is persisted so it survives
+        // a tab switch or a cold start.
+        val expanded = SubscriptionPanelRules.expandedAfterSave(true)
+        QsPrefs.setSubPanelExpanded(expanded)
         _uiState.update {
             it.copy(
                 subscriptionUrl = url,
                 hasSubscription = true,
                 inputError = null,
                 message = null,
+                subscriptionPanelExpanded = expanded,
             )
         }
         refreshLocalSnapshot()
         return true
+    }
+
+    /** Opens or closes the subscription panel on the Connection screen. */
+    fun toggleSubscriptionPanel() {
+        val expanded = !_uiState.value.subscriptionPanelExpanded
+        QsPrefs.setSubPanelExpanded(expanded)
+        _uiState.update { it.copy(subscriptionPanelExpanded = expanded) }
     }
 
     /** Downloads the active subscription again and reports how many configs it produced. */
@@ -200,10 +244,24 @@ class QsViewModel(
                     inputError = null,
                     scanDone = 0,
                     scanTotal = 0,
+                    configChoices = emptyList(),
+                    chosenConfigGuid = null,
+                    scanCandidates = emptyList(),
+                    suggestedIp = null,
+                    pendingIp = null,
                 )
             }
             val result = orchestrator.autoConnect(getApplication()) { orchestratorState ->
-                _uiState.update { current -> current.withConnectState(orchestratorState) }
+                _uiState.update { current ->
+                    val mapped = current.withConnectState(orchestratorState, flowText())
+                    // The orchestrator reports machine reasons; the UI never
+                    // shows them raw, so a Persian session stays Persian.
+                    if (orchestratorState is AutoConnectState.Failed) {
+                        mapped.copy(message = localizeFailure(orchestratorState.reason))
+                    } else {
+                        mapped
+                    }
+                }
             }
             _uiState.update { current ->
                 when (result) {
@@ -219,7 +277,7 @@ class QsViewModel(
                         // Never claim Connected unless the core really is up.
                         status = if (current.coreRunning) QsStatus.Connected else QsStatus.Error,
                         busy = false,
-                        message = current.message ?: result.reason,
+                        message = current.message ?: localizeFailure(result.reason),
                     )
 
                     AutoConnectResult.Cancelled -> current.copy(
@@ -234,11 +292,51 @@ class QsViewModel(
         }
     }
 
+    /**
+     * Confirms which eligible configuration the scan should use.
+     *
+     * The orchestrator validates the GUID against the list it offered, so a
+     * stale click cannot make it scan a config from another subscription.
+     */
+    fun chooseConfig(guid: String) {
+        _uiState.update { it.copy(chosenConfigGuid = guid) }
+        orchestrator.chooseConfig(guid)
+    }
+
+    /** Highlights a candidate in the results list without applying it yet. */
+    fun selectPendingIp(ip: String) {
+        _uiState.update { it.copy(pendingIp = ip) }
+    }
+
+    /**
+     * Confirms the highlighted IP. Only after this does the flow write the edge
+     * to the configurations and start the tunnel.
+     */
+    fun confirmIp() {
+        val ip = _uiState.value.pendingIp ?: return
+        orchestrator.chooseIp(ip)
+    }
+
     /** Cancels the running auto-connect attempt; the flow reports Cancelled itself. */
     fun cancel() {
         if (flowJob?.isActive != true) return
         _uiState.update { it.copy(message = getString(R.string.qs_cancelling)) }
         orchestrator.cancel()
+    }
+
+    /**
+     * Tells the ViewModel whether a Quiet Storm NG screen is visible.
+     *
+     * Traffic polling only runs while something can display it, so a backgrounded
+     * app does not keep waking the service every second.
+     */
+    fun setForeground(value: Boolean) {
+        foreground = value
+        if (value) {
+            startTrafficPolling()
+        } else {
+            stopTrafficPolling()
+        }
     }
 
     /** Stops the tunnel and waits for the daemon to confirm. */
@@ -249,6 +347,7 @@ class QsViewModel(
             it.copy(status = QsStatus.Disconnecting, busy = true, step = QsStep.Idle, message = null)
         }
         LauncherManager.stopService(getApplication())
+        stopTrafficPolling()
         stopWatchJob = viewModelScope.launch {
             delay(STOP_CONFIRM_TIMEOUT_MS)
             if (_uiState.value.status != QsStatus.Disconnecting) return@launch
@@ -310,6 +409,16 @@ class QsViewModel(
 
     fun clearFilters() {
         _uiState.update { it.copy(filters = emptySet()) }
+    }
+
+    /** Collapses or expands one subscription section on Configurations. */
+    fun toggleConfigGroup(key: String) {
+        _uiState.update {
+            val collapsed = it.collapsedGroups
+            it.copy(
+                collapsedGroups = if (collapsed.contains(key)) collapsed - key else collapsed + key,
+            )
+        }
     }
 
     /**
@@ -563,6 +672,12 @@ class QsViewModel(
     // ---------- IP ranges ----------
 
     fun addRange(input: String) {
+        // Editing the range set mid-scan would change what the running scanner
+        // was told to probe while it is probing it.
+        if (_uiState.value.scanningNow) {
+            _uiState.update { it.copy(rangeError = getString(R.string.qs_range_locked)) }
+            return
+        }
         when (val parsed = ScanRangeParser.parse(input)) {
             is RangeParseResult.Invalid -> _uiState.update {
                 it.copy(rangeError = rangeMessage(parsed.reason))
@@ -584,6 +699,10 @@ class QsViewModel(
     }
 
     fun removeRange(cidr: String) {
+        if (_uiState.value.scanningNow) {
+            _uiState.update { it.copy(rangeError = getString(R.string.qs_range_locked)) }
+            return
+        }
         val next = _uiState.value.ranges.filterNot { it.cidr == cidr }
         QsPrefs.saveRanges(next)
         QsPrefs.clearSelection()
@@ -591,6 +710,10 @@ class QsViewModel(
     }
 
     fun toggleRange(cidr: String) {
+        if (_uiState.value.scanningNow) {
+            _uiState.update { it.copy(rangeError = getString(R.string.qs_range_locked)) }
+            return
+        }
         val next = _uiState.value.ranges.map {
             if (it.cidr == cidr) it.copy(enabled = !it.enabled) else it
         }
@@ -749,6 +872,10 @@ class QsViewModel(
 
     private fun onServiceEvent(event: MainServiceEvent) {
         when (event) {
+            is MainServiceEvent.TrafficUpdate -> {
+                _uiState.update { it.copy(traffic = event.snapshot) }
+            }
+
             MainServiceEvent.StateRunning,
             MainServiceEvent.StateStartSuccess -> onCoreRunning(true)
 
@@ -777,6 +904,7 @@ class QsViewModel(
 
     private fun onCoreRunning(running: Boolean) {
         if (!running) stopWatchJob?.cancel()
+        if (running) startTrafficPolling() else stopTrafficPolling()
         _uiState.update { state ->
             if (running) {
                 val keepConnecting = state.status == QsStatus.Connecting
@@ -811,6 +939,8 @@ class QsViewModel(
                 configCount = target?.let { sub -> MmkvManager.decodeServerList(sub.guid).size } ?: 0,
                 lastUpdated = target?.subscription?.lastUpdated ?: -1L,
                 lastScanAt = QsPrefs.lastScanAt(),
+                subscriptionPanelExpanded = QsPrefs.subPanelExpanded(),
+                languageCode = currentLanguageCode(),
             )
         }
         refreshSubscriptions(caches, activeGuid)
@@ -846,6 +976,9 @@ class QsViewModel(
                 profile = profile,
                 source = if (manual) ConfigSource.Manual else ConfigSource.Subscription,
                 active = guid == selectedGuid,
+                // Same rule the orchestrator applies, so the badge and the
+                // automatic flow can never disagree.
+                eligible = AutoConfigFilter.isEligible(profile),
             )
         }
         _uiState.update { it.copy(configRows = rows) }
@@ -861,10 +994,93 @@ class QsViewModel(
         _uiState.update {
             it.copy(
                 selectedRemarks = profile?.remarks?.takeIf { remarks -> remarks.isNotBlank() },
+                // The origin server from the profile, never the Cloudflare
+                // edge: the edge has its own row.
                 selectedServer = profile?.server?.takeIf { server -> server.isNotBlank() },
+                selectedEdge = profile?.qsEdgeIp?.takeIf { edge -> edge.isNotBlank() },
             )
         }
     }
+
+    // ---------- Traffic ----------
+
+    private fun startTrafficPolling() {
+        if (trafficJob?.isActive == true) return
+        if (!foreground || !_uiState.value.coreRunning) return
+        trafficJob = viewModelScope.launch {
+            while (isActive) {
+                dataSource.sendMsg2Service(AppConfig.MSG_QUERY_TRAFFIC, "")
+                delay(TRAFFIC_POLL_MS)
+            }
+        }
+    }
+
+    private fun stopTrafficPolling() {
+        trafficJob?.cancel()
+        trafficJob = null
+        // A stale rate must never survive a disconnect and look live.
+        if (_uiState.value.traffic != null) {
+            _uiState.update { it.copy(traffic = null) }
+        }
+    }
+
+    // ---------- Language ----------
+
+    /** Applies EN/FA through the existing per-app locale machinery. */
+    fun setLanguage(code: String) {
+        AppLocaleManager.setApplicationLanguage(code)
+        _uiState.update { it.copy(languageCode = code) }
+    }
+
+    /** Flips between English and Persian. */
+    fun toggleLanguage() {
+        setLanguage(LanguageToggle.next(currentLanguageCode()))
+    }
+
+    private fun currentLanguageCode(): String = LanguageToggle.normalize(
+        // "auto" (or nothing) resolves to the system language; the control
+        // still shows a concrete state.
+        MmkvManager.decodeSettingsString(AppConfig.PREF_LANGUAGE),
+        java.util.Locale.getDefault().language,
+    )
+
+    /**
+     * Turns Receive/Send in the notification on for a fresh install only.
+     *
+     * The MMKV key is written only when it has never been set, so an existing
+     * choice — including a deliberate "off" — is preserved across upgrades.
+     */
+    private fun ensureNotificationTrafficDefault() {
+        val exists = MmkvManager.containsSettings(AppConfig.PREF_SPEED_ENABLED)
+        if (!NotificationDefaults.enableTrafficWhenUnset(exists)) return
+        MmkvManager.encodeSettings(AppConfig.PREF_SPEED_ENABLED, true)
+    }
+
+    /**
+     * Maps an orchestrator failure reason to a translated message.
+     *
+     * The reasons are a closed set produced by [ConnectionOrchestrator]; an
+     * unknown one falls back to a generic sentence instead of leaking English
+     * into a Persian screen.
+     */
+    private fun localizeFailure(reason: String): String = when {
+        reason.contains("permission", ignoreCase = true) -> getString(R.string.qs_error_vpn_denied)
+        reason.contains("cannot be used", ignoreCase = true) ||
+            reason.contains("eligible", ignoreCase = true) -> getString(R.string.qs_error_no_eligible)
+        reason.contains("scan", ignoreCase = true) -> getString(R.string.qs_error_scan_none)
+        reason.contains("subscription", ignoreCase = true) -> getString(R.string.qs_error_update_failed)
+        reason.contains("apply", ignoreCase = true) -> getString(R.string.qs_error_apply_failed)
+        reason.contains("running", ignoreCase = true) ||
+            reason.contains("Core", ignoreCase = true) -> getString(R.string.qs_error_core_start)
+        else -> getString(R.string.qs_error_generic)
+    }
+
+    private fun flowText(): QsFlowText = QsFlowText(
+        noSubscription = getString(R.string.qs_error_no_subscription),
+        usingSavedIp = getString(R.string.qs_using_saved_ip),
+        reconnecting = getString(R.string.qs_reconnecting),
+        cancelled = getString(R.string.qs_cancelled),
+    )
 
     private fun getString(resId: Int, vararg args: Any): String =
         getApplication<Application>().getString(resId, *args)
@@ -874,6 +1090,7 @@ class QsViewModel(
         orchestrator.cancel()
         stopWatchJob?.cancel()
         scanJob?.cancel()
+        trafficJob?.cancel()
         try {
             dataSource.close()
         } catch (e: Exception) {

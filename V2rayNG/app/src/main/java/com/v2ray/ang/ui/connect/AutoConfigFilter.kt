@@ -24,6 +24,17 @@ import com.v2ray.ang.enums.EConfigType
  * manual server list; they are only excluded from the *automatic* selection
  * path. Parser support for every protocol remains untouched.
  */
+/** Why one configuration cannot join the automatic Cloudflare flow. */
+enum class Ineligibility {
+    Eligible,
+    UnsupportedProtocol,
+    UnsupportedTransport,
+    NotTls,
+    PortNotAllowed,
+    MissingServer,
+    MissingCredential,
+}
+
 object AutoConfigFilter {
 
     /**
@@ -93,24 +104,31 @@ object AutoConfigFilter {
      * *all* hold; a single failure excludes it from auto-selection without
      * affecting anything else.
      */
-    fun isEligible(config: ProfileItem): Boolean {
+    fun isEligible(config: ProfileItem): Boolean =
+        ineligibility(config) == Ineligibility.Eligible
+
+    /**
+     * Same rules as [isEligible], but reports the first failing rule so the UI
+     * can explain the exclusion instead of only hiding the config.
+     */
+    fun ineligibility(config: ProfileItem): Ineligibility {
         // 1. Protocol must be a real standalone outbound (not a meta type).
-        if (config.configType !in ELIGIBLE_CONFIG_TYPES) return false
+        if (config.configType !in ELIGIBLE_CONFIG_TYPES) return Ineligibility.UnsupportedProtocol
 
         // 2. Transport must be WebSocket or XHTTP.
-        val network = config.network ?: return false
-        if (network !in ELIGIBLE_NETWORKS) return false
+        val network = config.network ?: return Ineligibility.UnsupportedTransport
+        if (network !in ELIGIBLE_NETWORKS) return Ineligibility.UnsupportedTransport
 
         // 3. Security must be TLS.
-        if (config.security != AppConfig.TLS) return false
+        if (config.security != AppConfig.TLS) return Ineligibility.NotTls
 
         // 4. Real server port must be in the approved HTTPS port set.
         val port = config.serverPort?.trim().orEmpty()
-        if (port.isEmpty() || port !in HTTPS_PORTS) return false
+        if (port.isEmpty() || port !in HTTPS_PORTS) return Ineligibility.PortNotAllowed
 
         // 5. Server address must be present — a config with no destination
         //    cannot be connected, auto or manual.
-        if (config.server.isNullOrBlank()) return false
+        if (config.server.isNullOrBlank()) return Ineligibility.MissingServer
 
         // 6. Protocol-specific essential params must be present. We only
         //    enforce the minimum: a non-empty password/uuid-equivalent where
@@ -124,24 +142,26 @@ object AutoConfigFilter {
             EConfigType.VLESS,
             EConfigType.TROJAN -> {
                 // uuid / password
-                if (config.password.isNullOrBlank()) return false
+                if (config.password.isNullOrBlank()) return Ineligibility.MissingCredential
             }
             EConfigType.SHADOWSOCKS -> {
-                if (config.password.isNullOrBlank() || config.method.isNullOrBlank()) return false
+                if (config.password.isNullOrBlank() || config.method.isNullOrBlank()) {
+                    return Ineligibility.MissingCredential
+                }
             }
             EConfigType.SOCKS,
             EConfigType.HTTP -> {
-                if (config.username.isNullOrBlank()) return false
+                if (config.username.isNullOrBlank()) return Ineligibility.MissingCredential
             }
             EConfigType.WIREGUARD -> {
-                if (config.publicKey.isNullOrBlank()) return false
+                if (config.publicKey.isNullOrBlank()) return Ineligibility.MissingCredential
             }
             EConfigType.HYSTERIA2 -> {
-                if (config.password.isNullOrBlank()) return false
+                if (config.password.isNullOrBlank()) return Ineligibility.MissingCredential
             }
-            else -> return false
+            else -> return Ineligibility.UnsupportedProtocol
         }
 
-        return true
+        return Ineligibility.Eligible
     }
 }

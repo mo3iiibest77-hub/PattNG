@@ -89,6 +89,17 @@ class QuietStormActivity : HelperBaseComponentActivity() {
         qsViewModel.reload()
     }
 
+    override fun onStart() {
+        super.onStart()
+        // Traffic is polled only while a screen can show it.
+        qsViewModel.setForeground(true)
+    }
+
+    override fun onStop() {
+        qsViewModel.setForeground(false)
+        super.onStop()
+    }
+
     /**
      * Restarts a running tunnel after a setting that affects the core changed (for example the
      * per-app selection). Uses the project-wide [SettingsChangeManager] flag so the restart happens
@@ -153,6 +164,16 @@ class QuietStormActivity : HelperBaseComponentActivity() {
 
         var tab by rememberSaveable { mutableStateOf(0) }
 
+        // Steps that own the whole Connection tab: choosing a config, watching
+        // the scan, confirming the IP, and the short write/start phases.
+        val showScanStep = state.status == QsStatus.Connecting && (
+            state.step == QsStep.ChoosingConfig ||
+                state.step == QsStep.ScanningIps ||
+                state.step == QsStep.ChoosingIp ||
+                state.step == QsStep.SelectingIp ||
+                state.step == QsStep.ApplyingEdge
+            )
+
         Scaffold(
             containerColor = Color.Transparent,
             bottomBar = {
@@ -216,16 +237,30 @@ class QuietStormActivity : HelperBaseComponentActivity() {
             QsBackground(modifier = Modifier.padding(padding)) {
                 Box {
                     when (tab) {
-                        0 -> QsConnectScreen(
-                            state = state,
-                            onUrlChange = { qsViewModel.onSubscriptionInputChange(it) },
-                            onSave = { qsViewModel.saveSubscription(state.subscriptionUrl) },
-                            onUpdate = { qsViewModel.refreshSubscription() },
-                            onConnect = { requestConnect() },
-                            onDisconnect = { qsViewModel.disconnect() },
-                            onCancel = { qsViewModel.cancel() },
-                            onDismissMessage = { qsViewModel.dismissMessage() },
-                        )
+                        // The scan step is a full screen of its own: the flow
+                        // is parked there until the user answers or cancels.
+                        0 -> if (showScanStep) {
+                            QsScanScreen(
+                                state = state,
+                                onChooseConfig = { qsViewModel.chooseConfig(it) },
+                                onSelectIp = { qsViewModel.selectPendingIp(it) },
+                                onConfirmIp = { qsViewModel.confirmIp() },
+                                onCancel = { qsViewModel.cancel() },
+                            )
+                        } else {
+                            QsConnectScreen(
+                                state = state,
+                                onUrlChange = { qsViewModel.onSubscriptionInputChange(it) },
+                                onSave = { qsViewModel.saveSubscription(state.subscriptionUrl) },
+                                onUpdate = { qsViewModel.refreshSubscription() },
+                                onTogglePanel = { qsViewModel.toggleSubscriptionPanel() },
+                                onConnect = { requestConnect() },
+                                onDisconnect = { qsViewModel.disconnect() },
+                                onCancel = { qsViewModel.cancel() },
+                                onDismissMessage = { qsViewModel.dismissMessage() },
+                                onToggleLanguage = { qsViewModel.toggleLanguage() },
+                            )
+                        }
 
                         1 -> QsConfigScreen(
                             state = state,
@@ -251,6 +286,8 @@ class QuietStormActivity : HelperBaseComponentActivity() {
                             },
                             onToggleFilter = { qsViewModel.toggleFilter(it) },
                             onClearFilters = { qsViewModel.clearFilters() },
+                            onToggleGroup = { qsViewModel.toggleConfigGroup(it) },
+                            onToggleLanguage = { qsViewModel.toggleLanguage() },
                             onSelectConfig = { qsViewModel.selectConfig(it) },
                             onEditConfig = { openEditor(it) },
                             onDuplicateConfig = { qsViewModel.duplicateConfigToManual(it) },
@@ -270,6 +307,7 @@ class QuietStormActivity : HelperBaseComponentActivity() {
                             onScanNow = { qsViewModel.scanNow() },
                             onRescanNext = { qsViewModel.rescanOnNextConnect() },
                             onDismissMessage = { qsViewModel.dismissMessage() },
+                            onToggleLanguage = { qsViewModel.toggleLanguage() },
                         )
 
                         else -> QsAppsScreen(

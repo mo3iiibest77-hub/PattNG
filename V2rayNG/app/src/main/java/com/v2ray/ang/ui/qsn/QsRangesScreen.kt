@@ -40,6 +40,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.v2ray.ang.R
+import com.v2ray.ang.ui.qsn.domain.RangesSummary
 import com.v2ray.ang.ui.qsn.domain.ScanRange
 import com.v2ray.ang.ui.qsn.domain.ScanRangeParser
 import com.v2ray.ang.ui.qsn.domain.ScanRangePlanner
@@ -60,9 +61,11 @@ fun QsRangesScreen(
     onScanNow: () -> Unit,
     onRescanNext: () -> Unit,
     onDismissMessage: () -> Unit,
+    onToggleLanguage: () -> Unit,
 ) {
     var input by rememberSaveable { mutableStateOf("") }
-    val enabled = state.ranges.count { it.enabled }
+    val enabled = RangesSummary.enabled(state.ranges)
+    val total = RangesSummary.total(state.ranges)
     val estimated = minOf(
         ScanRangeParser.MAX_CANDIDATES,
         ScanRangePlanner.dedupe(state.ranges).size * ScanRangeParser.DEFAULT_PER_RANGE,
@@ -73,6 +76,14 @@ fun QsRangesScreen(
         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 24.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
+        item(key = "header") {
+            QsScreenHeader(
+                title = stringResource(R.string.qs_tab_ranges),
+                languageCode = state.languageCode,
+                onToggleLanguage = onToggleLanguage,
+            )
+        }
+
         item(key = "intro") {
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -99,6 +110,15 @@ fun QsRangesScreen(
                     Spacer(Modifier.height(6.dp))
                     Text(
                         text = stringResource(
+                            R.string.qs_range_count,
+                            total,
+                            enabled,
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text(
+                        text = stringResource(
                             R.string.qs_ranges_summary,
                             enabled,
                             estimated,
@@ -106,6 +126,14 @@ fun QsRangesScreen(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                    if (state.scanningNow) {
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            text = stringResource(R.string.qs_range_locked),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
                     Spacer(Modifier.height(2.dp))
                     Text(
                         text = if (state.lastScanAt > 0L) {
@@ -151,7 +179,7 @@ fun QsRangesScreen(
                                 onAdd(input)
                                 input = ""
                             },
-                            enabled = input.isNotBlank(),
+                            enabled = input.isNotBlank() && !state.scanningNow,
                             modifier = Modifier.weight(1f),
                         ) {
                             Icon(
@@ -242,6 +270,7 @@ fun QsRangesScreen(
             items(items = state.ranges, key = { it.cidr }) { range ->
                 RangeRow(
                     range = range,
+                    editable = !state.scanningNow,
                     onToggle = { onToggle(range.cidr) },
                     onRemove = { onRemove(range.cidr) },
                 )
@@ -259,6 +288,7 @@ fun QsRangesScreen(
 @Composable
 private fun RangeRow(
     range: ScanRange,
+    editable: Boolean,
     onToggle: () -> Unit,
     onRemove: () -> Unit,
 ) {
@@ -276,8 +306,12 @@ private fun RangeRow(
                 style = MaterialTheme.typography.bodyLarge,
                 modifier = Modifier.weight(1f),
             )
-            Switch(checked = range.enabled, onCheckedChange = { onToggle() })
-            IconButton(onClick = onRemove) {
+            Switch(
+                checked = range.enabled,
+                onCheckedChange = { onToggle() },
+                enabled = editable,
+            )
+            IconButton(onClick = onRemove, enabled = editable) {
                 Icon(
                     painter = painterResource(R.drawable.ic_delete_24dp),
                     contentDescription = stringResource(R.string.qs_delete),

@@ -1,9 +1,12 @@
 package com.v2ray.ang.ui.qsn
 
+import com.v2ray.ang.dto.TrafficSnapshot
 import com.v2ray.ang.ui.connect.AutoConnectState
+import com.v2ray.ang.ui.qsn.domain.ConfigChoice
 import com.v2ray.ang.ui.qsn.domain.ConfigFilter
 import com.v2ray.ang.ui.qsn.domain.ConfigFilterEngine
 import com.v2ray.ang.ui.qsn.domain.ConfigRow
+import com.v2ray.ang.ui.qsn.domain.ScanCandidate
 import com.v2ray.ang.ui.qsn.domain.ScanRange
 import com.v2ray.ang.ui.qsn.domain.SubscriptionRow
 
@@ -23,19 +26,31 @@ enum class QsStep {
     Preparing,
     FetchingSubscription,
     CheckingConfigs,
+    ChoosingConfig,
     ScanningIps,
+    ChoosingIp,
     SelectingIp,
+    ApplyingEdge,
     StartingVpn,
     Connected;
 
     companion object {
-        /** Steps rendered in the progress list, in order. */
+        /**
+         * Steps rendered in the progress list, in order.
+         *
+         * They mirror the real flow one to one: each row is reached only when
+         * the corresponding phase of [com.v2ray.ang.ui.connect.ConnectionOrchestrator]
+         * actually starts.
+         */
         val progressSteps: List<QsStep> = listOf(
             Preparing,
             FetchingSubscription,
             CheckingConfigs,
+            ChoosingConfig,
             ScanningIps,
+            ChoosingIp,
             SelectingIp,
+            ApplyingEdge,
             StartingVpn,
             Connected,
         )
@@ -62,7 +77,10 @@ data class QsUiState(
     val scanDone: Int = 0,
     val scanTotal: Int = 0,
     val selectedRemarks: String? = null,
+    /** Origin server from the profile; never the Cloudflare edge. */
     val selectedServer: String? = null,
+    /** Cloudflare edge the core is dialing, when one is selected. */
+    val selectedEdge: String? = null,
     val lastUpdated: Long = -1L,
     val refreshing: Boolean = false,
     val inputError: String? = null,
@@ -88,6 +106,24 @@ data class QsUiState(
     val scanningNow: Boolean = false,
     /** Timestamp of the last successful scan, 0 when none ever ran. */
     val lastScanAt: Long = 0L,
+    /** True while the subscription panel on the Connection screen is open. */
+    val subscriptionPanelExpanded: Boolean = true,
+    /** Eligible configs offered before the scan starts. */
+    val configChoices: List<ConfigChoice> = emptyList(),
+    /** Config the user highlighted in the picker (pre-selected). */
+    val chosenConfigGuid: String? = null,
+    /** Live scan results, newest measurement per IP. */
+    val scanCandidates: List<ScanCandidate> = emptyList(),
+    /** The ranker's suggestion; never applied without confirmation. */
+    val suggestedIp: String? = null,
+    /** IP the user highlighted in the results list. */
+    val pendingIp: String? = null,
+    /** Real traffic rates reported by the core, null when not measured yet. */
+    val traffic: TrafficSnapshot? = null,
+    /** Current app language code ("en", "fa", ...). */
+    val languageCode: String = "en",
+    /** Configurations sections the user collapsed, by stable group key. */
+    val collapsedGroups: Set<String> = emptySet(),
 ) {
     /** True while a connect attempt is in flight; the button becomes Cancel. */
     val connecting: Boolean get() = status == QsStatus.Connecting
@@ -104,6 +140,14 @@ data class QsUiState(
     val hasAnyConfig: Boolean
         get() = configRows.isNotEmpty()
 
+    /** True while the flow is parked on a question the user must answer. */
+    val awaitingChoice: Boolean
+        get() = step == QsStep.ChoosingConfig || step == QsStep.ChoosingIp
+
+    /** Rows of the chosen subscription that the automatic flow can use. */
+    val eligibleChoices: List<ConfigChoice>
+        get() = configChoices
+
     /** Progress of the Cloudflare scan in 0..1, or null when not scanning. */
     val scanFraction: Float?
         get() = if (step == QsStep.ScanningIps && scanTotal > 0) {
@@ -114,17 +158,47 @@ data class QsUiState(
 }
 
 /**
+ * Localized texts the flow itself produces.
+ *
+ * The defaults are English so the pure state mapper stays testable without
+ * Android resources; the ViewModel passes a resource-backed instance so the
+ * same code path renders Persian when Persian is selected.
+ */
+data class QsFlowText(
+    val noSubscription: String = "No subscription configured",
+    val usingSavedIp: String = "Using saved IP %s",
+    val reconnecting: String = "Reconnecting (attempt %d)",
+    val cancelled: String = "Cancelled",
+)
+
+/**
+ * Ordering shared by the live scan list and the final choice list.
+ *
+ * Score first, then latency, then address: deterministic, so the "suggested"
+ * row cannot move between two identical renders.
+ */
+internal fun rankCandidates(candidates: List<ScanCandidate>): List<ScanCandidate> =
+    candidates.sortedWith(
+        compareByDescending<ScanCandidate> { it.score }
+            .thenBy { it.pingMs ?: Long.MAX_VALUE }
+            .thenBy { it.ip },
+    )
+
+/**
  * Folds one orchestrator state into the UI state.
  *
  * Pure and side-effect free so it can be unit tested against the real [AutoConnectState] type
  * without Android or a running core.
  */
-internal fun QsUiState.withConnectState(state: AutoConnectState): QsUiState = when (state) {
+internal fun QsUiState.withConnectState(
+    state: AutoConnectState,
+    text: QsFlowText = QsFlowText(),
+): QsUiState = when (state) {
     AutoConnectState.WaitingForSubscription -> copy(
         status = if (coreRunning) QsStatus.Connected else QsStatus.Error,
         step = QsStep.Idle,
         busy = false,
-        message = "No subscription configured",
+        message = text.noSubscription,
     )
 
     AutoConnectState.FetchingSubscription -> copy(
@@ -150,6 +224,9 @@ internal fun QsUiState.withConnectState(state: AutoConnectState): QsUiState = wh
         message = null,
         scanDone = 0,
         scanTotal = 0,
+        scanCandidates = emptyList(),
+        suggestedIp = null,
+        pendingIp = null,
     )
 
     is AutoConnectState.ScanProgress -> copy(
@@ -160,11 +237,51 @@ internal fun QsUiState.withConnectState(state: AutoConnectState): QsUiState = wh
         scanTotal = state.total,
     )
 
+    is AutoConnectState.ScanCandidateFound -> copy(
+        status = QsStatus.Connecting,
+        step = QsStep.ScanningIps,
+        busy = true,
+        scanDone = state.done,
+        scanTotal = state.total,
+        scanCandidates = rankCandidates(
+            scanCandidates.filterNot { it.ip == state.candidate.ip } + state.candidate,
+        ),
+    )
+
+    is AutoConnectState.AwaitingConfigChoice -> copy(
+        status = QsStatus.Connecting,
+        step = QsStep.ChoosingConfig,
+        busy = true,
+        message = null,
+        configChoices = state.choices,
+        chosenConfigGuid = state.selected,
+        scanCandidates = emptyList(),
+        suggestedIp = null,
+        pendingIp = null,
+    )
+
+    is AutoConnectState.AwaitingIpChoice -> copy(
+        status = QsStatus.Connecting,
+        step = QsStep.ChoosingIp,
+        busy = true,
+        message = null,
+        scanCandidates = state.candidates,
+        suggestedIp = state.suggestedIp,
+        pendingIp = pendingIp ?: state.suggestedIp,
+    )
+
+    is AutoConnectState.ApplyingEdge -> copy(
+        status = QsStatus.Connecting,
+        step = QsStep.ApplyingEdge,
+        busy = true,
+        message = null,
+    )
+
     is AutoConnectState.ReusingSavedIp -> copy(
         status = QsStatus.Connecting,
         step = QsStep.SelectingIp,
         busy = true,
-        message = "Using saved IP " + state.ip,
+        message = text.usingSavedIp.format(state.ip),
     )
 
     is AutoConnectState.SelectingBestIp -> copy(
@@ -191,7 +308,7 @@ internal fun QsUiState.withConnectState(state: AutoConnectState): QsUiState = wh
         status = QsStatus.Connecting,
         step = QsStep.StartingVpn,
         busy = true,
-        message = "Reconnecting (attempt " + state.attempt + ")",
+        message = text.reconnecting.format(state.attempt),
     )
 
     is AutoConnectState.Failed -> copy(
@@ -205,7 +322,7 @@ internal fun QsUiState.withConnectState(state: AutoConnectState): QsUiState = wh
         status = if (coreRunning) QsStatus.Connected else QsStatus.Disconnected,
         step = QsStep.Idle,
         busy = false,
-        message = "Cancelled",
+        message = text.cancelled,
     )
 
     AutoConnectState.Disconnected -> copy(

@@ -187,6 +187,12 @@ object AppConfig {
     const val MSG_MEASURE_CONFIG_NOTIFY = 73
     const val MSG_MEASURE_CONFIG_FINISH = 74
 
+    /** UI -> core service: "report the current traffic counters". */
+    const val MSG_QUERY_TRAFFIC = 13
+
+    /** Core service -> UI: reply carrying a [com.v2ray.ang.dto.TrafficSnapshot]. */
+    const val MSG_TRAFFIC_RESULT = 131
+
     const val MSG_SUB_UPDATE_START = 8
     const val MSG_SUB_UPDATE_CANCEL = 81
 

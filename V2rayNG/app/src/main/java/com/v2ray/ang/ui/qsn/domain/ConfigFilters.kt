@@ -17,6 +17,8 @@ data class ConfigRow(
     val source: ConfigSource,
     val eligible: Boolean,
     val active: Boolean,
+    /** Subscription the profile belongs to; empty for a manual config. */
+    val subscriptionId: String = "",
 ) {
     /** Short transport description such as "vless · ws · tls · 443". */
     val transportLabel: String
@@ -40,6 +42,8 @@ data class ConfigRow(
             profile: ProfileItem,
             source: ConfigSource,
             active: Boolean,
+            /** Comes from the authoritative filter so badge and flow agree. */
+            eligible: Boolean,
         ): ConfigRow {
             val port = profile.serverPort?.toIntOrNull() ?: 0
             return ConfigRow(
@@ -51,13 +55,13 @@ data class ConfigRow(
                 port = port,
                 server = profile.server.orEmpty(),
                 source = source,
-                eligible = ManualConfigRules.isEligible(
-                    network = profile.network,
-                    security = profile.security,
-                    port = port,
-                    server = profile.server,
-                ),
+                eligible = eligible,
                 active = active,
+                subscriptionId = if (source == ConfigSource.Subscription) {
+                    profile.subscriptionId
+                } else {
+                    ""
+                },
             )
         }
     }

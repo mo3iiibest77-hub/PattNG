@@ -25,6 +25,7 @@ object QsPrefs {
     private const val KEY_LAST_SCAN_AT = "qsn_last_scan_at"
     private const val KEY_PINNED_GUID = "qsn_pinned_guid"
     private const val KEY_ACTIVE_SUB = "qsn_active_sub_guid"
+    private const val KEY_SUB_PANEL_OPEN = "qsn_sub_panel_open"
 
     // ---------- Selected Cloudflare IP ----------
 
@@ -100,6 +101,20 @@ object QsPrefs {
 
     fun setActiveSubscriptionGuid(guid: String?) {
         MmkvManager.encodeSettings(KEY_ACTIVE_SUB, guid.orEmpty())
+    }
+
+    // ---------- Connection screen: subscription panel ----------
+
+    /**
+     * Whether the subscription panel on the Connection screen is expanded.
+     *
+     * Persisted so a tab switch, a rotation or a cold start shows the same
+     * state the user left behind instead of reopening the form every time.
+     */
+    fun subPanelExpanded(): Boolean = MmkvManager.decodeSettingsBool(KEY_SUB_PANEL_OPEN, true)
+
+    fun setSubPanelExpanded(expanded: Boolean) {
+        MmkvManager.encodeSettings(KEY_SUB_PANEL_OPEN, expanded)
     }
 
     // ---------- Diagnostics ----------

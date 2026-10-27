@@ -925,6 +925,14 @@ object MmkvManager {
     }
 
     /**
+     * True when [key] was ever written.
+     *
+     * Needed to tell "the user chose false" from "the user never chose", which
+     * is what a safe default for a new install depends on.
+     */
+    fun containsSettings(key: String): Boolean = settingsStorage.containsKey(key)
+
+    /**
      * Decodes the settings boolean.
      *
      * @param key The settings key.

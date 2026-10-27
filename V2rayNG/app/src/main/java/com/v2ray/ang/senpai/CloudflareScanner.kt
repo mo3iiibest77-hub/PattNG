@@ -328,7 +328,11 @@ object CloudflareScanner {
             LogUtil.e(TAG, "applyBestIp: not found guid")
             return false
         }
-        profile.server = bestIp
+        // Quiet Storm NG: the edge is stored separately. Overwriting
+        // [ProfileItem.server] would destroy the origin address, which the
+        // Connection Details screen has to show and a subscription refresh
+        // cannot restore for a manual config.
+        profile.qsEdgeIp = bestIp
         // fingerPrint: only fill if blank. CoreOutboundBuilder.populateTlsSettings
         // already hardcodes fingerprint="unsafe" for all TLS configs at build
         // time (line 558), so the profile value is not load-bearing for the
@@ -416,7 +420,10 @@ object CloudflareScanner {
         return@withContext try {
             // Keep scanner validation identical to the configuration that
             // applyBestIp() writes to the real production profile.
-            val temp = base.copy(server = ip).apply {
+            // qsEdgeIp must be cleared: the temporary profile dials the
+            // candidate directly, and a stale edge from a previous run would
+            // silently be substituted for it in the outbound builder.
+            val temp = base.copy(server = ip, qsEdgeIp = null).apply {
                 fingerPrint = "unsafe"
                 if (finalMask.isNullOrBlank()) finalMask = PRODUCTION_FINALMASK
                 if (cipherSuites.isNullOrBlank()) cipherSuites = PRODUCTION_CIPHERSUITES

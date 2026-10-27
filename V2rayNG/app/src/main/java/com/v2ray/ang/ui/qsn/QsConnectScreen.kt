@@ -1,5 +1,6 @@
 package com.v2ray.ang.ui.qsn
 
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -16,10 +17,13 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -27,21 +31,26 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.v2ray.ang.R
+import com.v2ray.ang.ui.qsn.domain.MetricFormat
 
 /**
- * Minimal home screen: one status, one button, one subscription field, one honest progress list.
+ * The Connection tab.
  *
- * Everything rendered here comes from [QsUiState]; nothing is simulated. When a value is not
- * available (traffic counters are not exposed to the UI process by the core) it is not shown as
- * a fake number.
+ * Everything rendered here comes from [QsUiState]; nothing is simulated. The
+ * subscription form is collapsible and collapses itself only after the URL was
+ * really persisted, and the speed block renders a measurement or "N/A" — never
+ * a placeholder number.
  */
 @Composable
 fun QsConnectScreen(
@@ -49,10 +58,12 @@ fun QsConnectScreen(
     onUrlChange: (String) -> Unit,
     onSave: () -> Unit,
     onUpdate: () -> Unit,
+    onTogglePanel: () -> Unit,
     onConnect: () -> Unit,
     onDisconnect: () -> Unit,
     onCancel: () -> Unit,
     onDismissMessage: () -> Unit,
+    onToggleLanguage: () -> Unit,
 ) {
     Column(
         modifier = Modifier
@@ -61,6 +72,12 @@ fun QsConnectScreen(
             .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
+        QsScreenHeader(
+            title = stringResource(R.string.qs_tab_connection),
+            languageCode = state.languageCode,
+            onToggleLanguage = onToggleLanguage,
+        )
+
         QsStatusCard(state = state, onConnect = onConnect, onDisconnect = onDisconnect, onCancel = onCancel)
 
         QsSubscriptionCard(
@@ -68,6 +85,7 @@ fun QsConnectScreen(
             onUrlChange = onUrlChange,
             onSave = onSave,
             onUpdate = onUpdate,
+            onTogglePanel = onTogglePanel,
         )
 
         if (state.message != null) {
@@ -86,6 +104,35 @@ fun QsConnectScreen(
         if (state.status == QsStatus.Connected) {
             QsDetailsCard(state = state)
         }
+    }
+}
+
+/** Small header with the EN/FA control every Quiet Storm NG screen shares. */
+@Composable
+internal fun QsScreenHeader(
+    title: String,
+    languageCode: String,
+    onToggleLanguage: () -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.weight(1f),
+        )
+        AssistChip(
+            onClick = onToggleLanguage,
+            label = {
+                Text(
+                    text = if (languageCode == "fa") "FA / EN" else "EN / FA",
+                    style = MaterialTheme.typography.labelMedium,
+                )
+            },
+        )
     }
 }
 
@@ -144,6 +191,10 @@ private fun QsStatusCard(
                     fontWeight = FontWeight.SemiBold,
                 )
             }
+            if (state.status == QsStatus.Connected) {
+                Spacer(Modifier.height(10.dp))
+                QsTrafficBlock(state = state)
+            }
             Spacer(Modifier.height(18.dp))
             when {
                 state.connecting -> OutlinedButton(
@@ -182,13 +233,83 @@ private fun QsStatusCard(
     }
 }
 
+/**
+ * Receive/Send rates reported by the core.
+ *
+ * Three distinct states are kept apart on purpose: a real rate (including a
+ * real zero), "measuring" before the first sample, and "N/A" when the core
+ * reports no statistics at all.
+ */
+@Composable
+private fun QsTrafficBlock(state: QsUiState) {
+    val traffic = state.traffic
+    val receive = when {
+        traffic == null -> stringResource(R.string.qs_speed_measuring)
+        !traffic.available -> MetricFormat.NOT_AVAILABLE
+        else -> MetricFormat.rate(traffic.downBytesPerSecond)
+    }
+    val send = when {
+        traffic == null -> stringResource(R.string.qs_speed_measuring)
+        !traffic.available -> MetricFormat.NOT_AVAILABLE
+        else -> MetricFormat.rate(traffic.upBytesPerSecond)
+    }
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceEvenly,
+    ) {
+        TrafficValue(stringResource(R.string.qs_speed_receive), receive)
+        TrafficValue(stringResource(R.string.qs_speed_send), send)
+    }
+    if (traffic != null && traffic.available) {
+        Spacer(Modifier.height(6.dp))
+        Text(
+            text = stringResource(
+                R.string.qs_speed_total,
+                MetricFormat.bytes(traffic.totalDownBytes),
+                MetricFormat.bytes(traffic.totalUpBytes),
+            ),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+@Composable
+private fun TrafficValue(label: String, value: String) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(
+            text = value,
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onSurface,
+        )
+    }
+}
+
+/**
+ * The subscription form.
+ *
+ * Collapsed by default once a subscription is stored: the main screen stays
+ * readable and the URL field is one tap away. It only closes itself when the
+ * save actually succeeded, and a rejected URL reopens it with the error.
+ */
 @Composable
 private fun QsSubscriptionCard(
     state: QsUiState,
     onUrlChange: (String) -> Unit,
     onSave: () -> Unit,
     onUpdate: () -> Unit,
+    onTogglePanel: () -> Unit,
 ) {
+    val rotation by animateFloatAsState(
+        targetValue = if (state.subscriptionPanelExpanded) 180f else 0f,
+        label = "subscriptionPanelArrow",
+    )
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(16.dp),
@@ -197,11 +318,43 @@ private fun QsSubscriptionCard(
         ),
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
-            Text(
-                text = stringResource(R.string.qs_subscription_title),
-                style = MaterialTheme.typography.titleSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = stringResource(R.string.qs_subscription_title),
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    if (!state.subscriptionPanelExpanded && state.hasSubscription) {
+                        Text(
+                            text = stringResource(R.string.qs_configs, state.configCount),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+                IconButton(onClick = onTogglePanel) {
+                    Icon(
+                        painter = painterResource(R.drawable.ic_expand_more_24dp),
+                        contentDescription = stringResource(
+                            if (state.subscriptionPanelExpanded) {
+                                R.string.qs_sub_panel_close
+                            } else {
+                                R.string.qs_sub_panel_open
+                            },
+                        ),
+                        modifier = Modifier
+                            .size(24.dp)
+                            .rotate(rotation),
+                    )
+                }
+            }
+
+            if (!state.subscriptionPanelExpanded) return@Column
+
             Spacer(Modifier.height(8.dp))
             OutlinedTextField(
                 value = state.subscriptionUrl,
@@ -400,17 +553,19 @@ private fun QsDetailsCard(state: QsUiState) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Spacer(Modifier.height(8.dp))
-            if (state.selectedRemarks != null) {
-                DetailRow(stringResource(R.string.qs_detail_config), state.selectedRemarks)
-            }
-            if (state.selectedServer != null) {
-                DetailRow(stringResource(R.string.qs_detail_server), state.selectedServer)
-            }
-            Spacer(Modifier.height(6.dp))
-            Text(
-                text = stringResource(R.string.qs_speed_unavailable),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            DetailRow(
+                label = stringResource(R.string.qs_detail_config),
+                value = state.selectedRemarks ?: stringResource(R.string.qs_detail_unknown),
+            )
+            // The origin server, never the Cloudflare edge: the edge has its
+            // own row below so the two can never be confused.
+            DetailRow(
+                label = stringResource(R.string.qs_detail_server),
+                value = state.selectedServer ?: stringResource(R.string.qs_detail_unknown),
+            )
+            DetailRow(
+                label = stringResource(R.string.qs_detail_edge),
+                value = state.selectedEdge ?: MetricFormat.NOT_AVAILABLE,
             )
         }
     }
@@ -423,7 +578,7 @@ private fun DetailRow(label: String, value: String) {
             text = label,
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.width(78.dp),
+            modifier = Modifier.width(92.dp),
         )
         Text(
             text = value,
@@ -436,14 +591,16 @@ private fun DetailRow(label: String, value: String) {
 }
 
 @Composable
-private fun stepLabel(step: QsStep): String = when (step) {
+internal fun stepLabel(step: QsStep): String = when (step) {
     QsStep.Preparing -> stringResource(R.string.qs_step_preparing)
     QsStep.FetchingSubscription -> stringResource(R.string.qs_step_fetching)
     QsStep.CheckingConfigs -> stringResource(R.string.qs_step_checking)
+    QsStep.ChoosingConfig -> stringResource(R.string.qs_step_choosing_config)
     QsStep.ScanningIps -> stringResource(R.string.qs_step_scanning)
+    QsStep.ChoosingIp -> stringResource(R.string.qs_step_choosing_ip)
     QsStep.SelectingIp -> stringResource(R.string.qs_step_selecting)
+    QsStep.ApplyingEdge -> stringResource(R.string.qs_step_applying)
     QsStep.StartingVpn -> stringResource(R.string.qs_step_starting)
     QsStep.Connected -> stringResource(R.string.qs_step_connected)
     QsStep.Idle -> stringResource(R.string.qs_step_preparing)
 }
-

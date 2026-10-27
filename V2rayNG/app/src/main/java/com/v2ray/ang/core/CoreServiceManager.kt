@@ -16,6 +16,7 @@ import com.v2ray.ang.contracts.IDialerService
 import com.v2ray.ang.contracts.ServiceControl
 import com.v2ray.ang.dto.ConnectionTestResult
 import com.v2ray.ang.dto.OutboundTrafficStat
+import com.v2ray.ang.dto.TrafficSnapshot
 import com.v2ray.ang.dto.entities.ProfileItem
 import com.v2ray.ang.enums.BrowserDialerMode
 import com.v2ray.ang.extension.isNotNullEmpty
@@ -304,6 +305,75 @@ object CoreServiceManager {
     }
 
     /**
+     * Minimum spacing between two reads of the core counters.
+     *
+     * The native statistics call consumes the counters, so two consumers (the
+     * notification and the Connection screen) must not each read them: they
+     * would split every delta in half and report half the real speed. Both go
+     * through this single, throttled measurement instead.
+     */
+    private const val TRAFFIC_MIN_INTERVAL_MS = 900L
+
+    private var trafficWindowAt = 0L
+    private var trafficTotalUp = 0L
+    private var trafficTotalDown = 0L
+    private var trafficLast = TrafficSnapshot()
+
+    /**
+     * Returns the current traffic rates, measuring the core at most once per
+     * [TRAFFIC_MIN_INTERVAL_MS].
+     *
+     * The first call after a start only establishes the window, so it reports
+     * 0 B/s with real totals; the next call yields a real rate. Nothing here is
+     * estimated: when the core is not running, [TrafficSnapshot.available] is
+     * false and the UI shows "N/A" instead of a zero that would look measured.
+     */
+    @Synchronized
+    fun currentTrafficSnapshot(): TrafficSnapshot {
+        if (!isRunning()) {
+            trafficWindowAt = 0L
+            trafficTotalUp = 0L
+            trafficTotalDown = 0L
+            trafficLast = TrafficSnapshot()
+            return trafficLast
+        }
+        val now = System.currentTimeMillis()
+        if (trafficWindowAt > 0L && now - trafficWindowAt < TRAFFIC_MIN_INTERVAL_MS) {
+            return trafficLast
+        }
+        val stats = queryAllOutboundTrafficStats()
+        var proxyUp = 0L
+        var proxyDown = 0L
+        var directUp = 0L
+        var directDown = 0L
+        stats.forEach { stat ->
+            if (stat.tag == AppConfig.TAG_BLOCKED) return@forEach
+            val isDirect = stat.tag == AppConfig.TAG_DIRECT
+            when (stat.direction) {
+                AppConfig.UPLINK -> if (isDirect) directUp += stat.value else proxyUp += stat.value
+                AppConfig.DOWNLINK -> if (isDirect) directDown += stat.value else proxyDown += stat.value
+            }
+        }
+        val elapsedSeconds = if (trafficWindowAt > 0L) (now - trafficWindowAt) / 1000.0 else 0.0
+        trafficTotalUp += proxyUp + directUp
+        trafficTotalDown += proxyDown + directDown
+        val snapshot = TrafficSnapshot(
+            upBytesPerSecond = if (elapsedSeconds > 0.0) (proxyUp + directUp) / elapsedSeconds else 0.0,
+            downBytesPerSecond = if (elapsedSeconds > 0.0) (proxyDown + directDown) / elapsedSeconds else 0.0,
+            totalUpBytes = trafficTotalUp,
+            totalDownBytes = trafficTotalDown,
+            proxyUpBytesPerSecond = if (elapsedSeconds > 0.0) proxyUp / elapsedSeconds else 0.0,
+            proxyDownBytesPerSecond = if (elapsedSeconds > 0.0) proxyDown / elapsedSeconds else 0.0,
+            directUpBytesPerSecond = if (elapsedSeconds > 0.0) directUp / elapsedSeconds else 0.0,
+            directDownBytesPerSecond = if (elapsedSeconds > 0.0) directDown / elapsedSeconds else 0.0,
+            available = stats.isNotEmpty(),
+        )
+        trafficWindowAt = now
+        trafficLast = snapshot
+        return snapshot
+    }
+
+    /**
      * Measures the connection delay for the current V2Ray configuration.
      * Tests with primary URL first, then falls back to alternative URL if needed.
      * Also fetches remote IP information if the delay test was successful.
@@ -463,6 +533,16 @@ object CoreServiceManager {
 
                 AppConfig.MSG_UNREGISTER_CLIENT -> {
                     // nothing to do
+                }
+
+                AppConfig.MSG_QUERY_TRAFFIC -> {
+                    // Answer with a real measurement taken in this process,
+                    // which is the only one allowed to touch the native stats.
+                    MessageHelper.sendMsg2UI(
+                        serviceControl.getService(),
+                        AppConfig.MSG_TRAFFIC_RESULT,
+                        currentTrafficSnapshot(),
+                    )
                 }
 
                 AppConfig.MSG_STATE_START -> {

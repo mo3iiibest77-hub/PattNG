@@ -15,6 +15,17 @@ data class ProfileItem(
     var server: String? = null,
     var serverPort: String? = null,
 
+    /**
+     * Quiet Storm NG: Cloudflare edge address the core should actually dial.
+     *
+     * [server] always keeps the origin address from the subscription, so the
+     * Connection Details screen can show the real server and a subscription
+     * refresh restores the origin instead of losing it. When this is set, the
+     * outbound builder substitutes it for [server]; null means "dial the
+     * origin directly" and is the behaviour of every pre-existing profile.
+     */
+    var qsEdgeIp: String? = null,
+
     var password: String? = null,
     var method: String? = null,
     var flow: String? = null,
@@ -108,6 +119,10 @@ data class ProfileItem(
             subscriptionId = "",
             addedTime = 0L,
             remarks = "",
-            description = null
+            description = null,
+            // The selected Cloudflare edge is application state, not part of
+            // the configuration identity: the same subscription config fetched
+            // twice must still be recognised as a duplicate.
+            qsEdgeIp = null,
         )
 }

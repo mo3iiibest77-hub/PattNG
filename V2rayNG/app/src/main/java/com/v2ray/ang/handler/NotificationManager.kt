@@ -232,49 +232,33 @@ object NotificationManager {
             lastQueryTime = queryTime
             return lastZeroSpeed
         }
-        val sinceLastQueryInSeconds = sinceLastQueryIn / 1000.0
-
-        var proxyUplink = 0L
-        var proxyDownlink = 0L
-        var directUplink = 0L
-        var directDownlink = 0L
-
-        CoreServiceManager.queryAllOutboundTrafficStats().forEach { stat ->
-            when {
-                stat.tag == AppConfig.TAG_DIRECT -> {
-                    when (stat.direction) {
-                        AppConfig.UPLINK -> directUplink += stat.value
-                        AppConfig.DOWNLINK -> directDownlink += stat.value
-                    }
-                }
-
-                // Accumulate stats for all proxy outbounds (including custom subscription tags)
-                stat.tag != AppConfig.TAG_BLOCKED -> {
-                    when (stat.direction) {
-                        AppConfig.UPLINK -> proxyUplink += stat.value
-                        AppConfig.DOWNLINK -> proxyDownlink += stat.value
-                    }
-                }
-            }
+        // The rates come from the single throttled measurement in
+        // CoreServiceManager. Reading the native counters here as well would
+        // split every delta between this loop and the Connection screen, and
+        // both would then display half of the real speed.
+        val snapshot = CoreServiceManager.currentTrafficSnapshot()
+        if (!snapshot.available) {
+            lastQueryTime = queryTime
+            return lastZeroSpeed
         }
 
-        val proxyTotal = proxyUplink + proxyDownlink
-        val directTotal = directUplink + directDownlink
-        val zeroSpeed = proxyTotal + directTotal == 0L
+        val proxyTotal = snapshot.proxyUpBytesPerSecond + snapshot.proxyDownBytesPerSecond
+        val directTotal = snapshot.directUpBytesPerSecond + snapshot.directDownBytesPerSecond
+        val zeroSpeed = proxyTotal + directTotal <= 0.0
         if (!zeroSpeed || !lastZeroSpeed) {
             val text = StringBuilder()
             appendSpeedString(
                 text, AppConfig.TAG_PROXY,
-                proxyUplink / sinceLastQueryInSeconds,
-                proxyDownlink / sinceLastQueryInSeconds
+                snapshot.proxyUpBytesPerSecond,
+                snapshot.proxyDownBytesPerSecond
             )
 
             appendSpeedString(
                 text, AppConfig.TAG_DIRECT,
-                directUplink / sinceLastQueryInSeconds,
-                directDownlink / sinceLastQueryInSeconds
+                snapshot.directUpBytesPerSecond,
+                snapshot.directDownBytesPerSecond
             )
-            updateNotification(text.toString(), proxyTotal, directTotal)
+            updateNotification(text.toString(), proxyTotal.toLong(), directTotal.toLong())
         }
         lastQueryTime = queryTime
         return zeroSpeed

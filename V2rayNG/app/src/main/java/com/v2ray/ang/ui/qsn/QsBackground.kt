@@ -18,11 +18,15 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.currentStateAsState
 import com.v2ray.ang.ui.compose.QsGreenFill
 import kotlinx.coroutines.delay
+import kotlin.math.PI
+import kotlin.math.cos
+import kotlin.math.sin
 
 /** How often the drift is advanced. Five frames a second is invisible for a 20 s motion. */
 private const val DRIFT_STEP_MS = 200L
@@ -32,6 +36,20 @@ private const val DRIFT_STEPS = 100
 
 /** Resting phase used when the motion is disabled. */
 private const val RESTING_PHASE = 0.35f
+
+/** Nodes of the network field. Fixed and small: the cost stays constant. */
+private const val NODE_COUNT = 16
+
+/** Two nodes are linked when they are closer than this share of the short side. */
+private const val LINK_DISTANCE_RATIO = 0.34f
+
+/**
+ * Slightly translucent card surface, so the network field behind the lists
+ * stays visible without hurting contrast.
+ */
+@Composable
+fun qsCardSurface(alpha: Float = 0.90f): Color =
+    MaterialTheme.colorScheme.surface.copy(alpha = alpha)
 
 /**
  * The background of the Quiet Storm NG screens.
@@ -56,7 +74,10 @@ fun QsBackground(
     val context = LocalContext.current
     val reduceMotion = remember(context) { animatorDisabled(context) }
     val lifecycleState by LocalLifecycleOwner.current.lifecycle.currentStateAsState()
-    val animate = !reduceMotion && lifecycleState.isAtLeast(Lifecycle.State.RESUMED)
+    val animate = shouldAnimateBackground(
+        resumed = lifecycleState.isAtLeast(Lifecycle.State.RESUMED),
+        reduceMotion = reduceMotion,
+    )
 
     var phase by remember { mutableStateOf(RESTING_PHASE) }
     LaunchedEffect(animate) {
@@ -78,6 +99,8 @@ fun QsBackground(
     // dark one, so the same code produces the right tint in both.
     val warmGlow = MaterialTheme.colorScheme.secondary
     val coolGlow = QsGreenFill
+    // Hoisted: MaterialTheme must not be read inside the draw lambda.
+    val nodeColor = MaterialTheme.colorScheme.primary
 
     Box(modifier = modifier.fillMaxSize()) {
         Canvas(modifier = Modifier.fillMaxSize()) {
@@ -123,9 +146,65 @@ fun QsBackground(
                 radius = coolRadius,
                 center = coolCenter,
             )
+
+            // Network field: a few nodes drifting on a slow orbit, linked when
+            // they come close. Deterministic (a function of index and phase),
+            // so it needs no per-frame allocation of state and never flickers.
+            val nodes = ArrayList<Offset>(NODE_COUNT)
+            for (i in 0 until NODE_COUNT) {
+                val baseX = ((i * 37) % 100) / 100f
+                val baseY = ((i * 61) % 100) / 100f
+                val driftX = sin(phase * 2f * PI.toFloat() + i * 0.7f) * 0.035f
+                val driftY = cos(phase * 2f * PI.toFloat() + i * 1.1f) * 0.035f
+                nodes.add(
+                    Offset(
+                        x = width * wrap01(baseX + driftX),
+                        y = height * wrap01(baseY + driftY),
+                    )
+                )
+            }
+            val linkDistance = minOf(width, height) * LINK_DISTANCE_RATIO
+            for (i in 0 until nodes.size) {
+                for (j in i + 1 until nodes.size) {
+                    val a = nodes[i]
+                    val b = nodes[j]
+                    val distance = (a - b).getDistance()
+                    if (distance < linkDistance) {
+                        val closeness = 1f - (distance / linkDistance)
+                        drawLine(
+                            color = nodeColor.copy(alpha = 0.05f + 0.07f * closeness),
+                            start = a,
+                            end = b,
+                            strokeWidth = 1f,
+                        )
+                    }
+                }
+            }
+            nodes.forEach { node ->
+                drawCircle(
+                    color = nodeColor.copy(alpha = 0.16f),
+                    radius = 2.5.dp.toPx(),
+                    center = node,
+                )
+            }
         }
         content()
     }
+}
+
+/**
+ * The single rule that decides whether the background may move.
+ *
+ * It stops when the screen is not resumed (backgrounded, covered by a dialog
+ * that pauses the activity) and when the system asks for reduced motion.
+ */
+internal fun shouldAnimateBackground(resumed: Boolean, reduceMotion: Boolean): Boolean =
+    resumed && !reduceMotion
+
+/** Keeps a drifting coordinate inside 0..1 without letting it jump. */
+private fun wrap01(value: Float): Float {
+    val wrapped = value % 1f
+    return if (wrapped < 0f) wrapped + 1f else wrapped
 }
 
 /** True when the user (or the system) disabled animations. */

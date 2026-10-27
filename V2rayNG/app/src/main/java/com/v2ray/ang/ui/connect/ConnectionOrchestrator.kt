@@ -18,8 +18,11 @@ import com.v2ray.ang.senpai.CloudflareScanner
 import com.v2ray.ang.senpai.ScanCallback
 import com.v2ray.ang.ui.qsn.data.IpHealthChecker
 import com.v2ray.ang.ui.qsn.data.QsPrefs
+import com.v2ray.ang.ui.qsn.domain.ConfigChoice
+import com.v2ray.ang.ui.qsn.domain.EdgeApplication
 import com.v2ray.ang.ui.qsn.domain.IpFingerprint
 import com.v2ray.ang.ui.qsn.domain.IpSelection
+import com.v2ray.ang.ui.qsn.domain.ScanCandidate
 import com.v2ray.ang.ui.qsn.domain.ScanRangePlanner
 import com.v2ray.ang.ui.qsn.domain.SubscriptionRules
 import com.v2ray.ang.util.LogUtil
@@ -57,6 +60,36 @@ sealed interface AutoConnectState {
 
     /** Scanner progress: [done] of [total] candidates probed so far. */
     data class ScanProgress(val done: Int, val total: Int) : AutoConnectState
+
+    /**
+     * The eligible configurations of the active subscription, waiting for the
+     * user to choose which one to scan with. [selected] is the pre-selection
+     * (the first eligible config); the flow does not continue until the user
+     * confirms, so no scan runs against a config the user did not pick.
+     */
+    data class AwaitingConfigChoice(
+        val choices: List<ConfigChoice>,
+        val selected: String?,
+    ) : AutoConnectState
+
+    /** One candidate finished probing and is reported while the scan runs. */
+    data class ScanCandidateFound(
+        val candidate: ScanCandidate,
+        val done: Int,
+        val total: Int,
+    ) : AutoConnectState
+
+    /**
+     * The scan finished. [suggestedIp] is the ranker's winner, but the choice
+     * belongs to the user: nothing is written until they confirm.
+     */
+    data class AwaitingIpChoice(
+        val candidates: List<ScanCandidate>,
+        val suggestedIp: String?,
+    ) : AutoConnectState
+
+    /** The confirmed edge is being written to every eligible config of the scope. */
+    data class ApplyingEdge(val ip: String, val configCount: Int) : AutoConnectState
 
     /** A previously validated edge is being reused, so no scan runs. */
     data class ReusingSavedIp(val ip: String) : AutoConnectState
@@ -155,6 +188,14 @@ class ConnectionOrchestrator {
     @Volatile
     private var runningReceiver: BroadcastReceiver? = null
 
+    /** Pending "which config" question, completed by [chooseConfig] or [cancel]. */
+    @Volatile
+    private var configChoice: CompletableDeferred<String?>? = null
+
+    /** Pending "which IP" question, completed by [chooseIp] or [cancel]. */
+    @Volatile
+    private var ipChoice: CompletableDeferred<String?>? = null
+
     /**
      * Runs the full auto-connect flow.
      *
@@ -221,9 +262,25 @@ class ConnectionOrchestrator {
         cancelled = false
         return try {
             withContext(Dispatchers.IO) {
-                val fingerprint = fingerprintFor(guid, profile)
                 onState(AutoConnectState.ScanningCloudflareIps)
-                scanForBestIp(context, guid, onState, fingerprint)
+                val winner = scanForBestIp(context, guid, onState) { } ?: return@withContext null
+                // Persist the winner so the next connect can reuse it; the
+                // cache TTL and health check still apply.
+                QsPrefs.saveSelection(
+                    IpSelection(
+                        fingerprint = fingerprintFor(guid, profile),
+                        ip = winner.ip,
+                        score = winner.score,
+                        latencyMs = winner.latencyMs.takeIf { it >= 0L },
+                        jitterMs = winner.jitterMs,
+                        downloadKBps = if (winner.hasTraffic) winner.downloadKBps else null,
+                        uploadKBps = if (winner.hasTraffic) winner.uploadKBps else null,
+                        confidence = winner.confidence,
+                        validatedAt = System.currentTimeMillis(),
+                    )
+                )
+                QsPrefs.markScanned(System.currentTimeMillis())
+                winner
             }
         } catch (e: CancellationException) {
             cancel()
@@ -246,6 +303,53 @@ class ConnectionOrchestrator {
         CloudflareScanner.cancel()
         scanDeferred?.complete(null)
         coreSignals?.close()
+        // A flow parked on a user question must not keep running after Cancel.
+        configChoice?.complete(null)
+        ipChoice?.complete(null)
+    }
+
+    /**
+     * Answers the pending "which configuration" question.
+     *
+     * Ignored when nothing is waiting, so a stale UI click cannot resume a
+     * flow that already moved on.
+     */
+    fun chooseConfig(guid: String) {
+        configChoice?.complete(guid)
+    }
+
+    /**
+     * Answers the pending "which IP" question.
+     *
+     * The value is validated against the measured candidates inside the flow;
+     * an IP that was never measured is rejected there.
+     */
+    fun chooseIp(ip: String) {
+        ipChoice?.complete(ip)
+    }
+
+    /** True while the flow waits for the user; used by the UI to keep Cancel. */
+    val awaitingUserInput: Boolean
+        get() = configChoice != null || ipChoice != null
+
+    private suspend fun awaitConfigChoice(): String? {
+        val deferred = CompletableDeferred<String?>()
+        configChoice = deferred
+        return try {
+            deferred.await()
+        } finally {
+            configChoice = null
+        }
+    }
+
+    private suspend fun awaitIpChoice(): String? {
+        val deferred = CompletableDeferred<String?>()
+        ipChoice = deferred
+        return try {
+            deferred.await()
+        } finally {
+            ipChoice = null
+        }
     }
 
     // -- Flow -------------------------------------------------------
@@ -329,9 +433,20 @@ class ConnectionOrchestrator {
             )
         }
 
-        // 6. Use the first eligible config; the GUID comes from the same pair.
-        val (selectedGuid, selected) = eligible.first()
-        return connectSelected(context, selectedGuid, selected, onState)
+        // 6. The user chooses which eligible config to scan with. The list is
+        //    built from this subscription only, so a config from another
+        //    subscription can never appear here.
+        val subscriptionName = targetSub.subscription.remarks
+            .ifBlank { targetSub.subscription.url }
+        val choices = eligible.map { (guid, profile) ->
+            ConfigChoice.from(guid, profile, subscriptionName)
+        }
+        onState(AutoConnectState.AwaitingConfigChoice(choices, choices.firstOrNull()?.guid))
+        val pickedGuid = awaitConfigChoice()
+        if (cancelled || pickedGuid == null) return cancelResult(onState)
+        val picked = eligible.firstOrNull { it.first == pickedGuid }
+            ?: return AutoConnectResult.Failure("Selected configuration is gone")
+        return connectSelected(context, picked.first, picked.second, onState)
     }
 
     /**
@@ -364,11 +479,14 @@ class ConnectionOrchestrator {
             return AutoConnectResult.Failure("Cloudflare scan found no working IP")
         }
 
-        // Apply it (only server + blank fields change).
+        // 7. Write the confirmed edge to every eligible config of the scope:
+        //    the whole subscription, or just this manual config.
         onState(AutoConnectState.SelectingBestIp(bestIp))
-        if (!CloudflareScanner.applyBestIp(selectedGuid, bestIp)) {
+        val applied = applyEdgeToScope(selectedGuid, selected, bestIp)
+        if (applied <= 0) {
             return AutoConnectResult.Failure("Failed to apply best IP to profile")
         }
+        onState(AutoConnectState.ApplyingEdge(bestIp, applied))
 
         // Make the core run this exact config.
         // A missing VPN consent makes CoreVpnService.setupVpnService() return
@@ -431,7 +549,7 @@ class ConnectionOrchestrator {
         context: Context,
         guid: String,
         onState: (AutoConnectState) -> Unit,
-        fingerprint: String,
+        onCandidate: (ScanCandidate) -> Unit,
     ): CandidateResult? {
         val deferred = CompletableDeferred<CandidateResult?>()
         scanDeferred = deferred
@@ -444,6 +562,11 @@ class ConnectionOrchestrator {
             candidates = ScanRangePlanner.plan(QsPrefs.loadRanges()),
             callback = object : ScanCallback {
                 override fun onProgress(result: CandidateResult, done: Int, total: Int) {
+                    // Live delivery: every measured candidate reaches the UI
+                    // while the scan runs, not only when it finishes.
+                    val candidate = ScanCandidate.from(result)
+                    onCandidate(candidate)
+                    onState(AutoConnectState.ScanCandidateFound(candidate, done, total))
                     onState(AutoConnectState.ScanProgress(done, total))
                 }
                 override fun onFinish(best: CandidateResult?) {
@@ -462,24 +585,9 @@ class ConnectionOrchestrator {
             CloudflareScanner.cancel()
         }
         scanDeferred = null
-        val winner = result ?: return null
-
-        // Persist the winner with enough metadata to skip the next scan.
-        QsPrefs.saveSelection(
-            IpSelection(
-                fingerprint = fingerprint,
-                ip = winner.ip,
-                score = winner.score,
-                latencyMs = winner.latencyMs.takeIf { it >= 0 },
-                jitterMs = winner.jitterMs,
-                downloadKBps = if (winner.hasTraffic) winner.downloadKBps else null,
-                uploadKBps = if (winner.hasTraffic) winner.uploadKBps else null,
-                confidence = winner.confidence,
-                validatedAt = System.currentTimeMillis(),
-            )
-        )
-        QsPrefs.markScanned(System.currentTimeMillis())
-        return winner
+        // Persisting the selection is the caller's job: the user may still
+        // choose a different candidate, and only the confirmed one is cached.
+        return result
     }
 
     /**
@@ -516,7 +624,91 @@ class ConnectionOrchestrator {
             QsPrefs.clearSelection()
         }
         onState(AutoConnectState.ScanningCloudflareIps)
-        return scanForBestIp(context, guid, onState, fingerprint)?.ip
+        val measured = ArrayList<ScanCandidate>()
+        val winner = scanForBestIp(context, guid, onState) { measured.add(it) } ?: return null
+        if (cancelled) return null
+
+        // A stable order: score first, then latency, then address. The UI shows
+        // this order and marks the first row as the suggestion.
+        val ranked = measured
+            .distinctBy { it.ip }
+            .sortedWith(
+                compareByDescending<ScanCandidate> { it.score }
+                    .thenBy { it.pingMs ?: Long.MAX_VALUE }
+                    .thenBy { it.ip },
+            )
+        onState(AutoConnectState.AwaitingIpChoice(ranked, winner.ip))
+        val chosenIp = awaitIpChoice()
+        if (cancelled || chosenIp == null) return null
+
+        // Only a candidate this scan actually measured and that answered may
+        // be applied. A fabricated or stale IP is rejected here.
+        val chosen = ranked.firstOrNull { it.ip == chosenIp && it.answered } ?: return null
+        QsPrefs.saveSelection(
+            IpSelection(
+                fingerprint = fingerprint,
+                ip = chosen.ip,
+                score = chosen.score,
+                latencyMs = chosen.pingMs,
+                jitterMs = chosen.jitterMs,
+                downloadKBps = chosen.downloadKBps,
+                uploadKBps = chosen.uploadKBps,
+                confidence = chosen.confidence,
+                validatedAt = System.currentTimeMillis(),
+            )
+        )
+        QsPrefs.markScanned(System.currentTimeMillis())
+        return chosen.ip
+    }
+
+    /**
+     * Writes [ip] to every eligible configuration the selected profile covers.
+     *
+     * A subscription config takes the whole subscription (so all three eligible
+     * configs switch to the same edge, as required); a manual config takes only
+     * itself. Nothing outside that scope is read, written or re-saved.
+     *
+     * @return how many configurations were persisted, 0 when the scope was empty.
+     */
+    private fun applyEdgeToScope(selectedGuid: String, selected: ProfileItem, ip: String): Int {
+        val subscriptionId = selected.subscriptionId
+        val manual = subscriptionId.isBlank() ||
+            subscriptionId == AppConfig.DEFAULT_SUBSCRIPTION_ID
+        val scope = if (manual) {
+            EdgeApplication.Scope.Single(selectedGuid)
+        } else {
+            EdgeApplication.Scope.Subscription(subscriptionId)
+        }
+        val guids = if (manual) {
+            listOf(selectedGuid)
+        } else {
+            MmkvManager.decodeServerList(subscriptionId).distinct()
+        }
+        val targets = guids.mapNotNull { guid ->
+            val profile = if (guid == selectedGuid) {
+                selected
+            } else {
+                MmkvManager.decodeServerConfig(guid)
+            }
+            profile?.let { EdgeApplication.Target(guid, it) }
+        }
+        val inScope = EdgeApplication.targets(scope, targets, AutoConfigFilter::isEligible)
+        if (inScope.isEmpty()) return 0
+        EdgeApplication.apply(inScope, ip)
+        var persisted = 0
+        inScope.forEach { target ->
+            // Fill blanks only; an existing cs / finalMask / fingerprint is
+            // user data and is never overwritten.
+            ensureSettings(target.guid, target.profile)
+            try {
+                MmkvManager.encodeServerConfig(target.guid, target.profile)
+                persisted++
+            } catch (e: Exception) {
+                LogUtil.e(TAG, "applyEdgeToScope: failed to persist " + target.guid)
+            }
+        }
+        LogUtil.i(TAG, "applyEdgeToScope: applied edge to " + persisted + " configs")
+        return persisted
     }
 
     /**

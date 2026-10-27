@@ -1069,3 +1069,181 @@ both and installing only the new APK removes the ambiguity.
   present in all three files, not by comparing certificate bytes independently;
 - x86 and x86_64 splits are still compiled by AGP (the ABI split configuration was not changed) but
   no artifact publishes them.
+
+## 15. Guided connection — manual config choice, manual IP choice, per-subscription edge application
+
+**Branch:** `feature/minimal-cloudflare-vpn` · **Status:** implemented, CI verification in §15.9.
+
+### 15.1 What existed before this pass
+
+The previous release could already scan Cloudflare ranges, rank candidates and reuse a saved edge.
+The problems were behavioural rather than cosmetic:
+
+| # | Observed behaviour | Why it was wrong |
+|---|---|---|
+| 1 | The subscription form on Connection was always open | A saved subscription kept the main screen busy, and there was no way to fold the form away |
+| 2 | `connect()` went from "Checking Configs" straight to the scan | The user never saw which config was used, and could not pick another |
+| 3 | The scan reported only `done/total` | Results arrived in one batch at the end; per-IP measurements were never shown |
+| 4 | The scanner's winner was applied without asking | The user had no say in the final IP |
+| 5 | `CloudflareScanner.applyBestIp` wrote `profile.server = ip` | The origin address was destroyed, so Connection Details showed the Cloudflare IP as "Server" |
+| 6 | Only the config chosen for the scan received the edge | A subscription with three eligible configs ended up with one rewritten and two stale |
+| 7 | `QsConnectScreen` printed `qs_speed_unavailable` | False: the core does expose counters through `CoreServiceManager.queryAllOutboundTrafficStats()` |
+| 8 | Configurations was a flat list | No per-subscription grouping, no separate place for manual imports |
+| 9 | No language control on the new UI | The Persian resources existed but were unreachable from Quiet Storm NG |
+| 10 | `PREF_SPEED_ENABLED` defaulted to `false` | A fresh install had no Receive/Send in the notification |
+
+### 15.2 Root causes, as proven from the code
+
+- **Origin loss (5):** `CloudflareScanner.applyBestIp` assigned `profile.server = bestIp`. Since
+  `CoreOutboundBuilder.getServerAddress()` reads `profile.server`, the same field was doing two
+  jobs: "the real server" (for display and for re-resolving) and "the address to dial".
+- **Single-config application (6):** `ConnectionOrchestrator.connectSelected()` called
+  `applyBestIp(selectedGuid, bestIp)` for one GUID only; there was no notion of a subscription
+  scope.
+- **"No traffic counters" (7):** the message was a hard-coded string added when the UI had no
+  subscription to the daemon's statistics. The counters exist and are consumed by
+  `NotificationManager.updateSpeedNotificationOnce()` in the service process.
+- **Counter ownership:** `queryAllOutboundTrafficStats()` returns the bytes accumulated since the
+  previous call. Two readers (notification and UI) would have halved each other's deltas, so a
+  shared, throttled measurement was required before the UI could show honest numbers.
+
+### 15.3 Files changed and why
+
+| File | Change | Reason |
+|---|---|---|
+| `dto/entities/ProfileItem.kt` | new `qsEdgeIp` field; cleared in `duplicateIdentity()` | Keep the origin in `server` and the chosen edge separately; the edge is app state, not config identity |
+| `core/CoreOutboundBuilder.kt` | `getServerAddress()` returns `qsEdgeIp` when set | One choke point: the core dials the edge while SNI/Host/Path/TLS keep the origin values |
+| `senpai/CloudflareScanner.kt` | `applyBestIp` writes `qsEdgeIp`; temp probe profiles clear it | Preserves the origin; stops a stale edge from overriding the candidate under test |
+| `ui/connect/AutoConfigFilter.kt` | added `Ineligibility` + `ineligibility()`; `isEligible` delegates | One rule engine, with a reason the UI can show |
+| `ui/connect/ConnectionOrchestrator.kt` | config-choice gate, live `ScanCandidateFound`, IP-choice gate, `ApplyingEdge`, `applyEdgeToScope()` | The flow now waits for the user and writes the edge to the whole scope |
+| `ui/qsn/domain/EdgeApplication.kt` (new) | pure scope selection + application | Testable without Android; guarantees "same subscription, eligible only" |
+| `ui/qsn/domain/ScanCandidate.kt` (new) | UI-facing measurement + `MetricFormat` | "N/A" instead of a fabricated number; KB/s and MB/s |
+| `ui/qsn/domain/ConfigChoice.kt` (new) | one row of the config picker | No credential leaves the profile |
+| `ui/qsn/domain/ConfigGrouping.kt` (new) | per-subscription grouping + manual bucket | Sections cannot mix configs from different subscriptions |
+| `ui/qsn/domain/FlowRules.kt` (new) | panel rule, notification default, language toggle, range counts | Small rules, unit tested against the code the app runs |
+| `ui/qsn/domain/ConfigFilters.kt` | `ConfigRow.subscriptionId`, eligibility injected | The badge now uses the same rule as the flow |
+| `ui/qsn/QsContract.kt` | new steps, new state fields, `QsFlowText`, `rankCandidates` | The UI renders real states only |
+| `ui/qsn/QsViewModel.kt` | panel toggle, choices, traffic polling, language, notification default, failure localisation | Wires the above to the daemon and to storage |
+| `ui/qsn/QsConnectScreen.kt` | collapsible panel, 10-step list, origin/edge rows, Receive/Send, EN/FA | §1, §2, §8, §9, §11 |
+| `ui/qsn/QsScanScreen.kt` (new) | config picker, live results, IP confirmation | §4, §5, §6 |
+| `ui/qsn/QsConfigScreen.kt` | grouped sections, "Added by You", curated chips, translucent cards | §10, §13 |
+| `ui/qsn/QsRangesScreen.kt` | range count, locked state while scanning | §14 |
+| `ui/qsn/QsBackground.kt` | node field + `shouldAnimateBackground` | §13 |
+| `ui/qsn/QuietStormActivity.kt` | scan-step routing, foreground signal, new callbacks | §2, §9 |
+| `ui/qsn/data/QsPrefs.kt` | persisted panel state | §1.8 |
+| `handler/MmkvManager.kt` | `containsSettings()` | Distinguish "never set" from "set to false" |
+| `AppConfig.kt` | `MSG_QUERY_TRAFFIC`, `MSG_TRAFFIC_RESULT` | UI -> service measurement request |
+| `dto/TrafficSnapshot.kt` (new) | serializable measurement | Cross-process delivery of real numbers |
+| `core/CoreServiceManager.kt` | throttled `currentTrafficSnapshot()` + handler | Single owner of the native counters |
+| `handler/NotificationManager.kt` | reads the shared snapshot | Notification and UI no longer steal each other's deltas |
+| `ui/main/MainServiceEvent.kt`, `ui/main/MainRepository.kt` | `TrafficUpdate` event | Existing broadcast path reused |
+| `res/values/strings.xml`, `res/values-fa/strings.xml` | 57 new `qs_*` keys in both files | No hard-coded UI text |
+
+### 15.4 Behaviour now
+
+1. **Collapsible subscription panel.** Header row with a rotating arrow; the form closes only after
+   `saveSubscription` really wrote the subscription, and stays open with its error when the URL is
+   rejected. The collapsed/expanded state is stored in `QsPrefs`, so a tab switch or a cold start
+   shows the same thing.
+2. **Guided flow.** `Preparing -> Updating Subscription -> Checking Configs -> choose config ->
+   Scanning -> live results -> choose IP -> Selecting Best IP -> apply -> real VPN start ->
+   Connected`. Each step is emitted by the orchestrator, not by the UI. `Connected` still requires
+   `MSG_STATE_START_SUCCESS`/`MSG_STATE_RUNNING`.
+3. **Eligibility.** `AutoConfigFilter` remains the only rule (WS or XHTTP, `tls`, real
+   `serverPort` in {443, 2053, 2083, 2087, 2096, 8443}, a server, a credential). The port is read
+   from `serverPort`, never from remarks. Other protocols keep their parsers and remain editable.
+4. **Config choice.** Only eligible configs of the active subscription are offered; a config from
+   another subscription cannot appear because the list is built from that subscription's GUIDs.
+5. **Live scan.** `ScanCandidateFound` is emitted per candidate; ping, jitter, download, upload,
+   stability, errors and timeouts are rendered, `N/A` when not measured. Jitter is suppressed below
+   two samples.
+6. **Manual IP choice.** The ranker's winner is marked "Suggested" but nothing is written until the
+   user confirms a candidate that answered. Cancel completes the pending question, so the flow
+   really stops.
+7. **Per-subscription application.** `applyEdgeToScope()` writes `qsEdgeIp` to every eligible
+   config of the selected subscription (or only the pinned manual config). Origin, name, protocol,
+   TLS, SNI, Host, Path, `cs` and `finalMask` are untouched; `CoreOutboundBuilder` substitutes the
+   edge only for the destination address.
+8. **Connection Details.** "Server" is `profile.server` (origin, or "Unknown"); the Cloudflare
+   address has its own "Edge IP" row.
+9. **Traffic.** The service answers `MSG_QUERY_TRAFFIC` with a `TrafficSnapshot` measured from the
+   native counters, throttled to ~1 Hz and shared with the notification. The UI polls once a second
+   only while connected **and** foregrounded, and clears the rates on disconnect. Zero is rendered
+   as `0 KB/s`; unavailable is `N/A`; the first sample shows "Measuring".
+10. **Configurations.** One collapsible section per subscription (only Cloudflare-ready rows, with
+    "N of M ready"), then "Added by You" for manual imports (all of them, eligible or not). The
+    confusing chips ("Other transport", "Not eligible", "Manual", "Subscription") are no longer
+    top-level categories.
+11. **Language.** An "EN / FA" chip on Connection, Configurations and IP Ranges calls the existing
+    `AppLocaleManager.setApplicationLanguage()`, which persists through MMKV + AppCompat and
+    recreates the activity. Layouts follow the RTL locale; no subscription or setting is touched.
+12. **Notification default.** `PREF_SPEED_ENABLED` is written to `true` only when the key does not
+    exist, so a fresh install gets Receive/Send and an existing choice is preserved.
+13. **Background.** The wash gained 16 drifting nodes with thin links, drawn at 5 fps, stopped when
+    the screen is not resumed and frozen when animations are disabled. Cards on Configurations are
+    90–92 % opaque so the field stays visible without hurting contrast.
+14. **Ranges.** "N ranges, M enabled" is shown; adding, toggling and deleting are disabled while a
+    scan runs, with an explicit notice.
+
+### 15.5 Tests added (all JVM, no Robolectric)
+
+| Test class | Covers requirement |
+|---|---|
+| `ui/qsn/domain/EdgeApplicationTest` | 9, 10, 11, 13 |
+| `ui/qsn/domain/ConfigGroupingTest` | 7, 8 |
+| `ui/connect/AutoConfigFilterEligibilityTest` | 4, 5, 6 |
+| `ui/qsn/ConnectFlowContractTest` | 1, 2, 3 |
+| `ui/qsn/domain/TrafficPresentationTest` | 14, 15, 16 |
+| `ui/qsn/domain/LanguageToggleTest` | 17 |
+| `ui/qsn/LocalizationCoverageTest` | 18 (EN/FA key parity) |
+| `ui/qsn/domain/RangesSummaryTest` | 19 |
+| `ui/qsn/BackgroundMotionTest` | 20 |
+| `ui/qsn/domain/ProfilePersistenceTest` | 12 |
+| `ui/connect/CloudflareScannerPreservationTest` (rewritten) | 11, 13 — now calls the real applier |
+
+Two requirements cannot be asserted in a JVM test and are verified by inspection instead:
+
+- **RTL layout (18):** the app relies on the Android locale + `values-fa`; the key-parity test proves
+  the strings exist, but the visual direction needs a device. Manual check: switch to FA, confirm
+  the tab bar order, arrow direction and text alignment.
+- **Panel collapse (1, 2):** the rule is unit tested (`SubscriptionPanelRules`), but the click path
+  needs a device. Manual check: save a valid URL (panel closes), save an invalid one (panel stays
+  open with the error).
+
+### 15.6 Not changed on purpose
+
+- `CfScanActivity` / `CfScanService` (the standalone ISP scan) still exist and still work; they now
+  write the edge through `applyBestIp`, so they also keep the origin address.
+- No protocol parser, no `fmt/` file and no Per-App Proxy code was touched.
+- The IP Ranges default CIDR list was left exactly as it was: no new range was invented.
+
+### 15.7 Known limitations
+
+- A subscription refresh rebuilds the profiles, which drops `qsEdgeIp`; the next connect re-applies
+  the cached edge (or rescans when the cache is stale). This is deliberate: a stale edge must not
+  survive a config change.
+- Editing a profile in the full editor rebuilds it from the form state, so the edge is cleared and
+  the origin is dialed again until the next scan.
+- The traffic window is established by the first query after a start, so the very first sample
+  shows "Measuring" and the rate appears one second later.
+- `Connection Details` shows the origin address as stored. If a config was imported with a domain
+  that only resolves through the CDN, that domain is what is shown; it is not resolved back to an
+  origin IP, because that information does not exist locally.
+
+### 15.8 Verification commands used
+
+```sh
+git status --porcelain           # clean before the change
+git diff --stat                  # reviewed the whole diff
+git diff --cached --name-only    # explicit staging only
+```
+
+### 15.9 CI result
+
+Recorded in the next commit after the workflow finished; see the table below.
+
+| Item | Result |
+|---|---|
+| Unit tests | NOT RUN at the time of writing |
+| Playstore release build | NOT RUN at the time of writing |
+| APK artifacts | NOT RUN at the time of writing |

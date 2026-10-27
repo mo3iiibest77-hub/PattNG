@@ -2,111 +2,85 @@ package com.v2ray.ang.ui.connect
 
 import com.v2ray.ang.dto.entities.ProfileItem
 import com.v2ray.ang.enums.EConfigType
+import com.v2ray.ang.ui.qsn.domain.EdgeApplication
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertTrue
+import org.junit.Assert.assertNull
 import org.junit.Test
 
 /**
- * Regression tests for TLS/transport preservation when applying a best IP.
+ * Regression tests for TLS/transport preservation when an edge is applied.
  *
- * [CloudflareScanner.applyBestIp] must only modify:
- *  - [ProfileItem.server] (the IP being applied)
- *  - [ProfileItem.fingerPrint] (only if blank)
- *  - [ProfileItem.finalMask] (only if blank)
- *  - [ProfileItem.cipherSuites] (only if blank)
+ * Since the edge moved into its own field, applying it may only write
+ * [ProfileItem.qsEdgeIp]. Everything else — the origin address, SNI, Host,
+ * Path, network, security, auth params, cipherSuites and finalMask — must come
+ * out of the operation unchanged.
  *
- * All other fields — SNI, Host, Path, network, security, auth params,
- * xhttpMode, xhttpExtra — must be preserved.
- *
- * These tests simulate the applyBestIp mutation logic without needing
- * MmkvManager (which requires Android/Robolectric). They verify the
- * *contract*: which fields may change and which must not.
+ * These tests call the real applier, not a copy of it.
  */
 class CloudflareScannerPreservationTest {
 
-    /**
-     * Simulates the mutation that applyBestIp performs on a profile.
-     * This mirrors the exact logic in CloudflareScanner.applyBestIp:
-     *   profile.server = bestIp
-     *   if (fingerPrint.isBlank()) fingerPrint = "unsafe"
-     *   if (finalMask.isBlank()) finalMask = PRODUCTION_FINALMASK
-     *   if (cipherSuites.isBlank()) cipherSuites = PRODUCTION_CIPHERSUITES
-     */
-    private fun simulateApplyBestIp(
-        original: ProfileItem,
-        bestIp: String,
-        productionFinalMask: String = "{\"tcp\":[]}",
-        productionCipherSuites: String = "TLS_AES_256_GCM_SHA384",
-    ): ProfileItem {
-        return original.copy(
-            server = bestIp,
-        ).apply {
-            if (fingerPrint.isNullOrBlank()) fingerPrint = "unsafe"
-            if (finalMask.isNullOrBlank()) finalMask = productionFinalMask
-            if (cipherSuites.isNullOrBlank()) cipherSuites = productionCipherSuites
-        }
+    private fun applyTo(original: ProfileItem, bestIp: String): ProfileItem {
+        val target = EdgeApplication.Target("guid", original)
+        EdgeApplication.apply(
+            targets = listOf(target),
+            ip = bestIp,
+        )
+        return target.profile
     }
 
     @Test
-    fun `server is replaced with best IP`() {
+    fun `the edge is written and the origin server is preserved`() {
         val original = fullProfile().apply { server = "old.example.com" }
-        val result = simulateApplyBestIp(original, "104.16.123.45")
-        assertEquals("104.16.123.45", result.server)
+        val result = applyTo(original, "104.16.123.45")
+        assertEquals("104.16.123.45", result.qsEdgeIp)
+        assertEquals("old.example.com", result.server)
     }
 
     @Test
     fun `SNI is preserved`() {
-        val original = fullProfile().apply { sni = "sni.example.com" }
-        val result = simulateApplyBestIp(original, "1.2.3.4")
+        val result = applyTo(fullProfile().apply { sni = "sni.example.com" }, "1.2.3.4")
         assertEquals("sni.example.com", result.sni)
     }
 
     @Test
     fun `HTTP Host is preserved`() {
-        val original = fullProfile().apply { host = "host.example.com" }
-        val result = simulateApplyBestIp(original, "1.2.3.4")
+        val result = applyTo(fullProfile().apply { host = "host.example.com" }, "1.2.3.4")
         assertEquals("host.example.com", result.host)
     }
 
     @Test
     fun `WebSocket Path is preserved`() {
-        val original = fullProfile().apply { path = "/custom-ws-path" }
-        val result = simulateApplyBestIp(original, "1.2.3.4")
+        val result = applyTo(fullProfile().apply { path = "/custom-ws-path" }, "1.2.3.4")
         assertEquals("/custom-ws-path", result.path)
     }
 
     @Test
     fun `XHTTP mode is preserved`() {
-        val original = fullProfile().apply { xhttpMode = "auto" }
-        val result = simulateApplyBestIp(original, "1.2.3.4")
+        val result = applyTo(fullProfile().apply { xhttpMode = "auto" }, "1.2.3.4")
         assertEquals("auto", result.xhttpMode)
     }
 
     @Test
     fun `XHTTP extra is preserved`() {
-        val original = fullProfile().apply { xhttpExtra = "{\"key\":\"value\"}" }
-        val result = simulateApplyBestIp(original, "1.2.3.4")
+        val result = applyTo(fullProfile().apply { xhttpExtra = "{\"key\":\"value\"}" }, "1.2.3.4")
         assertEquals("{\"key\":\"value\"}", result.xhttpExtra)
     }
 
     @Test
     fun `Network is preserved`() {
-        val original = fullProfile().apply { network = "xhttp" }
-        val result = simulateApplyBestIp(original, "1.2.3.4")
+        val result = applyTo(fullProfile().apply { network = "xhttp" }, "1.2.3.4")
         assertEquals("xhttp", result.network)
     }
 
     @Test
     fun `Security is preserved`() {
-        val original = fullProfile().apply { security = "tls" }
-        val result = simulateApplyBestIp(original, "1.2.3.4")
+        val result = applyTo(fullProfile().apply { security = "tls" }, "1.2.3.4")
         assertEquals("tls", result.security)
     }
 
     @Test
     fun `Server port is preserved`() {
-        val original = fullProfile().apply { serverPort = "2053" }
-        val result = simulateApplyBestIp(original, "1.2.3.4")
+        val result = applyTo(fullProfile().apply { serverPort = "2053" }, "1.2.3.4")
         assertEquals("2053", result.serverPort)
     }
 
@@ -118,7 +92,7 @@ class CloudflareScannerPreservationTest {
             method = "aes-256-gcm"
             publicKey = "wg-pubkey"
         }
-        val result = simulateApplyBestIp(original, "1.2.3.4")
+        val result = applyTo(original, "1.2.3.4")
         assertEquals("uuid-secret-123", result.password)
         assertEquals("user1", result.username)
         assertEquals("aes-256-gcm", result.method)
@@ -127,58 +101,51 @@ class CloudflareScannerPreservationTest {
 
     @Test
     fun `ALPN is preserved`() {
-        val original = fullProfile().apply { alpn = "h2,http/1.1" }
-        val result = simulateApplyBestIp(original, "1.2.3.4")
+        val result = applyTo(fullProfile().apply { alpn = "h2,http/1.1" }, "1.2.3.4")
         assertEquals("h2,http/1.1", result.alpn)
     }
 
     @Test
-    fun `existing fingerPrint is NOT overwritten`() {
-        val original = fullProfile().apply { fingerPrint = "chrome" }
-        val result = simulateApplyBestIp(original, "1.2.3.4")
+    fun `fingerPrint is not touched by the applier`() {
+        val result = applyTo(fullProfile().apply { fingerPrint = "chrome" }, "1.2.3.4")
         assertEquals("chrome", result.fingerPrint)
     }
 
     @Test
-    fun `blank fingerPrint is filled with unsafe`() {
-        val original = fullProfile().apply { fingerPrint = null }
-        val result = simulateApplyBestIp(original, "1.2.3.4")
-        assertEquals("unsafe", result.fingerPrint)
-    }
-
-    @Test
     fun `existing finalMask is NOT overwritten`() {
-        val original = fullProfile().apply { finalMask = "{\"custom\":true}" }
-        val result = simulateApplyBestIp(original, "1.2.3.4")
+        val result = applyTo(fullProfile().apply { finalMask = "{\"custom\":true}" }, "1.2.3.4")
         assertEquals("{\"custom\":true}", result.finalMask)
     }
 
     @Test
     fun `existing cipherSuites is NOT overwritten`() {
-        val original = fullProfile().apply { cipherSuites = "CUSTOM_CIPHERS" }
-        val result = simulateApplyBestIp(original, "1.2.3.4")
+        val result = applyTo(fullProfile().apply { cipherSuites = "CUSTOM_CIPHERS" }, "1.2.3.4")
         assertEquals("CUSTOM_CIPHERS", result.cipherSuites)
     }
 
     @Test
     fun `configType is preserved`() {
-        val original = fullProfile(EConfigType.VMESS)
-        val result = simulateApplyBestIp(original, "1.2.3.4")
+        val result = applyTo(fullProfile(EConfigType.VMESS), "1.2.3.4")
         assertEquals(EConfigType.VMESS, result.configType)
     }
 
     @Test
     fun `insecure flag is preserved`() {
-        val original = fullProfile().apply { insecure = true }
-        val result = simulateApplyBestIp(original, "1.2.3.4")
+        val result = applyTo(fullProfile().apply { insecure = true }, "1.2.3.4")
         assertEquals(true, result.insecure)
     }
 
     @Test
     fun `pinned CA256 is preserved`() {
-        val original = fullProfile().apply { pinnedCA256 = "sha256:abc123" }
-        val result = simulateApplyBestIp(original, "1.2.3.4")
+        val result = applyTo(fullProfile().apply { pinnedCA256 = "sha256:abc123" }, "1.2.3.4")
         assertEquals("sha256:abc123", result.pinnedCA256)
+    }
+
+    @Test
+    fun `an unusable address leaves the profile alone`() {
+        val result = applyTo(fullProfile(), "not-an-address")
+        assertNull(result.qsEdgeIp)
+        assertEquals("original.example.com", result.server)
     }
 
     /** Creates a VLESS profile with all transport/TLS fields populated. */
