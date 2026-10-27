@@ -1261,10 +1261,10 @@ class QsViewModel(
 
             // Progress text from the test worker; the list itself is the
             // progress indicator here, so nothing to show per row.
-            MainServiceEvent.MeasureConfigNotify -> Unit
+            is MainServiceEvent.MeasureConfigNotify -> Unit
 
             // The whole measurement pass is done (or was cancelled).
-            MainServiceEvent.MeasureConfigFinish -> {
+            is MainServiceEvent.MeasureConfigFinish -> {
                 _uiState.update { it.copy(testingDelay = false) }
                 refreshConfigRows()
             }
