@@ -2,43 +2,17 @@ package com.v2ray.ang.ui.qsn.domain
 
 import com.v2ray.ang.dto.entities.ProfileItem
 
-/** Why a configuration cannot be used for Cloudflare scanning. */
-enum class Eligibility {
-    Eligible,
-    NotTls,
-    UnsupportedTransport,
-    UnsupportedPort,
-    MissingServer,
-}
-
 /**
- * Eligibility rules for the automatic Cloudflare flow.
+ * Rules for configurations the user adds by hand.
  *
- * These mirror the rules the scanner already relies on (WS or XHTTP over TLS
- * on a Cloudflare HTTPS port). They are deliberately about transport, not about
- * the VPN protocol: a VLESS, VMess, Trojan or any other profile is eligible as
- * long as its transport matches.
- *
- * A profile that fails these rules is still a valid configuration: it is stored
- * and usable manually, it just cannot be auto-connected.
+ * Eligibility is **not** decided here: `AutoConfigFilter` is the single rule
+ * used by the automatic flow, the Configurations screen and the manual import,
+ * so the three can never disagree. A previous copy of the rule lived in this
+ * object with slightly different semantics (case-insensitive transport and
+ * security, no protocol or credential check); it was removed so that a
+ * configuration accepted by one path cannot be refused by another.
  */
 object ManualConfigRules {
-
-    /** Cloudflare edge ports that serve TLS. */
-    val HTTPS_PORTS = setOf(443, 2053, 2083, 2087, 2096, 8443)
-
-    fun eligibility(network: String?, security: String?, port: Int, server: String?): Eligibility {
-        if (server.isNullOrBlank()) return Eligibility.MissingServer
-        if (!security.equals("tls", ignoreCase = true)) return Eligibility.NotTls
-        val ws = network.equals("ws", ignoreCase = true)
-        val xhttp = network.equals("xhttp", ignoreCase = true)
-        if (!ws && !xhttp) return Eligibility.UnsupportedTransport
-        if (port !in HTTPS_PORTS) return Eligibility.UnsupportedPort
-        return Eligibility.Eligible
-    }
-
-    fun isEligible(network: String?, security: String?, port: Int, server: String?): Boolean =
-        eligibility(network, security, port, server) == Eligibility.Eligible
 
     /**
      * Canonical, credential-bearing identity used only for duplicate detection.

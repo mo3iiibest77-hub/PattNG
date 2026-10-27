@@ -67,6 +67,9 @@ fun QsConnectScreen(
     onDismissMessage: () -> Unit,
     onDismissCrash: () -> Unit,
     onToggleLanguage: () -> Unit,
+    onOpenAddConfig: () -> Unit,
+    onCloseAddConfig: () -> Unit,
+    onAddConfig: (String) -> Unit,
 ) {
     Column(
         modifier = Modifier
@@ -79,6 +82,7 @@ fun QsConnectScreen(
             title = stringResource(R.string.qs_tab_connection),
             languageCode = state.languageCode,
             onToggleLanguage = onToggleLanguage,
+            onAddConfig = onOpenAddConfig,
         )
 
         QsStatusCard(state = state, onConnect = onConnect, onDisconnect = onDisconnect, onCancel = onCancel)
@@ -115,14 +119,30 @@ fun QsConnectScreen(
             QsDetailsCard(state = state)
         }
     }
+
+    // Shared with the Configurations screen: one dialog, one import path.
+    if (state.importOpen) {
+        QsAddConfigDialog(
+            error = state.importError,
+            onDismiss = onCloseAddConfig,
+            onConfirm = onAddConfig,
+        )
+    }
 }
 
-/** Small header with the EN/FA control every Quiet Storm NG screen shares. */
+/**
+ * Small header with the EN/FA control every Quiet Storm NG screen shares.
+ *
+ * [onAddConfig] adds the visible "add configuration" action. It is null on
+ * screens that do not accept configurations, so the action can never appear
+ * where it would do nothing.
+ */
 @Composable
 internal fun QsScreenHeader(
     title: String,
     languageCode: String,
     onToggleLanguage: () -> Unit,
+    onAddConfig: (() -> Unit)? = null,
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -134,6 +154,14 @@ internal fun QsScreenHeader(
             fontWeight = FontWeight.SemiBold,
             modifier = Modifier.weight(1f),
         )
+        if (onAddConfig != null) {
+            IconButton(onClick = onAddConfig) {
+                Icon(
+                    painter = painterResource(R.drawable.ic_add_24dp),
+                    contentDescription = stringResource(R.string.qs_add_config),
+                )
+            }
+        }
         AssistChip(
             onClick = onToggleLanguage,
             label = {

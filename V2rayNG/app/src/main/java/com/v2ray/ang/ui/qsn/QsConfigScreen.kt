@@ -124,6 +124,7 @@ fun QsConfigScreen(
                 title = stringResource(R.string.qs_tab_configs),
                 languageCode = state.languageCode,
                 onToggleLanguage = onToggleLanguage,
+                onAddConfig = onOpenImport,
             )
         }
 
@@ -242,7 +243,7 @@ fun QsConfigScreen(
     }
 
     if (state.importOpen) {
-        ImportDialog(
+        QsAddConfigDialog(
             error = state.importError,
             onDismiss = onCloseImport,
             onConfirm = onImport,
@@ -841,55 +842,6 @@ private fun RenameSubscriptionDialog(
         confirmButton = {
             TextButton(onClick = { onConfirm(name) }, enabled = name.isNotBlank()) {
                 Text(stringResource(R.string.qs_save))
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text(stringResource(R.string.qs_cancel))
-            }
-        },
-    )
-}
-
-@Composable
-private fun ImportDialog(
-    error: String?,
-    onDismiss: () -> Unit,
-    onConfirm: (String) -> Unit,
-) {
-    var text by rememberSaveable { mutableStateOf("") }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(stringResource(R.string.qs_import_title)) },
-        text = {
-            Column {
-                Text(
-                    text = stringResource(R.string.qs_import_hint),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Spacer(Modifier.height(8.dp))
-                OutlinedTextField(
-                    value = text,
-                    onValueChange = { text = it },
-                    minLines = 3,
-                    maxLines = 6,
-                    isError = error != null,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                if (error != null) {
-                    Text(
-                        text = error,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error,
-                        modifier = Modifier.padding(top = 6.dp),
-                    )
-                }
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = { onConfirm(text) }, enabled = text.isNotBlank()) {
-                Text(stringResource(R.string.qs_import_action))
             }
         },
         dismissButton = {

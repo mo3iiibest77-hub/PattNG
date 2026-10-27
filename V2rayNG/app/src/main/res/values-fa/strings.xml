@@ -723,6 +723,17 @@
     <string name="qs_error_apply_failed">IP انتخاب‌شده روی کانفیگ‌ها نوشته نشد</string>
     <string name="qs_error_generic">تلاش برای اتصال ناموفق بود</string>
     <string name="qs_error_config_missing">این کانفیگ دیگر وجود ندارد</string>
+    <string name="qs_error_busy">یک تلاش اتصال دیگر در حال اجراست</string>
+    <string name="qs_add_config">افزودن کانفیگ</string>
+    <string name="qs_paste">چسباندن</string>
+    <string name="qs_import_rejected">%1$d کانفیگ رد شد: %2$s</string>
+    <string name="qs_import_partial_rejected">%1$d درون‌ریزی شد، %2$d به‌دلیل آماده‌نبودن برای کلادفلر رد شد</string>
+    <string name="qs_reject_protocol">این پروتکل برای اتصال کلادفلر قابل استفاده نیست</string>
+    <string name="qs_reject_transport">فقط WebSocket (ws) یا XHTTP روی TLS پذیرفته می‌شود</string>
+    <string name="qs_reject_tls">TLS الزامی است</string>
+    <string name="qs_reject_port">پورت باید یکی از 443، 2053، 2083، 2087، 2096 یا 8443 باشد</string>
+    <string name="qs_reject_server">نشانی سرور خالی است</string>
+    <string name="qs_reject_credential">یکی از اطلاعات ورود الزامی خالی است</string>
     <string name="qs_copy">کپی</string>
     <string name="qs_crash_title">نشست قبلی به‌طور غیرمنتظره پایان یافت</string>
     <string name="qs_crash_hint">این علت ثبت‌شده است. آن را کپی کنید و بفرستید تا اشکال برطرف شود.</string>

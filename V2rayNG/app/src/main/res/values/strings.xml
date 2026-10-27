@@ -723,6 +723,17 @@
     <string name="qs_error_apply_failed">The selected IP could not be written to the configurations</string>
     <string name="qs_error_generic">The connection attempt failed</string>
     <string name="qs_error_config_missing">This configuration no longer exists</string>
+    <string name="qs_error_busy">Another connection attempt is already running</string>
+    <string name="qs_add_config">Add configuration</string>
+    <string name="qs_paste">Paste</string>
+    <string name="qs_import_rejected">%1$d configuration rejected: %2$s</string>
+    <string name="qs_import_partial_rejected">%1$d imported, %2$d rejected as not Cloudflare-ready</string>
+    <string name="qs_reject_protocol">this protocol cannot be used for the Cloudflare connection</string>
+    <string name="qs_reject_transport">only WebSocket (ws) or XHTTP over TLS can be used</string>
+    <string name="qs_reject_tls">TLS is required</string>
+    <string name="qs_reject_port">the port must be one of 443, 2053, 2083, 2087, 2096 or 8443</string>
+    <string name="qs_reject_server">the server address is missing</string>
+    <string name="qs_reject_credential">a required credential is missing</string>
     <string name="qs_copy">Copy</string>
     <string name="qs_crash_title">The previous session ended unexpectedly</string>
     <string name="qs_crash_hint">This is the recorded cause. Copy it and send it back so the defect can be fixed.</string>

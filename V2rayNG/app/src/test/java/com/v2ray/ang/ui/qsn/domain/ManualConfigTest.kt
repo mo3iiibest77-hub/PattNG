@@ -2,95 +2,161 @@ package com.v2ray.ang.ui.qsn.domain
 
 import com.v2ray.ang.dto.entities.ProfileItem
 import com.v2ray.ang.enums.EConfigType
+import com.v2ray.ang.ui.connect.AutoConfigFilter
+import com.v2ray.ang.ui.connect.Ineligibility
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/** Unit tests for the eligibility rules and duplicate detection of manual imports. */
+/**
+ * Duplicate detection for manual imports, and the shared eligibility rule that
+ * the manual import, the Configurations screen and the automatic flow all use.
+ *
+ * The eligibility cases moved here from the removed `ManualConfigRules`
+ * copy of the rule: one rule, one set of tests, so a configuration accepted by
+ * one entry point can never be refused by another.
+ */
 class ManualConfigRulesTest {
 
-    private fun profile() = ProfileItem.create(EConfigType.VLESS).apply {
-        server = "edge.example.com"
-        serverPort = "443"
-        network = "ws"
-        security = "tls"
-        sni = "edge.example.com"
-        host = "edge.example.com"
-        path = "/ws"
-        password = "0f8fad5b-d9cb-469f-a165-70867728950e"
-    }
+    private fun profile(type: EConfigType = EConfigType.VLESS) =
+        ProfileItem.create(type).apply {
+            server = "edge.example.com"
+            serverPort = "443"
+            network = "ws"
+            security = "tls"
+            sni = "edge.example.com"
+            host = "edge.example.com"
+            path = "/ws"
+            password = "0f8fad5b-d9cb-469f-a165-70867728950e"
+        }
+
+    private fun ineligibilityOf(profile: ProfileItem) = AutoConfigFilter.ineligibility(profile)
+
+    // ── Shared eligibility: accepted combinations ──
 
     @Test
     fun `ws over tls on 443 is eligible`() {
-        assertEquals(Eligibility.Eligible, eligibility())
-        assertTrue(ManualConfigRules.isEligible("ws", "tls", 443, "edge.example.com"))
+        assertEquals(Ineligibility.Eligible, ineligibilityOf(profile()))
     }
 
     @Test
     fun `xhttp over tls on 2053 is eligible`() {
-        assertTrue(ManualConfigRules.isEligible("xhttp", "tls", 2053, "edge.example.com"))
+        val p = profile().apply {
+            network = "xhttp"
+            serverPort = "2053"
+        }
+        assertEquals(Ineligibility.Eligible, ineligibilityOf(p))
     }
 
     @Test
-    fun `every cloudflare https port is eligible`() {
-        ManualConfigRules.HTTPS_PORTS.forEach { port ->
-            assertTrue("port " + port, ManualConfigRules.isEligible("ws", "tls", port, "a.example.com"))
+    fun `every approved cloudflare https port is eligible`() {
+        AutoConfigFilter.HTTPS_PORTS.forEach { port ->
+            val p = profile().apply { serverPort = port }
+            assertEquals("port " + port, Ineligibility.Eligible, ineligibilityOf(p))
         }
     }
 
     @Test
+    fun `a vmess profile with the same transport is eligible too`() {
+        assertEquals(Ineligibility.Eligible, ineligibilityOf(profile(EConfigType.VMESS)))
+    }
+
+    // ── Shared eligibility: rejected combinations ──
+
+    @Test
     fun `tcp is an unsupported transport`() {
-        assertEquals(
-            Eligibility.UnsupportedTransport,
-            ManualConfigRules.eligibility("tcp", "tls", 443, "edge.example.com"),
-        )
+        val p = profile().apply { network = "tcp" }
+        assertEquals(Ineligibility.UnsupportedTransport, ineligibilityOf(p))
     }
 
     @Test
     fun `grpc is an unsupported transport`() {
+        val p = profile().apply { network = "grpc" }
+        assertEquals(Ineligibility.UnsupportedTransport, ineligibilityOf(p))
+    }
+
+    @Test
+    fun `httpupgrade is an unsupported transport`() {
+        val p = profile().apply { network = "httpupgrade" }
+        assertEquals(Ineligibility.UnsupportedTransport, ineligibilityOf(p))
+    }
+
+    @Test
+    fun `h3 is not an accepted transport because the core cannot build it`() {
+        // There is no HTTP/3 transport in NetworkType and no h3 branch in
+        // CoreOutboundBuilder, so advertising it would only produce a broken
+        // connection. It must be rejected, not silently rewritten.
+        val p = profile().apply { network = "h3" }
+        assertEquals(Ineligibility.UnsupportedTransport, ineligibilityOf(p))
+    }
+
+    @Test
+    fun `ws without tls is rejected`() {
+        assertEquals(Ineligibility.NotTls, ineligibilityOf(profile().apply { security = "none" }))
+        assertEquals(Ineligibility.NotTls, ineligibilityOf(profile().apply { security = null }))
+    }
+
+    @Test
+    fun `an http only port is rejected`() {
+        AutoConfigFilter.HTTP_ONLY_PORTS.forEach { port ->
+            val p = profile().apply { serverPort = port }
+            assertEquals("port " + port, Ineligibility.PortNotAllowed, ineligibilityOf(p))
+        }
+    }
+
+    @Test
+    fun `port 80 and a missing port are rejected`() {
+        assertEquals(Ineligibility.PortNotAllowed, ineligibilityOf(profile().apply { serverPort = "80" }))
+        assertEquals(Ineligibility.PortNotAllowed, ineligibilityOf(profile().apply { serverPort = null }))
+    }
+
+    @Test
+    fun `a missing server is rejected`() {
+        assertEquals(Ineligibility.MissingServer, ineligibilityOf(profile().apply { server = "" }))
+        assertEquals(Ineligibility.MissingServer, ineligibilityOf(profile().apply { server = null }))
+    }
+
+    @Test
+    fun `a missing credential is rejected`() {
         assertEquals(
-            Eligibility.UnsupportedTransport,
-            ManualConfigRules.eligibility("grpc", "tls", 443, "edge.example.com"),
+            Ineligibility.MissingCredential,
+            ineligibilityOf(profile().apply { password = null }),
         )
     }
 
     @Test
-    fun `ws without tls is not eligible`() {
+    fun `a composite protocol is rejected`() {
         assertEquals(
-            Eligibility.NotTls,
-            ManualConfigRules.eligibility("ws", null, 443, "edge.example.com"),
-        )
-        assertEquals(
-            Eligibility.NotTls,
-            ManualConfigRules.eligibility("ws", "none", 443, "edge.example.com"),
+            Ineligibility.UnsupportedProtocol,
+            ineligibilityOf(profile(EConfigType.POLICYGROUP)),
         )
     }
 
     @Test
-    fun `port 80 is an unsupported port`() {
+    fun `transport and security are compared exactly as the core reads them`() {
+        // NetworkType.fromString and the core's security comparison are
+        // case-sensitive; accepting "WS"/"TLS" here would build a plaintext
+        // TCP outbound and then fail at connect time.
         assertEquals(
-            Eligibility.UnsupportedPort,
-            ManualConfigRules.eligibility("ws", "tls", 80, "edge.example.com"),
+            Ineligibility.UnsupportedTransport,
+            ineligibilityOf(profile().apply { network = "WS" }),
+        )
+        assertEquals(
+            Ineligibility.NotTls,
+            ineligibilityOf(profile().apply { security = "TLS" }),
         )
     }
 
     @Test
-    fun `a missing server is reported before anything else`() {
-        assertEquals(
-            Eligibility.MissingServer,
-            ManualConfigRules.eligibility("tcp", null, 80, null),
-        )
-        assertEquals(
-            Eligibility.MissingServer,
-            ManualConfigRules.eligibility("ws", "tls", 443, "   "),
-        )
-    }
-
-    @Test
-    fun `the check is case insensitive`() {
-        assertTrue(ManualConfigRules.isEligible("WS", "TLS", 443, "edge.example.com"))
+    fun `the rule never rewrites the configuration it judges`() {
+        val p = profile().apply { network = "tcp" }
+        val before = ManualConfigRules.keyOf(p)
+        ineligibilityOf(p)
+        assertEquals(before, ManualConfigRules.keyOf(p))
+        assertEquals("tcp", p.network)
+        assertEquals("tls", p.security)
     }
 
     // ── Duplicate detection ──
@@ -140,11 +206,4 @@ class ManualConfigRulesTest {
         val credential = "0f8fad5b-d9cb-469f-a165-70867728950e"
         assertFalse(ManualConfigRules.keyOf(profile()).contains(credential))
     }
-
-    private fun eligibility(): Eligibility = ManualConfigRules.eligibility(
-        network = "ws",
-        security = "tls",
-        port = 443,
-        server = "edge.example.com",
-    )
 }

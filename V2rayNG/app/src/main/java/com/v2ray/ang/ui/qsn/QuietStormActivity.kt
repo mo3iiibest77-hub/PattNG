@@ -271,6 +271,9 @@ class QuietStormActivity : HelperBaseComponentActivity() {
                                 onDismissMessage = { qsViewModel.dismissMessage() },
                                 onDismissCrash = { qsViewModel.dismissCrash() },
                                 onToggleLanguage = { qsViewModel.toggleLanguage() },
+                                onOpenAddConfig = { qsViewModel.openImport() },
+                                onCloseAddConfig = { qsViewModel.closeImport() },
+                                onAddConfig = { qsViewModel.importManualConfig(it) },
                             )
                         }
 

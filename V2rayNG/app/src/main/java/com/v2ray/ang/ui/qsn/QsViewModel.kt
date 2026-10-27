@@ -18,6 +18,7 @@ import com.v2ray.ang.ui.connect.AutoConfigFilter
 import com.v2ray.ang.ui.connect.AutoConnectResult
 import com.v2ray.ang.ui.connect.AutoConnectState
 import com.v2ray.ang.ui.connect.ConnectionOrchestrator
+import com.v2ray.ang.ui.connect.Ineligibility
 import com.v2ray.ang.ui.main.MainDataSource
 import com.v2ray.ang.ui.main.MainServiceEvent
 import com.v2ray.ang.ui.qsn.data.QsCrashRecorder
@@ -72,6 +73,10 @@ private const val TRAFFIC_POLL_MS = 1_000L
 private data class ImportOutcome(
     val added: Int = 0,
     val duplicates: Int = 0,
+    /** Profiles stored by the parser but rejected by the shared eligibility rule. */
+    val rejected: Int = 0,
+    /** First rejection reason, so the user is told why and not only that. */
+    val rejectReason: Ineligibility? = null,
     val failed: Boolean = false,
 )
 
@@ -282,14 +287,30 @@ class QsViewModel(
                 )
             }
             val result = orchestrator.autoConnect(getApplication()) { orchestratorState ->
-                _uiState.update { current ->
-                    val mapped = current.withConnectState(orchestratorState, flowText())
-                    // The orchestrator reports machine reasons; the UI never
-                    // shows them raw, so a Persian session stays Persian.
-                    if (orchestratorState is AutoConnectState.Failed) {
-                        mapped.copy(message = localizeFailure(orchestratorState.reason))
-                    } else {
-                        mapped
+                // The state callback runs inside the orchestrator's own flow.
+                // A defect in the mapping must never be able to escape from
+                // here: it would be rethrown from the orchestrator's failure
+                // path and kill the process. It becomes a recoverable error
+                // instead, with the exception class only (no reason text).
+                try {
+                    _uiState.update { current ->
+                        val mapped = current.withConnectState(orchestratorState, flowText())
+                        // The orchestrator reports machine reasons; the UI never
+                        // shows them raw, so a Persian session stays Persian.
+                        if (orchestratorState is AutoConnectState.Failed) {
+                            mapped.copy(message = localizeFailure(orchestratorState.reason))
+                        } else {
+                            mapped
+                        }
+                    }
+                } catch (t: Throwable) {
+                    LogUtil.e(TAG, "connect state mapping failed: " + t.javaClass.name)
+                    _uiState.update {
+                        it.copy(
+                            status = QsStatus.Error,
+                            busy = false,
+                            message = getString(R.string.qs_error_generic),
+                        )
                     }
                 }
             }
@@ -340,8 +361,10 @@ class QsViewModel(
             _uiState.update { it.copy(message = getString(R.string.qs_error_config_missing)) }
             return false
         }
-        if (!AutoConfigFilter.isEligible(profile)) {
-            _uiState.update { it.copy(message = getString(R.string.qs_error_no_eligible)) }
+        val ineligibility = AutoConfigFilter.ineligibility(profile)
+        if (ineligibility != Ineligibility.Eligible) {
+            // The shared rule decides, and the user is told which rule failed.
+            _uiState.update { it.copy(message = rejectionText(ineligibility)) }
             return false
         }
         QsPrefs.setPinnedGuid(guid)
@@ -622,6 +645,18 @@ class QsViewModel(
                     it.copy(importError = getString(R.string.qs_error_import_invalid))
                 }
 
+                // Nothing was accepted: say why, and keep the dialog open so
+                // the text can be corrected instead of retyped.
+                outcome.added <= 0 && outcome.rejected > 0 -> _uiState.update {
+                    it.copy(
+                        importError = getString(
+                            R.string.qs_import_rejected,
+                            outcome.rejected,
+                            rejectionText(outcome.rejectReason),
+                        ),
+                    )
+                }
+
                 outcome.added <= 0 && outcome.duplicates > 0 -> _uiState.update {
                     it.copy(
                         importOpen = false,
@@ -638,10 +673,20 @@ class QsViewModel(
                     it.copy(
                         importOpen = false,
                         importError = null,
-                        message = if (outcome.duplicates > 0) {
-                            getString(R.string.qs_import_partial, outcome.added, outcome.duplicates)
-                        } else {
-                            getString(R.string.qs_import_done, outcome.added)
+                        message = when {
+                            outcome.rejected > 0 -> getString(
+                                R.string.qs_import_partial_rejected,
+                                outcome.added,
+                                outcome.rejected,
+                            )
+
+                            outcome.duplicates > 0 -> getString(
+                                R.string.qs_import_partial,
+                                outcome.added,
+                                outcome.duplicates,
+                            )
+
+                            else -> getString(R.string.qs_import_done, outcome.added)
                         },
                     )
                 }
@@ -931,8 +976,25 @@ class QsViewModel(
         val added = MmkvManager.decodeAllServerList().filterNot { before.contains(it) }
         var duplicates = 0
         var kept = 0
+        var rejected = 0
+        var rejectReason: Ineligibility? = null
         added.forEach { guid ->
             val profile = MmkvManager.decodeServerConfig(guid) ?: return@forEach
+            // The same rule the connect flow applies, so a configuration can
+            // never be stored as "connectable" here and refused there. The
+            // parser already ran; this only decides whether the result may
+            // join the Cloudflare flow.
+            val ineligibility = AutoConfigFilter.ineligibility(profile)
+            if (ineligibility != Ineligibility.Eligible) {
+                rejected++
+                if (rejectReason == null) rejectReason = ineligibility
+                try {
+                    MmkvManager.removeServer(guid)
+                } catch (e: Exception) {
+                    LogUtil.e(TAG, "ineligible cleanup failed: " + e.javaClass.simpleName)
+                }
+                return@forEach
+            }
             val key = ManualConfigRules.keyOf(profile)
             if (beforeKeys.contains(key)) {
                 duplicates++
@@ -945,7 +1007,12 @@ class QsViewModel(
                 kept++
             }
         }
-        return ImportOutcome(added = kept, duplicates = duplicates)
+        return ImportOutcome(
+            added = kept,
+            duplicates = duplicates,
+            rejected = rejected,
+            rejectReason = rejectReason,
+        )
     }
 
     /**
@@ -1163,33 +1230,67 @@ class QsViewModel(
     }
 
     /**
-     * Maps an orchestrator failure reason to a translated message.
+     * Localized explanation for a rejected configuration.
      *
-     * The reasons are a closed set produced by [ConnectionOrchestrator]; an
-     * unknown one falls back to a generic sentence instead of leaking English
-     * into a Persian screen.
+     * The wording names the rule that failed, never the configuration content,
+     * so no server, credential or token can leak through an error message.
      */
-    private fun localizeFailure(reason: String): String = when {
-        reason.contains("permission", ignoreCase = true) -> getString(R.string.qs_error_vpn_denied)
-        reason.contains("cannot be used", ignoreCase = true) ||
-            reason.contains("eligible", ignoreCase = true) -> getString(R.string.qs_error_no_eligible)
-        reason.contains("scan", ignoreCase = true) -> getString(R.string.qs_error_scan_none)
-        reason.contains("subscription", ignoreCase = true) -> getString(R.string.qs_error_update_failed)
-        reason.contains("apply", ignoreCase = true) -> getString(R.string.qs_error_apply_failed)
-        reason.contains("running", ignoreCase = true) ||
-            reason.contains("Core", ignoreCase = true) -> getString(R.string.qs_error_core_start)
-        else -> getString(R.string.qs_error_generic)
+    private fun rejectionText(reason: Ineligibility?): String = when (reason) {
+        Ineligibility.UnsupportedProtocol -> getString(R.string.qs_reject_protocol)
+        Ineligibility.UnsupportedTransport -> getString(R.string.qs_reject_transport)
+        Ineligibility.NotTls -> getString(R.string.qs_reject_tls)
+        Ineligibility.PortNotAllowed -> getString(R.string.qs_reject_port)
+        Ineligibility.MissingServer -> getString(R.string.qs_reject_server)
+        Ineligibility.MissingCredential -> getString(R.string.qs_reject_credential)
+        Ineligibility.Eligible, null -> getString(R.string.qs_error_generic)
     }
 
+    /** Localized text for a failure kind; the raw reason is never shown. */
+    private fun localizeFailure(reason: String): String =
+        when (FlowFailureRules.classify(reason)) {
+            FlowFailure.VpnPermission -> getString(R.string.qs_error_vpn_denied)
+            FlowFailure.NotEligible -> getString(R.string.qs_error_no_eligible)
+            FlowFailure.ScanFoundNothing -> getString(R.string.qs_error_scan_none)
+            FlowFailure.Subscription -> getString(R.string.qs_error_update_failed)
+            FlowFailure.ApplyFailed -> getString(R.string.qs_error_apply_failed)
+            FlowFailure.CoreStart -> getString(R.string.qs_error_core_start)
+            FlowFailure.Busy -> getString(R.string.qs_error_busy)
+            FlowFailure.Generic -> getString(R.string.qs_error_generic)
+        }
+
+    /**
+     * Texts the flow itself produces.
+     *
+     * `qs_using_saved_ip` and `qs_reconnecting` are **templates** with one
+     * placeholder each, so they are read with [templateString]: the value is
+     * supplied later by [QsFlowText.savedEdge] / [QsFlowText.reconnectAttempt].
+     * Reading them with the formatting overload and no argument is exactly the
+     * bug that crashed Connect with `MissingFormatArgumentException: '%s'`.
+     */
     private fun flowText(): QsFlowText = QsFlowText(
         noSubscription = getString(R.string.qs_error_no_subscription),
-        usingSavedIp = getString(R.string.qs_using_saved_ip),
-        reconnecting = getString(R.string.qs_reconnecting),
+        usingSavedIp = templateString(R.string.qs_using_saved_ip),
+        reconnecting = templateString(R.string.qs_reconnecting),
         cancelled = getString(R.string.qs_cancelled),
     )
 
-    private fun getString(resId: Int, vararg args: Any): String =
-        getApplication<Application>().getString(resId, *args)
+    /** A resource read as-is, placeholders included; never formatted here. */
+    private fun templateString(resId: Int): String =
+        getApplication<Application>().getString(resId)
+
+    /**
+     * Reads a string resource with its arguments.
+     *
+     * The no-argument overload of `Context.getString` never formats; the
+     * vararg one always does, and with an empty argument list it throws
+     * `MissingFormatArgumentException` for any resource that contains a
+     * placeholder. Branching here makes that class of crash impossible for
+     * every caller of this helper.
+     */
+    private fun getString(resId: Int, vararg args: Any): String {
+        val app = getApplication<Application>()
+        return if (args.isEmpty()) app.getString(resId) else app.getString(resId, *args)
+    }
 
     override fun onCleared() {
         super.onCleared()

@@ -178,10 +178,63 @@ data class QsUiState(
  */
 data class QsFlowText(
     val noSubscription: String = "No subscription configured",
+    /** Template with one `%s`; rendered only through [savedEdge]. */
     val usingSavedIp: String = "Using saved IP %s",
+    /** Template with one `%d`; rendered only through [reconnectAttempt]. */
     val reconnecting: String = "Reconnecting (attempt %d)",
     val cancelled: String = "Cancelled",
-)
+) {
+    /**
+     * The saved-edge message for the IP that was really reused.
+     *
+     * The template and its value are bound here on purpose: the previous
+     * version handed the raw template to the state mapper, and a caller that
+     * formatted it with no argument killed the app with
+     * `MissingFormatArgumentException: Format specifier '%s'`.
+     *
+     * @return null when there is no real IP, so the caller shows no message
+     *   at all instead of inventing one.
+     */
+    fun savedEdge(ip: String?): String? =
+        ip?.trim()?.takeIf { it.isNotEmpty() }?.let { usingSavedIp.format(it) }
+
+    /** The reconnect message for the real attempt number. */
+    fun reconnectAttempt(attempt: Int): String = reconnecting.format(attempt)
+}
+
+/** Why a connection attempt failed, expressed so the UI can localize it. */
+enum class FlowFailure {
+    VpnPermission,
+    NotEligible,
+    ScanFoundNothing,
+    Subscription,
+    ApplyFailed,
+    CoreStart,
+    Busy,
+    Generic,
+}
+
+/**
+ * Maps the orchestrator's machine reason to a stable failure kind.
+ *
+ * Pure and tested, so the user-visible text is chosen by a rule instead of by
+ * string matching scattered through the ViewModel, and the raw reason (which
+ * may contain a subscription host) is never shown.
+ */
+object FlowFailureRules {
+    fun classify(reason: String): FlowFailure = when {
+        reason.contains("permission", ignoreCase = true) -> FlowFailure.VpnPermission
+        reason.contains("already running", ignoreCase = true) -> FlowFailure.Busy
+        reason.contains("cannot be used", ignoreCase = true) ||
+            reason.contains("eligible", ignoreCase = true) -> FlowFailure.NotEligible
+        reason.contains("scan", ignoreCase = true) -> FlowFailure.ScanFoundNothing
+        reason.contains("subscription", ignoreCase = true) -> FlowFailure.Subscription
+        reason.contains("apply", ignoreCase = true) -> FlowFailure.ApplyFailed
+        reason.contains("running", ignoreCase = true) ||
+            reason.contains("core", ignoreCase = true) -> FlowFailure.CoreStart
+        else -> FlowFailure.Generic
+    }
+}
 
 /**
  * Ordering shared by the live scan list and the final choice list.
@@ -293,7 +346,9 @@ internal fun QsUiState.withConnectState(
         status = QsStatus.Connecting,
         step = QsStep.SelectingIp,
         busy = true,
-        message = text.usingSavedIp.format(state.ip),
+        // Null when the flow has no real IP: no message is better than a
+        // placeholder or a fabricated address.
+        message = text.savedEdge(state.ip),
     )
 
     is AutoConnectState.SelectingBestIp -> copy(
@@ -321,7 +376,7 @@ internal fun QsUiState.withConnectState(
         status = QsStatus.Connecting,
         step = QsStep.StartingVpn,
         busy = true,
-        message = text.reconnecting.format(state.attempt),
+        message = text.reconnectAttempt(state.attempt),
     )
 
     is AutoConnectState.Failed -> copy(
