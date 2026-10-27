@@ -682,3 +682,232 @@ designed not to need them.
 | Working tree | clean before this doc commit |
 | Verified by CI | compile (main + test), 83 unit tests, release APK signing, 4 APK artifacts |
 | Not verified | anything that needs a device: real tunnel, per-app enforcement, rotation, process death |
+
+
+## 13. Feature release — persistent edge, benchmarking, configuration and range management
+
+Baseline for this pass: `a52f20c2` on `master` (untouched), `9c7597de` on the feature branch with 83 unit tests green.
+
+### 13.1 Requested capabilities and their state
+
+| # | Capability | State | Where |
+|---|---|---|---|
+| 1 | Persistent IP selection across reconnects | implemented | `ui/qsn/domain/IpSelection.kt`, `ui/qsn/data/QsPrefs.kt`, `ui/connect/ConnectionOrchestrator.kt` |
+| 2 | Advanced benchmarking | implemented | `ui/qsn/domain/CandidateMetrics.kt`, `senpai/CloudflareScanner.kt` |
+| 3 | Manual import with a visible + control and Persian errors | implemented | `ui/qsn/QsConfigScreen.kt`, `QsViewModel.importManualConfig` |
+| 4 | Configuration management: view, edit, duplicate-to-manual, delete, filter | implemented | `ui/qsn/domain/ConfigFilters.kt`, `QsConfigScreen.kt` |
+| 5 | Multi-subscription, collapsible, per-subscription update, enable/disable | implemented | `ui/qsn/domain/Subscriptions.kt`, `QsConfigScreen.kt` |
+| 6 | IP ranges with CIDR validation, hard limits and dedupe | implemented | `ui/qsn/domain/ScanRange.kt`, `ui/qsn/QsRangesScreen.kt` |
+| 7 | Four-tab bottom navigation | implemented | `ui/qsn/QuietStormActivity.kt` |
+| 8 | Voxora Web light theme | implemented | `ui/compose/Theme.kt` |
+| 9 | Low-cost connection background | implemented | `ui/qsn/QsBackground.kt` |
+| 10 | Per-app proxy preserved | unchanged | `ui/qsn/QsAppsScreen.kt` |
+
+### 13.2 Persistent IP selection
+
+A reconnect used to rescan every time. Now the winning edge is stored per configuration and reused.
+
+Cache key (SHA-256 over a joined field list):
+
+`v2|guid|configType|port|network|security|sni|host|path|xhttpMode|rangeFingerprint`
+
+The server field is deliberately **excluded**: applying the selected IP rewrites `profile.server`, so
+including it would invalidate the entry the first time it is used. No credential, UUID, password or
+subscription URL is part of the key.
+
+| Age of the entry | Action |
+|---|---|
+| < 30 min | reuse with no network round trip |
+| 30 min – 24 h | one TCP connect plus one TLS handshake with SNI, 2 s timeout, platform trust store |
+| > 24 h, failed probe, foreign fingerprint, non-IPv4 value, timestamp in the future | clear and rescan |
+
+Editing the transport fields, changing the enabled range set, or bumping
+`IpFingerprint.SCAN_SETTINGS_VERSION` invalidates the entry. The health probe transfers no payload
+and never weakens TLS (no trust-all manager, no hostname verifier override).
+
+### 13.3 Benchmarking
+
+The old scanner chose `maxByOrNull { it.uploadKBps }`: a fast upload could hide a dead link and
+download speed was ignored entirely. Replaced by `CandidateRanker` with explicit weights:
+
+| Dimension | Weight | Normalisation |
+|---|---|---|
+| Latency (median of 3 probes) | 0.30 | 25 ms → 100, 700 ms → 0 |
+| Jitter (median absolute deviation) | 0.10 | 0 ms → 100, ≥ 250 ms → 0 |
+| Download | 0.25 | relative to the best candidate in the batch |
+| Upload | 0.15 | relative to the best candidate in the batch |
+| Stability | 0.20 | successful probes ÷ all probes |
+
+Final score = `base × (1 − 0.35 × failureRatio)`, clamped to 0..100. Ties break on score, then
+median latency, then IP, so the same input always produces the same winner.
+
+What each number actually is, without overstating it:
+
+- **latency** — median of three `measureOutboundDelay` calls through the candidate's own config
+  against `https://cp.cloudflare.com/cdn-cgi/trace`.
+- **jitter** — median absolute deviation of those three samples, used instead of max−min so a single
+  spike does not dominate.
+- **download / upload** — 1 MiB each way through the candidate config via a temporary SOCKS inbound
+  (`RealTrafficSpeedTest`). This is a burst measurement, not a sustained throughput test.
+- **stability** — share of probes that answered at all; failures and timeouts are counted separately.
+- **confidence** — how many of the five dimensions were measurable, 20 points each. A candidate with
+  no traffic measurement can never beat a measured one, because the missing dimension contributes
+  zero rather than being silently skipped.
+
+A failed traffic test no longer discards an edge that clearly answered; it leaves throughput unknown.
+
+### 13.4 Manual import
+
+Paste one or more share links, `AngConfigManager.importBatchConfig` stores them in the manual group.
+Duplicates are detected by hashing the connection identity of every stored profile before and after
+the import (`ManualConfigRules.keyOf`) and the freshly imported copies of an already stored
+configuration are removed again. The identity ignores remarks and timestamps, and includes the
+credential so two different keys on the same server are not treated as duplicates.
+
+All new user-facing messages go through resources, so `values-fa` produces Persian text:
+
+| Situation | Persian string |
+|---|---|
+| empty input | یک لینک بچسبانید |
+| nothing parseable | هیچ کانفیگ پشتیبانیشده‌ای در متن پیدا نشد |
+| duplicate only | این کانفیگ از قبل ذخیره شده است |
+| partial | %1$d درونریزی شد، %2$d تکراری نادیده گرفته شد |
+
+### 13.5 Configuration management
+
+Rows come from `MmkvManager.decodeAllServerList()` and carry no credential. Filters combine with
+AND; selecting `All` clears the others; an empty set behaves as `All`.
+
+Edit opens the real protocol editor through `ProfileEditorResult.editIntent` (the mapping now lives
+in one place and `MainActivity` uses it too), so editing a configuration is not a reduced
+re-implementation. Subscription configurations can also be copied into the manual group, because a
+subscription refresh replaces them and an in-place edit would be lost. Delete asks for confirmation.
+
+### 13.6 Multi-subscription
+
+`SubscriptionRules.chooseActive` is used by **both** the panel and the connect flow, so the row the
+user sees highlighted is exactly the one that will be refreshed.
+
+- an explicit choice wins while it is enabled;
+- a disabled explicit choice falls back to the first enabled subscription;
+- when every subscription is disabled the flow fails explicitly instead of silently using one;
+- a subscription written by the previous build has the same stored shape, so it appears as one
+  enabled row with **no migration write**.
+
+### 13.7 IP ranges
+
+| Limit | Value |
+|---|---|
+| Smallest accepted prefix | /16 |
+| Addresses sampled per range | 4 |
+| Hard ceiling on candidates | 64 |
+| Overlap handling | a range fully contained in another is dropped |
+
+Input is normalised to the network address (`104.16.5.9/24` → `104.16.5.0/24`), so the same range
+cannot be added twice under two spellings. `Scan now` runs a standalone scan with progress and
+stores the winner; it does not start or stop the tunnel. Changing any range clears the cached edge.
+
+### 13.8 Navigation
+
+Four tabs: Connection, Configurations, IP Ranges, Apps. Switching tabs only changes the composed
+screen; it never calls the service, never restarts the tunnel and never drops the in-flight
+connection state.
+
+### 13.9 Visual design
+
+The palette was read from the real Voxora Web source on this machine
+(`/opt/voxora-web/DESIGN.md` and the light block of `/opt/voxora-web/public/styles.css`), not
+invented:
+
+| Token | Value | Source |
+|---|---|---|
+| background | `#FBF8F2` | `--vx-bg` |
+| surface | `#FFFFFF` | `--vx-surface` |
+| surface 1 / 2 | `#F6F1E7` / `#EFE8DA` | `--vx-surface-1` / `-2` |
+| content | `#1C1812` | `--vx-content` |
+| muted | `#5E564A` | `--vx-muted` |
+| line | `#E3DBCB` | `--vx-line` |
+| accent ink | `#8A5A00` | `--vx-accent` |
+| accent fill | `#D9A441` | `--vx-accent-fill` |
+
+Two deliberate deviations, as requested: the success green is `#23A55A`, brighter and cleaner than
+the reference `#2B7A4B`, with `#17703F` as its ink for text on paper; the error red stays
+`#CF4848`. Cards use 18 dp corners, controls 14 dp, spacing on a 4 dp base.
+
+The background is a static vertical wash plus two radial glows. It costs one linear and two radial
+gradients, no bitmaps and no blur; the drift advances five times per second rather than per frame;
+it stops when the activity is not resumed and stays frozen when the system animator duration scale is
+zero.
+
+### 13.10 Security and privacy
+
+- The IP cache stores a hash and public measurements only.
+- Subscription URLs are never logged; `SubscriptionRules.redact` keeps scheme and host and drops
+  path, query and user-info. The panel displays the redacted form.
+- `ManualConfigRules.contentKey` hashes before the value leaves the function.
+- The health probe uses the platform trust store with SNI; no certificate or hostname verification is
+  disabled anywhere in this change.
+- No new permission and no new exported component: the four tabs live inside the existing
+  `QuietStormActivity`.
+
+### 13.11 Tests
+
+116 new JVM test methods in six classes, all driving the production code:
+
+| Class | Methods | Covers |
+|---|---|---|
+| `CandidateRankerTest` | 20 | median/MAD, weights, download over upload, failure penalty, tie-break, confidence |
+| `IpSelectionTest` | 18 | freshness, TTL, foreign fingerprint, future clock, IPv4 validation, key stability |
+| `ScanRangeTest` | 28 | CIDR parsing, /16 floor, /32, normalisation, dedupe, 64 ceiling, determinism |
+| `ConfigFiltersTest` | 15 | AND combination, every filter, All exclusivity, matches/apply agreement |
+| `ManualConfigTest` | 16 | eligibility rules, case insensitivity, duplicate key semantics |
+| `SubscriptionsTest` | 19 | redaction, name limits, legacy row, ordering, active selection |
+
+83 + 116 = **199**, which matches the count the CI run reported.
+
+### 13.12 CI evidence
+
+| Run | SHA | Result | Notes |
+|---|---|---|---|
+| [40437459423](https://github.com/mo3iiibest77-hub/PattNG/actions/runs/40437459423) | `13f9089f` | **failure** | `:app:compileFdroidDebugKotlin` — two real errors, recorded rather than hidden |
+| [40437968381](https://github.com/mo3iiibest77-hub/PattNG/actions/runs/40437968381) | `a2f094ec` | **success** | 7 m 32 s, 02:21:40Z → 02:29:12Z |
+
+The first run failed for two reasons, both fixed in `a2f094ec`:
+
+1. `Theme.kt` referenced `QSRed` after the private constant was replaced by the public `QsRed`.
+   Fixing the name alone would have been wrong: the public token was declared *after* the dark scheme
+   that uses it, and Kotlin initialises top-level properties in declaration order, so the dark error
+   colour would have been transparent at runtime. The accent tokens were moved above the dark scheme.
+2. `IpHealthChecker` called `createSocket(Socket, String, int, boolean)` on
+   `SSLSocketFactory.getDefault()`, which is declared to return `SocketFactory` and has no such
+   overload. It now casts to `SSLSocketFactory` first.
+
+Successful run details:
+
+- annotation: `unit tests executed: 199 (failures=0 errors=0 skipped=0)`
+- artifacts: `arm64-v8a` 61.0 MB, `armeabi-v7a` 61.7 MB, `x86-apk` 126.6 MB,
+  `universal-apk` 136.2 MB, none expired
+- `master` untouched at `a52f20c2`, working tree clean, 23 commits ahead
+
+### 13.13 NOT verified
+
+Everything below needs real hardware and is not claimed:
+
+- a real tunnel over a real network, and whether the reused IP still works after a device reboot;
+- whether the ranker's winner is actually the fastest in practice on a given carrier;
+- per-app enforcement, rotation, process death, Doze;
+- the visual result on a device (the palette is verified as code, not as pixels);
+- battery impact of the background, measured rather than reasoned about.
+
+### 13.14 Remaining risks
+
+- Three latency samples are a small sample; the median is robust to one spike but not to a burst of
+  congestion. `LATENCY_SAMPLES` is a single constant if this proves too noisy.
+- A single 1 MiB transfer measures burst throughput, not sustained throughput.
+- `decodeAllServerList()` is re-read on every refresh; with a very large subscription the list
+  rebuild is O(n) work on the main thread. It is fast for hundreds of rows, not proven for thousands.
+- The standalone `Scan now` reuses the connect flow's scanner, so it shares its 180 s safety timeout
+  (`SCAN_TIMEOUT_MS`).
+- Each candidate costs a 1 MiB upload plus a 1 MiB download. With no ranges configured the scanner
+  still uses its own 30-candidate list, as before; a full 64-candidate range scan moves up to 64 MiB
+  in each direction. The ceiling bounds the work, it does not make it free.
