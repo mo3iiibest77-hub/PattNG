@@ -600,11 +600,8 @@
     <string name="qs_badge_not_eligible">Manual only</string>
     <string name="qs_badge_manual">Manual</string>
     <string name="qs_edit">Edit</string>
-    <string name="qs_duplicate_manual">Copy to manual</string>
-    <string name="qs_delete">Delete</string>
+        <string name="qs_delete">Delete</string>
     <string name="qs_rename">Rename</string>
-    <string name="qs_copy_suffix">(copy)</string>
-    <string name="qs_copied_to_manual">Copied to the manual group</string>
     <string name="qs_error_copy_failed">Could not copy the configuration</string>
     <string name="qs_error_delete_failed">Could not delete</string>
     <string name="qs_error_bad_url">Enter a valid http(s) subscription URL</string>
@@ -631,6 +628,7 @@
     <string name="qs_sub_add">Add subscription</string>
     <string name="qs_sub_name">Name</string>
     <string name="qs_sub_meta">%1$d configs, updated %2$s</string>
+    <string name="qs_sub_usage">Used %1$d%%</string>
     <string name="qs_sub_activate">Use</string>
     <string name="qs_update_all">Update all</string>
     <string name="qs_delete_config_title">Delete configuration?</string>
@@ -712,11 +710,9 @@
     <string name="qs_scan_errors">%1$d errors, %2$d timeouts</string>
     <string name="qs_scan_confidence">Confidence %1$d%%</string>
     <string name="qs_detail_edge">Edge IP</string>
+    <string name="qs_detail_exit">Exit IP</string>
+    <string name="qs_exit_unavailable">Exit IP unavailable</string>
     <string name="qs_detail_unknown">Unknown</string>
-    <string name="qs_speed_receive">Receive</string>
-    <string name="qs_speed_send">Send</string>
-    <string name="qs_speed_measuring">Measuring</string>
-    <string name="qs_speed_total">%1$s received, %2$s sent</string>
     <string name="qs_language">EN / FA</string>
     <string name="qs_language_switch">Switch the application language</string>
     <string name="qs_group_added_by_you">Added by You</string>
@@ -758,4 +754,12 @@
     <string name="qs_discovery_cancelled">Discovery was cancelled</string>
     <string name="qs_discovery_failed">Discovery failed</string>
     <string name="qs_discovery_last">Last range: %1$s</string>
+    <string name="qs_test_delay">Test delay</string>
+    <string name="qs_delay_measuring">Measuring…</string>
+    <string name="qs_delay_label">Delay · %1$s</string>
+    <string name="qs_select_all">Select all</string>
+    <string name="qs_deselect_all">Deselect all</string>
+    <string name="qs_delete_selected">Delete (%1$d)</string>
+    <string name="qs_bulk_delete_title">Delete selected configurations?</string>
+    <string name="qs_bulk_delete_body">%1$d configuration(s) will be removed from this device. The one currently selected or connected is kept. A subscription can restore the rest on the next update.</string>
 </resources>

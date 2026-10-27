@@ -10,6 +10,19 @@ on:
     branches:
       - master
       - feature/minimal-cloudflare-vpn
+    paths:
+      # Run the Android build + app tests only when the application or a
+      # build-critical input changes. Documentation-only changes (CLAUDE.md,
+      # Report.md, README and other Markdown files) must not trigger a build.
+      - 'V2rayNG/**'              # app source, resources, manifests, tests, Gradle config
+      - 'AndroidLibXrayLite/**'   # Xray core binding (submodule tree)
+      - 'AndroidLibXrayLite'      # Xray core binding (submodule pointer bump)
+      - 'hev-socks5-tunnel/**'    # native tunnel source (submodule tree)
+      - 'hev-socks5-tunnel'       # native tunnel source (submodule pointer bump)
+      - 'compile-hevtun.sh'       # native library build script
+      - '.gitmodules'             # core integration wiring
+      - '.github/workflows/build.yml' # this workflow, so its own changes are verified
+      - '.github/scripts/**'      # build support scripts
 
 permissions:
   contents: write

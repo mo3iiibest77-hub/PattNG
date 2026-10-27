@@ -1,6 +1,7 @@
 package com.v2ray.ang.ui.qsn.domain
 
 import com.v2ray.ang.dto.entities.SubscriptionCache
+import com.v2ray.ang.util.SubscriptionQuota
 
 /**
  * One row of the subscription panel.
@@ -17,6 +18,10 @@ data class SubscriptionRow(
     val configCount: Int,
     val lastUpdated: Long,
     val active: Boolean,
+    val uploadBytes: Long = 0,
+    val downloadBytes: Long = 0,
+    val totalBytes: Long = 0,
+    val expireAt: Long = 0,
 ) {
     /** What the panel shows as the title: the user's name, else the host. */
     val displayName: String
@@ -24,6 +29,14 @@ data class SubscriptionRow(
 
     val redactedUrl: String
         get() = SubscriptionRules.redact(url)
+
+    /** 0f..1f fraction of the allowance already used, null when total is unknown. */
+    val usageFraction: Float?
+        get() = SubscriptionQuota.usageFraction(uploadBytes, downloadBytes, totalBytes)
+
+    /** Whole-number usage percentage 0..100, null when total is unknown. */
+    val usagePercent: Int?
+        get() = SubscriptionQuota.usagePercent(uploadBytes, downloadBytes, totalBytes)
 }
 
 /**
@@ -94,6 +107,10 @@ object SubscriptionRules {
             configCount = configCount,
             lastUpdated = cache.subscription.lastUpdated,
             active = active,
+            uploadBytes = cache.subscription.upload,
+            downloadBytes = cache.subscription.download,
+            totalBytes = cache.subscription.total,
+            expireAt = cache.subscription.expire,
         )
 
     /** Active first, then enabled, then alphabetical - stable for the UI. */

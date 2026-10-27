@@ -8,13 +8,14 @@ import androidx.lifecycle.viewModelScope
 import com.v2ray.ang.AppConfig
 import com.v2ray.ang.R
 import com.v2ray.ang.core.LauncherManager
-import com.v2ray.ang.dto.TrafficSnapshot
+import com.v2ray.ang.dto.TestServiceMessage
 import com.v2ray.ang.dto.entities.ProfileItem
 import com.v2ray.ang.dto.entities.SubscriptionCache
 import com.v2ray.ang.dto.entities.SubscriptionItem
 import com.v2ray.ang.handler.AngConfigManager
 import com.v2ray.ang.handler.AppLocaleManager
 import com.v2ray.ang.handler.MmkvManager
+import com.v2ray.ang.handler.SpeedtestManager
 import com.v2ray.ang.senpai.CloudflareScanner
 import com.v2ray.ang.ui.connect.AutoConfigFilter
 import com.v2ray.ang.ui.connect.AutoConnectResult
@@ -29,6 +30,7 @@ import com.v2ray.ang.ui.qsn.data.QualifiedRangeStore
 import com.v2ray.ang.ui.qsn.domain.ConfigFilter
 import com.v2ray.ang.ui.qsn.domain.ConfigFilterEngine
 import com.v2ray.ang.ui.qsn.domain.ConfigRow
+import com.v2ray.ang.ui.qsn.domain.ConfigSelection
 import com.v2ray.ang.ui.qsn.domain.ConfigSource
 import com.v2ray.ang.ui.qsn.domain.CrashReport
 import com.v2ray.ang.ui.qsn.domain.LanguageToggle
@@ -46,7 +48,6 @@ import com.v2ray.ang.util.Utils
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -64,13 +65,6 @@ private const val PROBE_GRACE_MS = 1_500L
 
 /** Remarks used when a subscription is created from the URL field. */
 private const val DEFAULT_SUBSCRIPTION_REMARKS = "Quiet Storm"
-
-/**
- * How often the Connection screen asks the core for traffic counters while it
- * is on screen. The service throttles the native read to ~1 Hz, so this never
- * turns into a busy loop.
- */
-private const val TRAFFIC_POLL_MS = 1_000L
 
 /** Outcome of a manual import, kept small so it can be logged safely. */
 private data class ImportOutcome(
@@ -112,11 +106,7 @@ class QsViewModel(
 
     /** Configuration the standalone scan measured, so a confirmed card can be applied. */
     private var lastScanTarget: Pair<String, ProfileItem>? = null
-    private var trafficJob: Job? = null
     private var updateJob: Job? = null
-
-    /** True while a Quiet Storm NG screen is actually on screen. */
-    private var foreground = false
 
     /** Last URL persisted to MMKV, used to detect unsaved edits before connecting. */
     private var storedUrl: String = ""
@@ -533,21 +523,6 @@ class QsViewModel(
         orchestrator.cancel()
     }
 
-    /**
-     * Tells the ViewModel whether a Quiet Storm NG screen is visible.
-     *
-     * Traffic polling only runs while something can display it, so a backgrounded
-     * app does not keep waking the service every second.
-     */
-    fun setForeground(value: Boolean) {
-        foreground = value
-        if (value) {
-            startTrafficPolling()
-        } else {
-            stopTrafficPolling()
-        }
-    }
-
     /** Stops the tunnel and waits for the daemon to confirm. */
     fun disconnect() {
         if (_uiState.value.status == QsStatus.Disconnecting) return
@@ -556,7 +531,6 @@ class QsViewModel(
             it.copy(status = QsStatus.Disconnecting, busy = true, step = QsStep.Idle, message = null)
         }
         LauncherManager.stopService(getApplication())
-        stopTrafficPolling()
         stopWatchJob = viewModelScope.launch {
             delay(STOP_CONFIRM_TIMEOUT_MS)
             if (_uiState.value.status != QsStatus.Disconnecting) return@launch
@@ -679,6 +653,105 @@ class QsViewModel(
         }
     }
 
+    // ---------- Real delay ----------
+
+    /**
+     * Measures the real outbound delay of every selectable configuration.
+     *
+     * This is the real delay, not a socket connect: it delegates to the same
+     * CoreTestService worker the full UI uses, which asks the Xray core for an
+     * outbound delay through the configured server and stores the result per
+     * guid in [MmkvManager.encodeServerTestDelayMillis]. The per-guid result is
+     * the one [refreshConfigRows] reads back, so a measurement can never be
+     * shown against the wrong row.
+     */
+    fun measureRealDelay() {
+        val state = _uiState.value
+        if (state.testingDelay) return
+        val guids = ConfigSelection.selectable(state.configRows).map { it.guid }
+        if (guids.isEmpty()) return
+        dataSource.cancelAllPing()
+        dataSource.clearAllTestDelayResults(guids)
+        dataSource.sendMsg2TestService(
+            TestServiceMessage(
+                key = AppConfig.MSG_MEASURE_CONFIG_START,
+                serverGuids = guids,
+                onlyTcp = false,
+            ),
+        )
+        _uiState.update { it.copy(testingDelay = true) }
+    }
+
+    // ---------- Multi-select + bulk delete ----------
+
+    fun toggleConfigSelection(guid: String) {
+        _uiState.update {
+            val selected = it.selectedGuids
+            it.copy(selectedGuids = if (selected.contains(guid)) selected - guid else selected + guid)
+        }
+    }
+
+    /** Selects exactly the rows the list currently renders. */
+    fun selectAllConfigs() {
+        val all = ConfigSelection.allVisibleGuids(
+            _uiState.value.configRows,
+            _uiState.value.filters,
+        )
+        _uiState.update { it.copy(selectedGuids = all) }
+    }
+
+    fun deselectAllConfigs() {
+        _uiState.update { it.copy(selectedGuids = emptySet()) }
+    }
+
+    /** Opens the bulk-delete confirmation, but only when something is selected. */
+    fun requestBulkDelete() {
+        if (_uiState.value.selectedGuids.isEmpty()) return
+        _uiState.update { it.copy(bulkDeleteOpen = true) }
+    }
+
+    fun dismissBulkDelete() {
+        _uiState.update { it.copy(bulkDeleteOpen = false) }
+    }
+
+    /**
+     * Deletes every selected configuration that may be deleted.
+     *
+     * [ConfigSelection.deletable] protects the active and the connected guid, so
+     * a running or selected configuration can never be swept away by "select
+     * all" + delete.
+     */
+    fun confirmBulkDelete() {
+        val state = _uiState.value
+        val deletable = ConfigSelection.deletable(
+            state.selectedGuids,
+            MmkvManager.getSelectServer(),
+            state.connectedGuid,
+        )
+        viewModelScope.launch {
+            var failed = false
+            withContext(Dispatchers.IO) {
+                deletable.forEach { guid ->
+                    try {
+                        MmkvManager.removeServer(guid)
+                    } catch (e: Exception) {
+                        LogUtil.e(TAG, "bulk delete failed for one guid: " + e.javaClass.simpleName)
+                        failed = true
+                    }
+                }
+            }
+            if (QsPrefs.pinnedGuid() in deletable) QsPrefs.setPinnedGuid(null)
+            _uiState.update {
+                it.copy(
+                    selectedGuids = emptySet(),
+                    bulkDeleteOpen = false,
+                    message = if (failed) getString(R.string.qs_error_delete_failed) else null,
+                )
+            }
+            refreshLocalSnapshot()
+        }
+    }
+
     /**
      * Copies the configuration's share link to the system clipboard.
      *
@@ -706,42 +779,6 @@ class QsViewModel(
                     },
                 )
             }
-        }
-    }
-
-    /**
-     * Copies a configuration into the manual group.
-     *
-     * Subscription configurations are replaced on every refresh, so editing one
-     * in place would be lost; a copy in the manual group survives.
-     */
-    fun duplicateConfigToManual(guid: String) {
-        viewModelScope.launch {
-            val created = withContext(Dispatchers.IO) {
-                try {
-                    val profile = MmkvManager.decodeServerConfig(guid) ?: return@withContext false
-                    val copy = profile.copy(
-                        subscriptionId = AppConfig.DEFAULT_SUBSCRIPTION_ID,
-                        addedTime = System.currentTimeMillis(),
-                        remarks = profile.remarks + " " + getString(R.string.qs_copy_suffix),
-                    )
-                    MmkvManager.encodeServerConfig(Utils.getUuid(), copy)
-                    true
-                } catch (e: Exception) {
-                    LogUtil.e(TAG, "duplicateConfigToManual failed: " + e.javaClass.simpleName)
-                    false
-                }
-            }
-            _uiState.update {
-                it.copy(
-                    message = if (created) {
-                        getString(R.string.qs_copied_to_manual)
-                    } else {
-                        getString(R.string.qs_error_copy_failed)
-                    },
-                )
-            }
-            refreshLocalSnapshot()
         }
     }
 
@@ -1195,10 +1232,6 @@ class QsViewModel(
 
     private fun onServiceEvent(event: MainServiceEvent) {
         when (event) {
-            is MainServiceEvent.TrafficUpdate -> {
-                _uiState.update { it.copy(traffic = event.snapshot) }
-            }
-
             MainServiceEvent.StateRunning,
             MainServiceEvent.StateStartSuccess -> onCoreRunning(true)
 
@@ -1221,13 +1254,28 @@ class QsViewModel(
                 }
             }
 
+            // A real-delay measurement finished for one guid. The test service
+            // has already persisted the result, so re-reading the rows is all
+            // that is needed to keep the badge current.
+            MainServiceEvent.MeasureConfigSuccess -> refreshConfigRows()
+
+            // Progress text from the test worker; the list itself is the
+            // progress indicator here, so nothing to show per row.
+            MainServiceEvent.MeasureConfigNotify -> Unit
+
+            // The whole measurement pass is done (or was cancelled).
+            MainServiceEvent.MeasureConfigFinish -> {
+                _uiState.update { it.copy(testingDelay = false) }
+                refreshConfigRows()
+            }
+
             else -> Unit
         }
     }
 
     private fun onCoreRunning(running: Boolean) {
         if (!running) stopWatchJob?.cancel()
-        if (running) startTrafficPolling() else stopTrafficPolling()
+        if (running) refreshExitIp()
         _uiState.update { state ->
             if (running) {
                 val keepConnecting = state.status == QsStatus.Connecting
@@ -1247,8 +1295,30 @@ class QsViewModel(
                     status = if (keepConnecting) QsStatus.Connecting else QsStatus.Disconnected,
                     busy = if (keepConnecting) state.busy else false,
                     connectedGuid = null,
+                    // A stale exit IP must never survive a disconnect.
+                    exitIp = null,
                 )
             }
+        }
+    }
+
+    /**
+     * Asks an external service, through the tunnel, which IP the traffic is
+     * really exiting from. Runs off the main thread: it performs HTTP.
+     *
+     * The result is only ever the real, observed exit IP. When the lookup
+     * fails the field stays null and the UI shows the unavailable fallback
+     * instead of inventing the origin server or the Cloudflare edge.
+     */
+    private fun refreshExitIp() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val ip = try {
+                SpeedtestManager.getRemoteIPInfo()?.ipAddress
+            } catch (e: Exception) {
+                LogUtil.e(TAG, "exit IP lookup failed: " + e.javaClass.simpleName)
+                null
+            } ?.trim()?.takeIf { it.isNotEmpty() }
+            _uiState.update { it.copy(exitIp = ip) }
         }
     }
 
@@ -1306,6 +1376,9 @@ class QsViewModel(
                 // Same rule the orchestrator applies, so the badge and the
                 // automatic flow can never disagree.
                 eligible = AutoConfigFilter.isEligible(profile),
+                // Real outbound delay, stored per guid by the test service.
+                testDelayMillis = MmkvManager.decodeServerAffiliationInfo(guid)
+                    ?.testDelayMillis ?: 0L,
             )
         }
         _uiState.update { it.copy(configRows = rows) }
@@ -1331,28 +1404,6 @@ class QsViewModel(
                 selectedServer = profile?.server?.takeIf { server -> server.isNotBlank() },
                 selectedEdge = profile?.qsEdgeIp?.takeIf { edge -> edge.isNotBlank() },
             )
-        }
-    }
-
-    // ---------- Traffic ----------
-
-    private fun startTrafficPolling() {
-        if (trafficJob?.isActive == true) return
-        if (!foreground || !_uiState.value.coreRunning) return
-        trafficJob = viewModelScope.launch {
-            while (isActive) {
-                dataSource.sendMsg2Service(AppConfig.MSG_QUERY_TRAFFIC, "")
-                delay(TRAFFIC_POLL_MS)
-            }
-        }
-    }
-
-    private fun stopTrafficPolling() {
-        trafficJob?.cancel()
-        trafficJob = null
-        // A stale rate must never survive a disconnect and look live.
-        if (_uiState.value.traffic != null) {
-            _uiState.update { it.copy(traffic = null) }
         }
     }
 
@@ -1456,7 +1507,6 @@ class QsViewModel(
         orchestrator.cancel()
         stopWatchJob?.cancel()
         scanJob?.cancel()
-        trafficJob?.cancel()
         try {
             dataSource.close()
         } catch (e: Exception) {

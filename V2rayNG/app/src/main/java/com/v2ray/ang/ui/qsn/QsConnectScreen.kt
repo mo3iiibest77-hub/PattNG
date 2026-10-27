@@ -229,10 +229,6 @@ private fun QsStatusCard(
                     fontWeight = FontWeight.SemiBold,
                 )
             }
-            if (state.status == QsStatus.Connected) {
-                Spacer(Modifier.height(10.dp))
-                QsTrafficBlock(state = state)
-            }
             Spacer(Modifier.height(18.dp))
             when {
                 state.connecting -> OutlinedButton(
@@ -268,64 +264,6 @@ private fun QsStatusCard(
                 }
             }
         }
-    }
-}
-
-/**
- * Receive/Send rates reported by the core.
- *
- * Three distinct states are kept apart on purpose: a real rate (including a
- * real zero), "measuring" before the first sample, and "N/A" when the core
- * reports no statistics at all.
- */
-@Composable
-private fun QsTrafficBlock(state: QsUiState) {
-    val traffic = state.traffic
-    val receive = when {
-        traffic == null -> stringResource(R.string.qs_speed_measuring)
-        !traffic.available -> MetricFormat.NOT_AVAILABLE
-        else -> MetricFormat.rate(traffic.downBytesPerSecond)
-    }
-    val send = when {
-        traffic == null -> stringResource(R.string.qs_speed_measuring)
-        !traffic.available -> MetricFormat.NOT_AVAILABLE
-        else -> MetricFormat.rate(traffic.upBytesPerSecond)
-    }
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceEvenly,
-    ) {
-        TrafficValue(stringResource(R.string.qs_speed_receive), receive)
-        TrafficValue(stringResource(R.string.qs_speed_send), send)
-    }
-    if (traffic != null && traffic.available) {
-        Spacer(Modifier.height(6.dp))
-        Text(
-            text = stringResource(
-                R.string.qs_speed_total,
-                MetricFormat.bytes(traffic.totalDownBytes),
-                MetricFormat.bytes(traffic.totalUpBytes),
-            ),
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-    }
-}
-
-@Composable
-private fun TrafficValue(label: String, value: String) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Text(
-            text = value,
-            style = MaterialTheme.typography.titleSmall,
-            fontWeight = FontWeight.SemiBold,
-            color = MaterialTheme.colorScheme.onSurface,
-        )
     }
 }
 
@@ -668,6 +606,13 @@ private fun QsDetailsCard(state: QsUiState) {
             DetailRow(
                 label = stringResource(R.string.qs_detail_edge),
                 value = state.selectedEdge ?: MetricFormat.NOT_AVAILABLE,
+            )
+            // The actual exit node, observed externally through the tunnel.
+            // It is never confused with the origin server or the Cloudflare edge,
+            // and a failed lookup shows the honest fallback rather than a guess.
+            DetailRow(
+                label = stringResource(R.string.qs_detail_exit),
+                value = state.exitIp ?: stringResource(R.string.qs_exit_unavailable),
             )
         }
     }

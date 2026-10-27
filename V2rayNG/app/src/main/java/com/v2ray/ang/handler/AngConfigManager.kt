@@ -25,6 +25,7 @@ import com.v2ray.ang.util.HttpUtil
 import com.v2ray.ang.util.JsonUtil
 import com.v2ray.ang.util.LogUtil
 import com.v2ray.ang.util.QRCodeDecoder
+import com.v2ray.ang.util.SubscriptionQuota
 import com.v2ray.ang.util.Utils
 import java.net.URI
 
@@ -492,9 +493,11 @@ object AngConfigManager {
             val proxyUsername = SettingsManager.getSocksUsername()
             val proxyPassword = SettingsManager.getSocksPassword()
 
-            var configText = try {
+            var configText = ""
+            var subUserInfo: String? = null
+            try {
                 val httpPort = SettingsManager.getHttpPort()
-                HttpUtil.getUrlContentWithUserAgent(
+                val result = HttpUtil.getUrlContentWithUserAgentAndUserInfo(
                     UrlContentRequest(
                         url = url,
                         userAgent = userAgent,
@@ -505,22 +508,24 @@ object AngConfigManager {
                         proxyPassword = proxyPassword
                     )
                 )
+                configText = result.content
+                subUserInfo = result.userInfo
             } catch (e: Exception) {
                 LogUtil.e(AppConfig.ANG_PACKAGE, "Update subscription: proxy not ready or other error", e)
-                ""
             }
             if (configText.isEmpty()) {
-                configText = try {
-                    HttpUtil.getUrlContentWithUserAgent(
+                try {
+                    val result = HttpUtil.getUrlContentWithUserAgentAndUserInfo(
                         UrlContentRequest(
                             url = url,
                             userAgent = userAgent,
                             requestHeaders = requestHeaders
                         )
                     )
+                    configText = result.content
+                    subUserInfo = result.userInfo
                 } catch (e: Exception) {
                     LogUtil.e(AppConfig.TAG, "Update subscription: Failed to get URL content with user agent", e)
-                    ""
                 }
             }
             if (configText.isEmpty()) {
@@ -529,7 +534,12 @@ object AngConfigManager {
 
             val count = parseConfigViaSub(configText, it.guid, false)
             if (count > 0) {
+                val quota = SubscriptionQuota.parse(subUserInfo)
                 it.subscription.lastUpdated = System.currentTimeMillis()
+                it.subscription.upload = quota.upload
+                it.subscription.download = quota.download
+                it.subscription.total = quota.total
+                it.subscription.expire = quota.expire
                 MmkvManager.encodeSubscription(it.guid, it.subscription)
                 LogUtil.i(AppConfig.TAG, "Subscription updated: ${it.subscription.remarks}, $count configs")
                 return SubscriptionUpdateResult(

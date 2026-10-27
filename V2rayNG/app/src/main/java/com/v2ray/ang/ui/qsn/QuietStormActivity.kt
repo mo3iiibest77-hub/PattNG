@@ -89,17 +89,6 @@ class QuietStormActivity : HelperBaseComponentActivity() {
         qsViewModel.reload()
     }
 
-    override fun onStart() {
-        super.onStart()
-        // Traffic is polled only while a screen can show it.
-        qsViewModel.setForeground(true)
-    }
-
-    override fun onStop() {
-        qsViewModel.setForeground(false)
-        super.onStop()
-    }
-
     /**
      * Restarts a running tunnel after a setting that affects the core changed (for example the
      * per-app selection). Uses the project-wide [SettingsChangeManager] flag so the restart happens
@@ -306,6 +295,15 @@ class QuietStormActivity : HelperBaseComponentActivity() {
                             onToggleFilter = { qsViewModel.toggleFilter(it) },
                             onClearFilters = { qsViewModel.clearFilters() },
                             onToggleGroup = { qsViewModel.toggleConfigGroup(it) },
+                            onTestDelay = { qsViewModel.measureRealDelay() },
+                            onToggleConfigSelection = {
+                                qsViewModel.toggleConfigSelection(it)
+                            },
+                            onSelectAllConfigs = { qsViewModel.selectAllConfigs() },
+                            onDeselectAllConfigs = { qsViewModel.deselectAllConfigs() },
+                            onRequestBulkDelete = { qsViewModel.requestBulkDelete() },
+                            onConfirmBulkDelete = { qsViewModel.confirmBulkDelete() },
+                            onDismissBulkDelete = { qsViewModel.dismissBulkDelete() },
                             onToggleLanguage = { qsViewModel.toggleLanguage() },
                             onSelectConfig = { qsViewModel.selectConfig(it) },
                             // A started connect shows its real progress on the
@@ -315,7 +313,6 @@ class QuietStormActivity : HelperBaseComponentActivity() {
                             },
                             onEditConfig = { openEditor(it) },
                             onCopyConfig = { qsViewModel.copyConfigToClipboard(it) },
-                            onDuplicateConfig = { qsViewModel.duplicateConfigToManual(it) },
                             onRequestDeleteConfig = { qsViewModel.requestDeleteConfig(it) },
                             onDeleteConfig = { qsViewModel.deleteConfig(it) },
                             onDismissDeleteConfig = { qsViewModel.dismissDeleteConfig() },

@@ -600,11 +600,8 @@
     <string name="qs_badge_not_eligible">فقط دستی</string>
     <string name="qs_badge_manual">دستی</string>
     <string name="qs_edit">ویرایش</string>
-    <string name="qs_duplicate_manual">کپی به گروه دستی</string>
-    <string name="qs_delete">حذف</string>
+        <string name="qs_delete">حذف</string>
     <string name="qs_rename">تغییر نام</string>
-    <string name="qs_copy_suffix">(کپی)</string>
-    <string name="qs_copied_to_manual">به گروه دستی کپی شد</string>
     <string name="qs_error_copy_failed">کپی کانفیگ انجام نشد</string>
     <string name="qs_error_delete_failed">حذف انجام نشد</string>
     <string name="qs_error_bad_url">یک نشانی معتبر http(s) برای اشتراک وارد کنید</string>
@@ -631,6 +628,7 @@
     <string name="qs_sub_add">افزودن اشتراک</string>
     <string name="qs_sub_name">نام</string>
     <string name="qs_sub_meta">%1$d کانفیگ، آخرین به‌روزرسانی %2$s</string>
+    <string name="qs_sub_usage">مصرف شده %1$d%%</string>
     <string name="qs_sub_activate">انتخاب</string>
     <string name="qs_update_all">به‌روزرسانی همه</string>
     <string name="qs_delete_config_title">کانفیگ حذف شود؟</string>
@@ -712,11 +710,9 @@
     <string name="qs_scan_errors">%1$d خطا، %2$d تایم‌اوت</string>
     <string name="qs_scan_confidence">اطمینان %1$d%%</string>
     <string name="qs_detail_edge">IP لبه</string>
+    <string name="qs_detail_exit">IP خروجی</string>
+    <string name="qs_exit_unavailable">IP خروجی در دسترس نیست</string>
     <string name="qs_detail_unknown">نامشخص</string>
-    <string name="qs_speed_receive">دریافت</string>
-    <string name="qs_speed_send">ارسال</string>
-    <string name="qs_speed_measuring">در حال اندازه‌گیری</string>
-    <string name="qs_speed_total">%1$s دریافت‌شده، %2$s ارسال‌شده</string>
     <string name="qs_language">EN / FA</string>
     <string name="qs_language_switch">تغییر زبان برنامه</string>
     <string name="qs_group_added_by_you">افزوده‌شده توسط شما</string>
@@ -758,4 +754,12 @@
     <string name="qs_discovery_cancelled">کشف لغو شد</string>
     <string name="qs_discovery_failed">کشف ناموفق بود</string>
     <string name="qs_discovery_last">آخرین رنج: %1$s</string>
+    <string name="qs_test_delay">اندازه‌گیری تاخیر</string>
+    <string name="qs_delay_measuring">در حال اندازه‌گیری…</string>
+    <string name="qs_delay_label">تاخیر · %1$s</string>
+    <string name="qs_select_all">انتخاب همه</string>
+    <string name="qs_deselect_all">لغو انتخاب همه</string>
+    <string name="qs_delete_selected">حذف (%1$d)</string>
+    <string name="qs_bulk_delete_title">کانفیگ‌های انتخاب‌شده حذف شوند؟</string>
+    <string name="qs_bulk_delete_body">%1$d کانفیگ از دستگاه حذف می‌شود. کانفیگ در حال استفاده یا انتخاب‌شده نگه داشته می‌شود. بقیه در به‌روزرسانی بعدی اشتراک برمی‌گردند.</string>
 </resources>

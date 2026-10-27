@@ -1,6 +1,5 @@
 package com.v2ray.ang.ui.qsn
 
-import com.v2ray.ang.dto.TrafficSnapshot
 import com.v2ray.ang.ui.connect.AutoConnectState
 import com.v2ray.ang.ui.qsn.domain.ConfigChoice
 import com.v2ray.ang.ui.qsn.domain.ConfigFilter
@@ -112,6 +111,12 @@ data class QsUiState(
     val importOpen: Boolean = false,
     /** Configuration awaiting delete confirmation. */
     val pendingDeleteGuid: String? = null,
+    /** Guids ticked in the multi-select bulk delete. */
+    val selectedGuids: Set<String> = emptySet(),
+    /** True while the bulk-delete confirmation dialog is open. */
+    val bulkDeleteOpen: Boolean = false,
+    /** True while a real-delay measurement is in flight. */
+    val testingDelay: Boolean = false,
     /** Subscription awaiting delete confirmation. */
     val pendingDeleteSubscription: String? = null,
     /** True while a standalone scan started from the IP Ranges screen runs. */
@@ -137,8 +142,12 @@ data class QsUiState(
      * connection it does not have.
      */
     val connectedGuid: String? = null,
-    /** Real traffic rates reported by the core, null when not measured yet. */
-    val traffic: TrafficSnapshot? = null,
+    /**
+     * Actual exit-node IP as observed by an external service through the
+     * tunnel. Null until measured, or when the exit IP cannot be determined;
+     * never fabricated into the origin server or the Cloudflare edge.
+     */
+    val exitIp: String? = null,
     /** Current app language code ("en", "fa", ...). */
     val languageCode: String = "en",
     /** Configurations sections the user collapsed, by stable group key. */

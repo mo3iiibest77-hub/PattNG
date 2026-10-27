@@ -24,9 +24,11 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
@@ -41,6 +43,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
@@ -54,6 +57,7 @@ import com.v2ray.ang.ui.qsn.domain.ConfigGroup
 import com.v2ray.ang.ui.qsn.domain.ConfigGrouping
 import com.v2ray.ang.ui.qsn.domain.ConfigRow
 import com.v2ray.ang.ui.qsn.domain.ConfigSource
+import com.v2ray.ang.ui.qsn.domain.MetricFormat
 import com.v2ray.ang.ui.qsn.domain.SubscriptionRow
 
 /**
@@ -89,10 +93,16 @@ fun QsConfigScreen(
     onToggleFilter: (ConfigFilter) -> Unit,
     onClearFilters: () -> Unit,
     onToggleGroup: (String) -> Unit,
+    onTestDelay: () -> Unit,
+    onToggleConfigSelection: (String) -> Unit,
+    onSelectAllConfigs: () -> Unit,
+    onDeselectAllConfigs: () -> Unit,
+    onRequestBulkDelete: () -> Unit,
+    onConfirmBulkDelete: () -> Unit,
+    onDismissBulkDelete: () -> Unit,
     onSelectConfig: (String) -> Unit,
     onConfigAction: (String) -> Unit,
     onEditConfig: (String) -> Unit,
-    onDuplicateConfig: (String) -> Unit,
     onCopyConfig: (String) -> Unit,
     onRequestDeleteConfig: (String) -> Unit,
     onDeleteConfig: (String) -> Unit,
@@ -170,6 +180,18 @@ fun QsConfigScreen(
             )
         }
 
+        item(key = "bulk-actions") {
+            BulkActionRow(
+                selectedCount = state.selectedGuids.size,
+                anySelected = state.selectedGuids.isNotEmpty(),
+                testingDelay = state.testingDelay,
+                onTestDelay = onTestDelay,
+                onSelectAll = onSelectAllConfigs,
+                onDeselectAll = onDeselectAllConfigs,
+                onDelete = onRequestBulkDelete,
+            )
+        }
+
         if (groups.isEmpty()) {
             item(key = "empty") {
                 EmptyConfigs(hasRows = state.configRows.isNotEmpty())
@@ -209,12 +231,13 @@ fun QsConfigScreen(
                             connected = state.coreRunning && state.connectedGuid == row.guid,
                             busy = state.status == QsStatus.Connecting ||
                                 state.status == QsStatus.Disconnecting,
+                            selected = state.selectedGuids.contains(row.guid),
                             onSelect = { onSelectConfig(row.guid) },
                             onAction = { onConfigAction(row.guid) },
                             onEdit = { onEditConfig(row.guid) },
                             onCopy = { onCopyConfig(row.guid) },
-                            onDuplicate = { onDuplicateConfig(row.guid) },
                             onDelete = { onRequestDeleteConfig(row.guid) },
+                            onToggleSelection = { onToggleConfigSelection(row.guid) },
                         )
                     }
                 }
@@ -269,6 +292,15 @@ fun QsConfigScreen(
             body = stringResource(R.string.qs_delete_sub_body),
             onDismiss = onDismissDeleteSubscription,
             onConfirm = { onDeleteSubscription(pendingSubscription) },
+        )
+    }
+
+    if (state.bulkDeleteOpen) {
+        ConfirmDeleteDialog(
+            title = stringResource(R.string.qs_bulk_delete_title),
+            body = stringResource(R.string.qs_bulk_delete_body, state.selectedGuids.size),
+            onDismiss = onDismissBulkDelete,
+            onConfirm = onConfirmBulkDelete,
         )
     }
 }
@@ -495,6 +527,29 @@ private fun SubscriptionItemRow(
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+        // Only subscriptions whose server reports a total draw a quota bar; a
+        // zero total means the server publishes none and is shown as nothing,
+        // never as a fabricated 100%.
+        row.usagePercent?.let { percent ->
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                LinearProgressIndicator(
+                    progress = { percent / 100f },
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(6.dp)
+                        .clip(RoundedCornerShape(3.dp)),
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    text = stringResource(R.string.qs_sub_usage, percent),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
         Row(verticalAlignment = Alignment.CenterVertically) {
             TextButton(onClick = onActivate, enabled = row.enabled && !row.active) {
                 Text(stringResource(R.string.qs_sub_activate))
@@ -551,6 +606,58 @@ private fun FilterRow(
                 },
                 label = { Text(stringResource(label)) },
             )
+        }
+    }
+}
+
+/**
+ * Bulk actions for the configuration list: measure real delay, select or clear
+ * every visible row, and delete the ticked rows.
+ *
+ * "Select all" selects exactly the rows the screen renders right now, so it can
+ * never mark a row the user cannot see. Delete is guarded again by the ViewModel
+ * before anything is removed.
+ */
+@Composable
+private fun BulkActionRow(
+    selectedCount: Int,
+    anySelected: Boolean,
+    testingDelay: Boolean,
+    onTestDelay: () -> Unit,
+    onSelectAll: () -> Unit,
+    onDeselectAll: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        TextButton(onClick = onTestDelay, enabled = !testingDelay) {
+            Text(
+                text = if (testingDelay) {
+                    stringResource(R.string.qs_delay_measuring)
+                } else {
+                    stringResource(R.string.qs_test_delay)
+                },
+            )
+        }
+        if (anySelected) {
+            TextButton(onClick = onDeselectAll) {
+                Text(stringResource(R.string.qs_deselect_all))
+            }
+            TextButton(onClick = onDelete) {
+                Text(
+                    text = stringResource(R.string.qs_delete_selected, selectedCount),
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+        } else {
+            TextButton(onClick = onSelectAll) {
+                Text(stringResource(R.string.qs_select_all))
+            }
         }
     }
 }
@@ -615,12 +722,13 @@ private fun ConfigCard(
     status: QsStatus,
     connected: Boolean,
     busy: Boolean,
+    selected: Boolean,
     onSelect: () -> Unit,
     onAction: () -> Unit,
     onEdit: () -> Unit,
     onCopy: () -> Unit,
-    onDuplicate: () -> Unit,
     onDelete: () -> Unit,
+    onToggleSelection: () -> Unit,
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -637,6 +745,12 @@ private fun ConfigCard(
             modifier = Modifier.padding(start = 4.dp, top = 10.dp, end = 4.dp, bottom = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            // The bulk-delete selection is a separate, explicit control from the
+            // connect radio: ticking a row never changes what will connect.
+            Checkbox(
+                checked = selected,
+                onCheckedChange = { onToggleSelection() },
+            )
             // An explicit control, not a hidden tap target: which configuration
             // will be connected is never ambiguous.
             RadioButton(
@@ -667,6 +781,13 @@ private fun ConfigCard(
                     Spacer(Modifier.width(6.dp))
                     EligibilityBadge(row)
                 }
+                Text(
+                    // The real outbound delay through the server, not a socket
+                    // connect: 0 or a negative last result render as N/A.
+                    text = stringResource(R.string.qs_delay_label, MetricFormat.latency(row.delayMs)),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
             IconButton(onClick = onEdit) {
                 Icon(
@@ -719,12 +840,6 @@ private fun ConfigCard(
                     },
                 )
                 Spacer(Modifier.weight(1f))
-                // The manual duplicate is a separate, labelled action: the
-                // copy icon above is only the clipboard.
-                TextButton(onClick = onDuplicate, enabled = !busy) {
-                    Text(stringResource(R.string.qs_duplicate_manual))
-                }
-                Spacer(Modifier.width(4.dp))
                 Button(
                     onClick = onAction,
                     enabled = !busy,

@@ -47,11 +47,14 @@ class CopyButtonWiringTest {
     }
 
     @Test
-    fun theManualDuplicateStaysASeparateLabelledAction() {
+    fun theManualDuplicateActionIsRemoved() {
+        // "Copy" means the clipboard; the obsolete "Copy to manual" action that
+        // created a profile in the manual group must no longer exist anywhere.
         val ui = source("ui/qsn/QsConfigScreen.kt")
-        assertTrue(ui.contains("TextButton(onClick = onDuplicate"))
-        assertTrue(ui.contains("R.string.qs_duplicate_manual"))
-        assertTrue(source("ui/qsn/QsViewModel.kt").contains("fun duplicateConfigToManual(guid: String)"))
+        assertFalse(ui.contains("TextButton(onClick = onDuplicate"))
+        assertFalse(ui.contains("qs_duplicate_manual"))
+        assertFalse(ui.contains("onDuplicateConfig"))
+        assertFalse(source("ui/qsn/QsViewModel.kt").contains("fun duplicateConfigToManual(guid: String)"))
     }
 
     @Test
