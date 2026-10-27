@@ -37,7 +37,6 @@ private val QSText          = Color(0xFFF0EDE4)   // متن اصلی کرم گر
 private val QSTextSub       = Color(0xFF8A8878)   // متن ثانویه
 private val QSOrange        = Color(0xFFD4833A)   // نارنجی گرم (accent)
 private val QSGreen         = Color(0xFF4CAF82)   // سبز موفقیت
-private val QSRed           = Color(0xFFCF4848)   // قرمز خطا
 
 // ── Dark Color Scheme (QuietStormNG) ─────────────────────────────────────────
 private val QSDarkColors = darkColorScheme(
@@ -77,44 +76,75 @@ private val QSDarkColors = darkColorScheme(
     surfaceContainerHighest= QSSurfaceHigh,
 )
 
-// ── Light Color Scheme (روشن ولی هنوز گرم) ───────────────────────────────────
-private val QSLightColors = lightColorScheme(
-    primary                = Color(0xFF8A6B2A),
-    onPrimary              = Color(0xFFFFFFFF),
-    primaryContainer       = Color(0xFFF5E6C0),
-    onPrimaryContainer     = Color(0xFF3D2800),
-    secondary              = QSOrange,
-    onSecondary            = Color(0xFFFFFFFF),
-    secondaryContainer     = Color(0xFFFFE8D0),
-    onSecondaryContainer   = Color(0xFF3D1800),
-    tertiary               = Color(0xFF2E7A55),
-    onTertiary             = Color(0xFFFFFFFF),
-    tertiaryContainer      = Color(0xFFB8F0D8),
-    onTertiaryContainer    = Color(0xFF003020),
-    error                  = Color(0xFFBA1A1A),
-    onError                = Color(0xFFFFFFFF),
-    errorContainer         = Color(0xFFFFDAD6),
-    onErrorContainer       = Color(0xFF410002),
-    background             = Color(0xFFFAF7F2),   // کرم گرم خیلی ملایم
-    onBackground           = Color(0xFF1A1610),
-    surface                = Color(0xFFFAF7F2),
-    onSurface              = Color(0xFF1A1610),
-    surfaceVariant         = Color(0xFFEDE8DF),
-    onSurfaceVariant       = Color(0xFF4A4540),
-    outline                = Color(0xFF8A8070),
-    outlineVariant         = Color(0xFFD4CCC0),
-    inverseSurface         = Color(0xFF2A2620),
-    inverseOnSurface       = Color(0xFFF5F0E8),
-    inversePrimary         = QSGold,
-    scrim                  = Color(0xFF000000),
-    surfaceTint            = Color(0xFF8A6B2A),
-    surfaceContainerLowest = Color(0xFFFFFFFF),
-    surfaceContainerLow    = Color(0xFFF5F2EC),
-    surfaceContainer       = Color(0xFFEFEBE4),
-    surfaceContainerHigh   = Color(0xFFE9E5DE),
-    surfaceContainerHighest= Color(0xFFE3DFD8),
-)
+// ── Voxora light tokens ───────────────────────────────────────────────────────
+// Source of truth: the Voxora Web design system on this server
+// (/opt/voxora-web/DESIGN.md and /opt/voxora-web/public/styles.css, light block).
+// Every value below is copied from that file, not invented.
+val VoxoraPaper           = Color(0xFFFBF8F2)   // --vx-bg
+val VoxoraSurface         = Color(0xFFFFFFFF)   // --vx-surface
+val VoxoraSurface1        = Color(0xFFF6F1E7)   // --vx-surface-1
+val VoxoraSurface2        = Color(0xFFEFE8DA)   // --vx-surface-2
+val VoxoraWell            = Color(0xFFF3EEE4)   // --vx-well
+val VoxoraInk             = Color(0xFF1C1812)   // --vx-content
+val VoxoraInkStrong       = Color(0xFF14100B)   // --vx-content-strong
+val VoxoraMuted           = Color(0xFF5E564A)   // --vx-muted
+val VoxoraDisabled        = Color(0xFF857C6D)   // --vx-disabled
+val VoxoraLine            = Color(0xFFE3DBCB)   // --vx-line
+val VoxoraLineStrong      = Color(0xFFC9BFAC)   // --vx-line-strong
+val VoxoraGoldInk         = Color(0xFF8A5A00)   // --vx-accent (5.6:1 on paper)
+val VoxoraGoldFill        = Color(0xFFD9A441)   // --vx-accent-fill
+val VoxoraGoldFillHover   = Color(0xFFE3B25A)   // --vx-accent-fill-hover
+val VoxoraGoldContainer   = Color(0xFFF6E7C6)   // --vx-accent-container
+val VoxoraGoldContainerInk= Color(0xFF6B4400)   // --vx-accent-container-ink
+val VoxoraFocus           = Color(0xFFB07A12)   // --vx-focus
+val VoxoraControlLine     = Color(0xFF8F8676)   // --vx-control-line
+val VoxoraLive            = Color(0xFF1F5C66)   // --vx-live
 
+// ── Quiet Storm accents ───────────────────────────────────────────────────────
+// Green is deliberately a step brighter and cleaner than the reference success
+// green (#2B7A4B): a fill for state and a darker ink for text on paper.
+val QsGreenFill = Color(0xFF23A55A)
+val QsGreenInk  = Color(0xFF17703F)
+/** The app red, unchanged from the previous theme. */
+val QsRed = Color(0xFFCF4848)
+
+// ── Light Color Scheme (Voxora Web, paper and saffron) ────────────────────────
+private val QSLightColors = lightColorScheme(
+    primary                = VoxoraGoldInk,
+    onPrimary              = Color(0xFFFFFFFF),
+    primaryContainer       = VoxoraGoldContainer,
+    onPrimaryContainer     = VoxoraGoldContainerInk,
+    secondary              = VoxoraGoldFill,
+    onSecondary            = VoxoraInk,
+    secondaryContainer     = VoxoraSurface2,
+    onSecondaryContainer   = VoxoraInk,
+    tertiary               = QsGreenInk,
+    onTertiary             = Color(0xFFFFFFFF),
+    tertiaryContainer      = Color(0xFFD8F0E2),
+    onTertiaryContainer    = Color(0xFF06331B),
+    error                  = QsRed,
+    onError                = Color(0xFFFFFFFF),
+    errorContainer         = Color(0xFFFADBD8),
+    onErrorContainer       = Color(0xFF5A1410),
+    background             = VoxoraPaper,
+    onBackground           = VoxoraInk,
+    surface                = VoxoraSurface,
+    onSurface              = VoxoraInkStrong,
+    surfaceVariant         = VoxoraWell,
+    onSurfaceVariant       = VoxoraMuted,
+    outline                = VoxoraControlLine,
+    outlineVariant         = VoxoraLine,
+    inverseSurface         = VoxoraInk,
+    inverseOnSurface       = VoxoraPaper,
+    inversePrimary         = VoxoraGoldFill,
+    scrim                  = Color(0xFF000000),
+    surfaceTint            = VoxoraGoldInk,
+    surfaceContainerLowest = Color(0xFFFFFFFF),
+    surfaceContainerLow    = VoxoraPaper,
+    surfaceContainer       = VoxoraSurface1,
+    surfaceContainerHigh   = VoxoraSurface2,
+    surfaceContainerHighest= Color(0xFFE9E2D3),
+)
 // ── Semantic Colors ───────────────────────────────────────────────────────────
 val colorPing            = QSGreen
 val colorPingRed         = QSRed

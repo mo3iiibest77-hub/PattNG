@@ -6,6 +6,9 @@ import com.v2ray.ang.core.CoreConfigManager
 import com.v2ray.ang.core.CoreNativeManager
 import com.v2ray.ang.dto.entities.ProfileItem
 import com.v2ray.ang.handler.MmkvManager
+import com.v2ray.ang.ui.qsn.domain.CandidateMetrics
+import com.v2ray.ang.ui.qsn.domain.CandidateRanker
+import com.v2ray.ang.ui.qsn.domain.Statistics
 import com.v2ray.ang.util.LogUtil
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -22,11 +25,28 @@ import kotlin.random.Random
 
 data class CandidateResult(
     val ip: String,
-    val latencyMs: Long,
+    /** Successful latency samples, in probe order. Empty means the edge never answered. */
+    val latencySamples: List<Long> = emptyList(),
     val uploadKBps: Long = 0L,
     val downloadKBps: Long = 0L,
+    /** Probes that answered with an error rather than a latency. */
+    val failures: Int = 0,
+    /** Probes that produced no answer at all (timeout). */
+    val timeouts: Int = 0,
+    /** True when the bounded traffic test really ran and produced numbers. */
+    val hasTraffic: Boolean = false,
+    /** Ranker score (0..100) at selection time; 0 when this result was not ranked. */
+    val score: Double = 0.0,
+    /** Share of the measurement dimensions that were available (0..100). */
+    val confidence: Int = 0,
 ) {
-    val isSuccess: Boolean get() = latencyMs >= 0
+    /** Median latency, or -1 when the edge never answered. */
+    val latencyMs: Long get() = Statistics.median(latencySamples) ?: -1L
+
+    /** Median absolute deviation of the samples. */
+    val jitterMs: Long get() = Statistics.medianAbsoluteDeviation(latencySamples) ?: 0L
+
+    val isSuccess: Boolean get() = latencySamples.isNotEmpty()
 }
 
 interface ScanCallback {
@@ -41,6 +61,9 @@ object CloudflareScanner {
     private const val DEFAULT_CONCURRENCY = 4
     private const val IPS_PER_CIDR = 2
     private const val MAX_CANDIDATES = 30
+
+    /** Latency probes per candidate: median and jitter need more than one. */
+    private const val LATENCY_SAMPLES = 3
 
     /** GUID prefix used for throw-away profiles created while probing candidates. */
     private const val TEMP_GUID_PREFIX = "cfscanner-"
@@ -345,8 +368,35 @@ object CloudflareScanner {
         }
         try {
             joinAll(*jobs.toTypedArray())
-            val best = results.filter { it.isSuccess }.maxByOrNull { it.uploadKBps }
-            LogUtil.i(TAG, "Done. Best: ${best?.ip} @ ${best?.latencyMs}ms up=${best?.uploadKBps}KB/s")
+            val metrics = results.map { result ->
+                CandidateMetrics(
+                    ip = result.ip,
+                    reachable = result.isSuccess,
+                    latencySamples = result.latencySamples,
+                    downloadKBps = if (result.hasTraffic) result.downloadKBps else null,
+                    uploadKBps = if (result.hasTraffic) result.uploadKBps else null,
+                    successes = result.latencySamples.size,
+                    failures = result.failures,
+                    timeouts = result.timeouts,
+                )
+            }
+            val scored = CandidateRanker.best(metrics)
+            val best = scored?.let { winner ->
+                results.firstOrNull { it.ip == winner.ip }?.copy(
+                    score = winner.score,
+                    confidence = winner.confidence,
+                )
+            }
+            LogUtil.i(
+                TAG,
+                "Done. Candidates=${metrics.size} reachable=" + metrics.count { it.reachable } +
+                    " best=${best?.ip} score=" + (scored?.score?.toInt() ?: -1) +
+                    " conf=" + (scored?.confidence ?: -1) +
+                    " p50=" + (best?.latencyMs ?: -1) + "ms" +
+                    " jitter=" + (best?.jitterMs ?: -1) + "ms" +
+                    " down=" + (best?.downloadKBps ?: -1) + "KB/s" +
+                    " up=" + (best?.uploadKBps ?: -1) + "KB/s",
+            )
             callback.onFinish(best)
         } catch (_: CancellationException) {
             callback.onCancelled()
@@ -373,23 +423,51 @@ object CloudflareScanner {
             }
             MmkvManager.encodeServerConfig(tempGuid, temp)
             val cfg = CoreConfigManager.getV2rayConfig4Speedtest(context, tempGuid)
-            if (!cfg.status) return@withContext CandidateResult(ip, -1L)
-            val latency = CoreNativeManager.measureOutboundDelay(cfg.content, TEST_URL)
-            if (latency < 0) {
-                LogUtil.d(TAG, "$ip -> FAIL (latency)")
-                return@withContext CandidateResult(ip, -1L)
+            if (!cfg.status) {
+                LogUtil.d(TAG, "$ip -> FAIL (config build)")
+                return@withContext CandidateResult(ip, failures = 1)
             }
-            val traffic = com.v2ray.ang.service.RealTrafficSpeedTest.run(cfg.content)
-            if (traffic == null) {
-                LogUtil.d(TAG, "$ip -> FAIL (upload too slow)")
-                return@withContext CandidateResult(ip, -1L)
+
+            // Repeated probes: a single sample cannot express jitter, and one
+            // lucky number must not decide the winner.
+            val samples = ArrayList<Long>(LATENCY_SAMPLES)
+            var failures = 0
+            repeat(LATENCY_SAMPLES) {
+                val latency = CoreNativeManager.measureOutboundDelay(cfg.content, TEST_URL)
+                if (latency >= 0) samples.add(latency) else failures++
             }
-            val uploadKBps = traffic.uploadBytesPerSecond / 1024
-            val downloadKBps = traffic.downloadBytesPerSecond / 1024
-            LogUtil.i(TAG, "$ip -> ${latency}ms up=${uploadKBps}KB/s dn=${downloadKBps}KB/s")
-            CandidateResult(ip, latency, uploadKBps, downloadKBps)
+            if (samples.isEmpty()) {
+                LogUtil.d(TAG, "$ip -> FAIL (no latency sample)")
+                return@withContext CandidateResult(ip, failures = failures, timeouts = failures)
+            }
+
+            // Bounded 1 MiB up + 1 MiB down through the tested config. A
+            // failure here leaves throughput unknown (null for the ranker); it
+            // must not invalidate an edge that clearly answered.
+            val traffic = try {
+                com.v2ray.ang.service.RealTrafficSpeedTest.run(cfg.content)
+            } catch (e: Exception) {
+                null
+            }
+            val uploadKBps = (traffic?.uploadBytesPerSecond ?: 0L) / 1024
+            val downloadKBps = (traffic?.downloadBytesPerSecond ?: 0L) / 1024
+            LogUtil.i(
+                TAG,
+                "$ip -> p50=" + (Statistics.median(samples) ?: -1) + "ms jitter=" +
+                    (Statistics.medianAbsoluteDeviation(samples) ?: -1) + "ms dn=" + downloadKBps +
+                    "KB/s up=" + uploadKBps + "KB/s traffic=" + (traffic != null),
+            )
+            CandidateResult(
+                ip = ip,
+                latencySamples = samples,
+                uploadKBps = uploadKBps,
+                downloadKBps = downloadKBps,
+                failures = failures,
+                timeouts = 0,
+                hasTraffic = traffic != null,
+            )
         } catch (e: Exception) {
-            CandidateResult(ip, -1L)
+            CandidateResult(ip, failures = 1)
         } finally {
             try { MmkvManager.removeServer(tempGuid) } catch (_: Exception) {}
         }

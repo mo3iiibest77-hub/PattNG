@@ -35,9 +35,6 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.v2ray.ang.R
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 
 /**
  * Minimal home screen: one status, one button, one subscription field, one honest progress list.
@@ -450,5 +447,3 @@ private fun stepLabel(step: QsStep): String = when (step) {
     QsStep.Idle -> stringResource(R.string.qs_step_preparing)
 }
 
-private fun formatTimestamp(millis: Long): String =
-    SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(millis))

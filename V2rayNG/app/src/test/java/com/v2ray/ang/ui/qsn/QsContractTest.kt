@@ -129,6 +129,7 @@ class QsContractTest {
             AutoConnectState.ScanningCloudflareIps,
             AutoConnectState.ScanProgress(1, 2),
             AutoConnectState.SelectingBestIp("1.1.1.1"),
+            AutoConnectState.ReusingSavedIp("104.16.0.1"),
             AutoConnectState.StartingVpn,
             AutoConnectState.Reconnecting(1, "retry"),
             AutoConnectState.Failed("boom"),

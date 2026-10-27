@@ -16,6 +16,12 @@ import com.v2ray.ang.helper.MessageHelper
 import com.v2ray.ang.senpai.CandidateResult
 import com.v2ray.ang.senpai.CloudflareScanner
 import com.v2ray.ang.senpai.ScanCallback
+import com.v2ray.ang.ui.qsn.data.IpHealthChecker
+import com.v2ray.ang.ui.qsn.data.QsPrefs
+import com.v2ray.ang.ui.qsn.domain.IpFingerprint
+import com.v2ray.ang.ui.qsn.domain.IpSelection
+import com.v2ray.ang.ui.qsn.domain.ScanRangePlanner
+import com.v2ray.ang.ui.qsn.domain.SubscriptionRules
 import com.v2ray.ang.util.LogUtil
 import com.v2ray.ang.util.Utils
 import kotlinx.coroutines.CancellationException
@@ -51,6 +57,9 @@ sealed interface AutoConnectState {
 
     /** Scanner progress: [done] of [total] candidates probed so far. */
     data class ScanProgress(val done: Int, val total: Int) : AutoConnectState
+
+    /** A previously validated edge is being reused, so no scan runs. */
+    data class ReusingSavedIp(val ip: String) : AutoConnectState
     /** VPN service has been asked to start; awaiting core confirmation. */
     data object StartingVpn : AutoConnectState
     /** Core confirmed running via MSG_STATE_RUNNING broadcast. */
@@ -189,6 +198,47 @@ class ConnectionOrchestrator {
     }
 
     /**
+     * Runs only the Cloudflare scan for one configuration, without touching the
+     * tunnel. Used by the IP Ranges screen so the user can measure candidates
+     * on demand instead of waiting for a connection attempt.
+     *
+     * The winner is persisted exactly as in a normal connect, so the next
+     * connect reuses it instead of scanning again.
+     *
+     * @return the winning candidate, or null when nothing answered or the
+     *   caller cancelled.
+     */
+    suspend fun scanOnly(
+        context: Context,
+        guid: String,
+        profile: ProfileItem,
+        onState: (AutoConnectState) -> Unit = {},
+    ): CandidateResult? {
+        if (!mutex.tryLock()) {
+            onState(AutoConnectState.Failed("Another operation is already running"))
+            return null
+        }
+        cancelled = false
+        return try {
+            withContext(Dispatchers.IO) {
+                val fingerprint = fingerprintFor(guid, profile)
+                onState(AutoConnectState.ScanningCloudflareIps)
+                scanForBestIp(context, guid, onState, fingerprint)
+            }
+        } catch (e: CancellationException) {
+            cancel()
+            throw e
+        } catch (e: Exception) {
+            LogUtil.e(TAG, "scanOnly failed: " + e.javaClass.simpleName)
+            onState(AutoConnectState.Failed("Scan failed"))
+            null
+        } finally {
+            cleanup(context)
+            mutex.unlock()
+        }
+    }
+
+    /**
      * Cancels an in-progress auto-connect. Safe to call when nothing is running.
      */
     fun cancel() {
@@ -204,19 +254,49 @@ class ConnectionOrchestrator {
         context: Context,
         onState: (AutoConnectState) -> Unit,
     ): AutoConnectResult {
-        // 1. Pick an enabled subscription.
+        // 1. An explicitly selected configuration wins over every subscription.
+        //    It may be a manual import, so it has to work with no subscription
+        //    at all, and selecting it must not trigger a refresh the user did
+        //    not ask for.
+        val pinnedGuid = QsPrefs.pinnedGuid()
+        if (pinnedGuid != null) {
+            val pinned = MmkvManager.decodeServerConfig(pinnedGuid)
+            when {
+                pinned == null -> {
+                    // The configuration was deleted: drop the stale pin and
+                    // fall through to the subscription path.
+                    QsPrefs.setPinnedGuid(null)
+                    LogUtil.i(TAG, "Pinned configuration no longer exists")
+                }
+
+                !AutoConfigFilter.isEligible(pinned) -> {
+                    onState(
+                        AutoConnectState.Failed(
+                            "The selected configuration cannot be used for Cloudflare scanning"
+                        )
+                    )
+                    return AutoConnectResult.Failure("Selected configuration is not eligible")
+                }
+
+                else -> return connectSelected(context, pinnedGuid, pinned, onState)
+            }
+        }
+
+        // 2. Pick an enabled subscription.
         val subs = MmkvManager.decodeSubscriptions()
         if (subs.isEmpty()) {
             onState(AutoConnectState.WaitingForSubscription)
             return AutoConnectResult.Failure("No subscription configured")
         }
-        val targetSub = subs.firstOrNull { it.subscription.enabled }
+        // The panel and the flow must agree on which subscription is active,
+        // so both use the same pure rule.
+        val targetSub = SubscriptionRules.chooseActive(subs, QsPrefs.activeSubscriptionGuid())
             ?: run {
                 onState(AutoConnectState.WaitingForSubscription)
                 return AutoConnectResult.Failure("No enabled subscription configured")
             }
 
-        // 2. Refresh it.
+        // 3. Refresh it.
         onState(AutoConnectState.FetchingSubscription)
         val updateResult = try {
             AngConfigManager.updateConfigViaSub(targetSub)
@@ -229,7 +309,7 @@ class ConnectionOrchestrator {
         }
         if (cancelled) return cancelResult(onState)
 
-        // 3. Decode stored profiles, keeping GUID/profile pairing intact.
+        // 4. Decode stored profiles, keeping GUID/profile pairing intact.
         onState(AutoConnectState.ParsingConfigurations)
         val allGuids = MmkvManager.decodeServerList(targetSub.guid)
         if (allGuids.isEmpty()) {
@@ -240,7 +320,7 @@ class ConnectionOrchestrator {
             return AutoConnectResult.Failure("All configs failed to decode")
         }
 
-        // 4. Filter, preserving pairs.
+        // 5. Filter, preserving pairs.
         onState(AutoConnectState.FilteringConfigurations)
         val eligible = pairs.filter { AutoConfigFilter.isEligible(it.second) }
         if (eligible.isEmpty()) {
@@ -249,30 +329,48 @@ class ConnectionOrchestrator {
             )
         }
 
-        // 5. Select the first eligible config; the GUID comes from the same pair.
+        // 6. Use the first eligible config; the GUID comes from the same pair.
         val (selectedGuid, selected) = eligible.first()
+        return connectSelected(context, selectedGuid, selected, onState)
+    }
+
+    /**
+     * Applies the connection settings, resolves the edge and starts the core
+     * for one configuration.
+     *
+     * Shared by the pinned-configuration path and the subscription path so both
+     * behave identically from this point on. The caller owns cancellation and
+     * eligibility checks.
+     */
+    private suspend fun connectSelected(
+        context: Context,
+        selectedGuid: String,
+        selected: ProfileItem,
+        onState: (AutoConnectState) -> Unit,
+    ): AutoConnectResult {
         MmkvManager.setSelectServer(selectedGuid)
         if (cancelled) return cancelResult(onState)
 
-        // 6. Fill blank connection settings without overwriting existing ones.
+        // Fill blank connection settings without overwriting existing ones.
         onState(AutoConnectState.ApplyingConnectionSettings)
         ensureSettings(selectedGuid, selected)
 
-        // 7. Scan for the best Cloudflare edge IP.
-        onState(AutoConnectState.ScanningCloudflareIps)
-        val bestIp = scanForBestIp(context, selectedGuid, onState)
+        // Resolve the edge IP. A valid saved selection is reused; a scan only
+        // runs when there is nothing usable to reuse.
+        val fingerprint = fingerprintFor(selectedGuid, selected)
+        val bestIp = resolveEdgeIp(context, selectedGuid, selected, fingerprint, onState)
         if (cancelled) return cancelResult(onState)
         if (bestIp == null) {
             return AutoConnectResult.Failure("Cloudflare scan found no working IP")
         }
 
-        // 8. Apply it (only server + blank fields change).
+        // Apply it (only server + blank fields change).
         onState(AutoConnectState.SelectingBestIp(bestIp))
         if (!CloudflareScanner.applyBestIp(selectedGuid, bestIp)) {
             return AutoConnectResult.Failure("Failed to apply best IP to profile")
         }
 
-        // 9. Make the core run this exact config.
+        // Make the core run this exact config.
         // A missing VPN consent makes CoreVpnService.setupVpnService() return
         // false and stopSelf() WITHOUT broadcasting START_FAILURE, so waiting
         // would burn the full 30 s timeout and then report a misleading core
@@ -322,7 +420,7 @@ class ConnectionOrchestrator {
      * Runs [CloudflareScanner] and awaits its callback.
      *
      * Distinguishes three outcomes without polling:
-     *  - onFinish(best)  -> best.ip
+     *  - onFinish(best)  -> the winning candidate
      *  - onFinish(null)  -> null, immediately (scan finished with no winner)
      *  - onCancelled()   -> null, immediately
      *
@@ -333,14 +431,17 @@ class ConnectionOrchestrator {
         context: Context,
         guid: String,
         onState: (AutoConnectState) -> Unit,
-    ): String? {
+        fingerprint: String,
+    ): CandidateResult? {
         val deferred = CompletableDeferred<CandidateResult?>()
         scanDeferred = deferred
 
         CloudflareScanner.scan(
             context = context,
             guid = guid,
-            candidates = emptyList(),
+            // Empty means the scanner falls back to the bundled Cloudflare
+            // ranges; a non-empty list means the user configured ranges.
+            candidates = ScanRangePlanner.plan(QsPrefs.loadRanges()),
             callback = object : ScanCallback {
                 override fun onProgress(result: CandidateResult, done: Int, total: Int) {
                     onState(AutoConnectState.ScanProgress(done, total))
@@ -361,8 +462,81 @@ class ConnectionOrchestrator {
             CloudflareScanner.cancel()
         }
         scanDeferred = null
-        return result?.ip
+        val winner = result ?: return null
+
+        // Persist the winner with enough metadata to skip the next scan.
+        QsPrefs.saveSelection(
+            IpSelection(
+                fingerprint = fingerprint,
+                ip = winner.ip,
+                score = winner.score,
+                latencyMs = winner.latencyMs.takeIf { it >= 0 },
+                jitterMs = winner.jitterMs,
+                downloadKBps = if (winner.hasTraffic) winner.downloadKBps else null,
+                uploadKBps = if (winner.hasTraffic) winner.uploadKBps else null,
+                confidence = winner.confidence,
+                validatedAt = System.currentTimeMillis(),
+            )
+        )
+        QsPrefs.markScanned(System.currentTimeMillis())
+        return winner
     }
+
+    /**
+     * Reuses the saved edge when it is still valid, otherwise scans.
+     *
+     * The cache key covers the transport identity of the profile and the
+     * enabled range set, so editing the config or changing the ranges
+     * invalidates it. A fresh selection is reused with no network round trip,
+     * which is what makes a reconnect cheap.
+     */
+    private suspend fun resolveEdgeIp(
+        context: Context,
+        guid: String,
+        profile: ProfileItem,
+        fingerprint: String,
+        onState: (AutoConnectState) -> Unit,
+    ): String? {
+        val port = profile.serverPort?.toIntOrNull() ?: 0
+        val saved = QsPrefs.loadSelection()
+        val now = System.currentTimeMillis()
+        if (saved != null && saved.isUsable(now, fingerprint)) {
+            if (saved.isFresh(now)) {
+                LogUtil.i(TAG, "Reusing saved edge without a scan")
+                onState(AutoConnectState.ReusingSavedIp(saved.ip))
+                return saved.ip
+            }
+            if (IpHealthChecker.isHealthy(saved.ip, port, profile.sni)) {
+                LogUtil.i(TAG, "Saved edge passed the bounded health check")
+                onState(AutoConnectState.ReusingSavedIp(saved.ip))
+                QsPrefs.saveSelection(saved.copy(validatedAt = now))
+                return saved.ip
+            }
+            LogUtil.w(TAG, "Saved edge failed the health check; rescanning")
+            QsPrefs.clearSelection()
+        }
+        onState(AutoConnectState.ScanningCloudflareIps)
+        return scanForBestIp(context, guid, onState, fingerprint)?.ip
+    }
+
+    /**
+     * Builds the cache key. The server field is excluded on purpose: applying
+     * the chosen IP rewrites it, so including it would invalidate the entry the
+     * moment it is used.
+     */
+    private fun fingerprintFor(guid: String, profile: ProfileItem): String =
+        IpFingerprint.of(
+            guid = guid,
+            configType = profile.configType.name,
+            port = profile.serverPort?.toIntOrNull() ?: 0,
+            network = profile.network.orEmpty(),
+            security = profile.security.orEmpty(),
+            sni = profile.sni,
+            host = profile.host,
+            path = profile.path,
+            xhttpMode = profile.xhttpMode,
+            rangeFingerprint = ScanRangePlanner.fingerprint(QsPrefs.loadRanges()),
+        )
 
     /**
      * Ensures the core is running the currently selected config.

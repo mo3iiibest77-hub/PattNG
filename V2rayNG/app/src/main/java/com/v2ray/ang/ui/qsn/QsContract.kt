@@ -1,6 +1,11 @@
 package com.v2ray.ang.ui.qsn
 
 import com.v2ray.ang.ui.connect.AutoConnectState
+import com.v2ray.ang.ui.qsn.domain.ConfigFilter
+import com.v2ray.ang.ui.qsn.domain.ConfigFilterEngine
+import com.v2ray.ang.ui.qsn.domain.ConfigRow
+import com.v2ray.ang.ui.qsn.domain.ScanRange
+import com.v2ray.ang.ui.qsn.domain.SubscriptionRow
 
 /**
  * Connection state shown by the minimal Quiet Storm NG home screen.
@@ -61,9 +66,43 @@ data class QsUiState(
     val lastUpdated: Long = -1L,
     val refreshing: Boolean = false,
     val inputError: String? = null,
+    /** Every stored configuration, already mapped to a credential-free row. */
+    val configRows: List<ConfigRow> = emptyList(),
+    /** Selected filter chips; empty means [ConfigFilter.All]. */
+    val filters: Set<ConfigFilter> = emptySet(),
+    /** All subscriptions, active first. */
+    val subscriptions: List<SubscriptionRow> = emptyList(),
+    val subscriptionsExpanded: Boolean = false,
+    /** Configured CIDR ranges, in insertion order. */
+    val ranges: List<ScanRange> = emptyList(),
+    /** Persian/English text explaining why the last range was rejected. */
+    val rangeError: String? = null,
+    /** Text explaining why the last manual import was rejected. */
+    val importError: String? = null,
+    val importOpen: Boolean = false,
+    /** Configuration awaiting delete confirmation. */
+    val pendingDeleteGuid: String? = null,
+    /** Subscription awaiting delete confirmation. */
+    val pendingDeleteSubscription: String? = null,
+    /** True while a standalone scan started from the IP Ranges screen runs. */
+    val scanningNow: Boolean = false,
+    /** Timestamp of the last successful scan, 0 when none ever ran. */
+    val lastScanAt: Long = 0L,
 ) {
     /** True while a connect attempt is in flight; the button becomes Cancel. */
     val connecting: Boolean get() = status == QsStatus.Connecting
+
+    /** Rows that pass every selected filter, in storage order. */
+    val filteredConfigs: List<ConfigRow>
+        get() = ConfigFilterEngine.apply(filters, configRows)
+
+    /** How many stored configurations the automatic flow could actually use. */
+    val eligibleCount: Int
+        get() = configRows.count { it.eligible }
+
+    /** True when there is anything to connect with. */
+    val hasAnyConfig: Boolean
+        get() = configRows.isNotEmpty()
 
     /** Progress of the Cloudflare scan in 0..1, or null when not scanning. */
     val scanFraction: Float?
@@ -119,6 +158,13 @@ internal fun QsUiState.withConnectState(state: AutoConnectState): QsUiState = wh
         busy = true,
         scanDone = state.done,
         scanTotal = state.total,
+    )
+
+    is AutoConnectState.ReusingSavedIp -> copy(
+        status = QsStatus.Connecting,
+        step = QsStep.SelectingIp,
+        busy = true,
+        message = "Using saved IP " + state.ip,
     )
 
     is AutoConnectState.SelectingBestIp -> copy(
@@ -206,4 +252,11 @@ internal object QsUrlValidator {
         }
         return if (hasHost || lenient.containsMatchIn(trimmed)) trimmed else null
     }
+}
+
+/** Localised timestamp used by every Quiet Storm NG list. */
+internal fun formatTimestamp(millis: Long): String {
+    if (millis <= 0L) return "\u2014"
+    return java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.getDefault())
+        .format(java.util.Date(millis))
 }

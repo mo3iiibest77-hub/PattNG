@@ -1,5 +1,6 @@
 package com.v2ray.ang.ui.qsn
 
+import android.app.Activity
 import android.net.VpnService
 import android.os.Bundle
 import androidx.activity.result.contract.ActivityResultContracts
@@ -17,6 +18,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -24,21 +26,28 @@ import com.v2ray.ang.AngApplication
 import com.v2ray.ang.R
 import com.v2ray.ang.core.LauncherManager
 import com.v2ray.ang.enums.PermissionType
+import com.v2ray.ang.handler.MmkvManager
 import com.v2ray.ang.handler.SettingsChangeManager
 import com.v2ray.ang.handler.SettingsManager
 import com.v2ray.ang.ui.base.HelperBaseComponentActivity
 import com.v2ray.ang.ui.main.MainRepository
 import com.v2ray.ang.ui.perappproxy.PerAppProxyViewModel
+import com.v2ray.ang.ui.server.ProfileEditorResult
+import com.v2ray.ang.util.LogUtil
+
+private const val TAG = "QuietStormActivity"
 
 /**
  * Launcher activity of Quiet Storm NG.
  *
- * Two destinations only: Connection and Apps. The full PattNG UI (MainActivity) still exists and
- * keeps every internal capability, but it is no longer the launcher entry point.
+ * Four destinations: Connection, Configurations, IP Ranges and Apps. The full
+ * PattNG UI (MainActivity) still exists and keeps every internal capability, but
+ * it is no longer the launcher entry point.
  *
- * State lives in [QsViewModel] / [PerAppProxyViewModel], so a rotation or a recreate does not
- * lose the in-flight connection state, and the real daemon state is re-probed on every cold
- * start instead of being assumed.
+ * State lives in [QsViewModel] / [PerAppProxyViewModel], so a rotation or a
+ * recreate does not lose the in-flight connection state, and the real daemon
+ * state is re-probed on every cold start instead of being assumed. Switching
+ * tabs never touches the tunnel: it only changes which screen is composed.
  */
 class QuietStormActivity : HelperBaseComponentActivity() {
 
@@ -57,6 +66,15 @@ class QuietStormActivity : HelperBaseComponentActivity() {
             }
         }
 
+    /** The protocol editors report back with [ProfileEditorResult.EXTRA_ACTION]. */
+    private val profileEditorLauncher =
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            if (result.resultCode == Activity.RESULT_OK) {
+                // The editor may have renamed, retargeted or deleted the profile.
+                qsViewModel.reload()
+            }
+        }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         appsViewModel.loadApps(this)
@@ -67,6 +85,8 @@ class QuietStormActivity : HelperBaseComponentActivity() {
     override fun onResume() {
         super.onResume()
         applyPendingServiceRestart()
+        // A profile may have changed while this activity was in the background.
+        qsViewModel.reload()
     }
 
     /**
@@ -103,6 +123,25 @@ class QuietStormActivity : HelperBaseComponentActivity() {
         qsViewModel.connect()
     }
 
+    /** Opens the full editor for one configuration and refreshes on return. */
+    private fun openEditor(guid: String) {
+        val profile = MmkvManager.decodeServerConfig(guid)
+        if (profile == null) {
+            LogUtil.w(TAG, "openEditor: configuration is gone")
+            qsViewModel.reload()
+            return
+        }
+        profileEditorLauncher.launch(
+            ProfileEditorResult.editIntent(
+                context = this,
+                guid = guid,
+                profile = profile,
+                isRunning = qsViewModel.uiState.value.coreRunning,
+                subscriptionId = profile.subscriptionId,
+            )
+        )
+    }
+
     @Composable
     override fun ScreenContent() {
         val state by qsViewModel.uiState.collectAsStateWithLifecycle()
@@ -115,6 +154,7 @@ class QuietStormActivity : HelperBaseComponentActivity() {
         var tab by rememberSaveable { mutableStateOf(0) }
 
         Scaffold(
+            containerColor = Color.Transparent,
             bottomBar = {
                 NavigationBar {
                     NavigationBarItem(
@@ -135,6 +175,31 @@ class QuietStormActivity : HelperBaseComponentActivity() {
                         selected = tab == 1,
                         onClick = {
                             tab = 1
+                            qsViewModel.reload()
+                        },
+                        icon = {
+                            Icon(
+                                painter = painterResource(R.drawable.ic_subscriptions_24dp),
+                                contentDescription = null,
+                            )
+                        },
+                        label = { Text(stringResource(R.string.qs_tab_configs)) },
+                    )
+                    NavigationBarItem(
+                        selected = tab == 2,
+                        onClick = { tab = 2 },
+                        icon = {
+                            Icon(
+                                painter = painterResource(R.drawable.ic_scan_24dp),
+                                contentDescription = null,
+                            )
+                        },
+                        label = { Text(stringResource(R.string.qs_tab_ranges)) },
+                    )
+                    NavigationBarItem(
+                        selected = tab == 3,
+                        onClick = {
+                            tab = 3
                             appsViewModel.loadApps(this@QuietStormActivity)
                         },
                         icon = {
@@ -148,36 +213,83 @@ class QuietStormActivity : HelperBaseComponentActivity() {
                 }
             },
         ) { padding ->
-            Box(modifier = Modifier.padding(padding)) {
-                if (tab == 0) {
-                    QsConnectScreen(
-                        state = state,
-                        onUrlChange = { qsViewModel.onSubscriptionInputChange(it) },
-                        onSave = { qsViewModel.saveSubscription(state.subscriptionUrl) },
-                        onUpdate = { qsViewModel.refreshSubscription() },
-                        onConnect = { requestConnect() },
-                        onDisconnect = { qsViewModel.disconnect() },
-                        onCancel = { qsViewModel.cancel() },
-                        onDismissMessage = { qsViewModel.dismissMessage() },
-                    )
-                } else {
-                    QsAppsScreen(
-                        apps = apps,
-                        isLoading = appsLoading,
-                        selected = selectedApps,
-                        enabled = perAppEnabled,
-                        bypass = bypassApps,
-                        onEnabledChange = {
-                            appsViewModel.setPerAppProxyEnabled(it)
-                            SettingsChangeManager.makeRestartService()
-                        },
-                        onBypassChange = {
-                            appsViewModel.setBypassAppsEnabled(it)
-                            SettingsChangeManager.makeRestartService()
-                        },
-                        onToggle = { appsViewModel.toggle(it) },
-                        onSearch = { appsViewModel.filterApps(it) },
-                    )
+            QsBackground(modifier = Modifier.padding(padding)) {
+                Box {
+                    when (tab) {
+                        0 -> QsConnectScreen(
+                            state = state,
+                            onUrlChange = { qsViewModel.onSubscriptionInputChange(it) },
+                            onSave = { qsViewModel.saveSubscription(state.subscriptionUrl) },
+                            onUpdate = { qsViewModel.refreshSubscription() },
+                            onConnect = { requestConnect() },
+                            onDisconnect = { qsViewModel.disconnect() },
+                            onCancel = { qsViewModel.cancel() },
+                            onDismissMessage = { qsViewModel.dismissMessage() },
+                        )
+
+                        1 -> QsConfigScreen(
+                            state = state,
+                            onToggleSubscriptions = { qsViewModel.toggleSubscriptionsExpanded() },
+                            onAddSubscription = { remarks, url ->
+                                qsViewModel.addSubscription(remarks, url)
+                            },
+                            onRenameSubscription = { guid, name ->
+                                qsViewModel.renameSubscription(guid, name)
+                            },
+                            onUpdateSubscription = { qsViewModel.updateSubscription(it) },
+                            onUpdateAll = { qsViewModel.updateAllSubscriptions() },
+                            onToggleSubscription = { guid, enabled ->
+                                qsViewModel.setSubscriptionEnabled(guid, enabled)
+                            },
+                            onActivateSubscription = { qsViewModel.setActiveSubscription(it) },
+                            onRequestDeleteSubscription = {
+                                qsViewModel.requestDeleteSubscription(it)
+                            },
+                            onDeleteSubscription = { qsViewModel.deleteSubscription(it) },
+                            onDismissDeleteSubscription = {
+                                qsViewModel.dismissDeleteSubscription()
+                            },
+                            onToggleFilter = { qsViewModel.toggleFilter(it) },
+                            onClearFilters = { qsViewModel.clearFilters() },
+                            onSelectConfig = { qsViewModel.selectConfig(it) },
+                            onEditConfig = { openEditor(it) },
+                            onDuplicateConfig = { qsViewModel.duplicateConfigToManual(it) },
+                            onRequestDeleteConfig = { qsViewModel.requestDeleteConfig(it) },
+                            onDeleteConfig = { qsViewModel.deleteConfig(it) },
+                            onDismissDeleteConfig = { qsViewModel.dismissDeleteConfig() },
+                            onOpenImport = { qsViewModel.openImport() },
+                            onCloseImport = { qsViewModel.closeImport() },
+                            onImport = { qsViewModel.importManualConfig(it) },
+                        )
+
+                        2 -> QsRangesScreen(
+                            state = state,
+                            onAdd = { qsViewModel.addRange(it) },
+                            onRemove = { qsViewModel.removeRange(it) },
+                            onToggle = { qsViewModel.toggleRange(it) },
+                            onScanNow = { qsViewModel.scanNow() },
+                            onRescanNext = { qsViewModel.rescanOnNextConnect() },
+                            onDismissMessage = { qsViewModel.dismissMessage() },
+                        )
+
+                        else -> QsAppsScreen(
+                            apps = apps,
+                            isLoading = appsLoading,
+                            selected = selectedApps,
+                            enabled = perAppEnabled,
+                            bypass = bypassApps,
+                            onEnabledChange = {
+                                appsViewModel.setPerAppProxyEnabled(it)
+                                SettingsChangeManager.makeRestartService()
+                            },
+                            onBypassChange = {
+                                appsViewModel.setBypassAppsEnabled(it)
+                                SettingsChangeManager.makeRestartService()
+                            },
+                            onToggle = { appsViewModel.toggle(it) },
+                            onSearch = { appsViewModel.filterApps(it) },
+                        )
+                    }
                 }
             }
         }
