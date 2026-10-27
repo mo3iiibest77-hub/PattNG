@@ -4,12 +4,14 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.net.VpnService
 import androidx.core.content.ContextCompat
 import com.v2ray.ang.AppConfig
 import com.v2ray.ang.core.LauncherManager
 import com.v2ray.ang.dto.entities.ProfileItem
 import com.v2ray.ang.handler.AngConfigManager
 import com.v2ray.ang.handler.MmkvManager
+import com.v2ray.ang.handler.SettingsManager
 import com.v2ray.ang.helper.MessageHelper
 import com.v2ray.ang.senpai.CandidateResult
 import com.v2ray.ang.senpai.CloudflareScanner
@@ -18,8 +20,10 @@ import com.v2ray.ang.util.LogUtil
 import com.v2ray.ang.util.Utils
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 
 /**
@@ -44,6 +48,9 @@ sealed interface AutoConnectState {
     data object ScanningCloudflareIps : AutoConnectState
     /** Scanner finished; writing best IP to the profile. */
     data class SelectingBestIp(val bestIp: String) : AutoConnectState
+
+    /** Scanner progress: [done] of [total] candidates probed so far. */
+    data class ScanProgress(val done: Int, val total: Int) : AutoConnectState
     /** VPN service has been asked to start; awaiting core confirmation. */
     data object StartingVpn : AutoConnectState
     /** Core confirmed running via MSG_STATE_RUNNING broadcast. */
@@ -158,8 +165,16 @@ class ConnectionOrchestrator {
         }
         cancelled = false
         return try {
-            runFlow(context, onState)
+            // The subscription fetch is blocking network I/O, so the flow must
+            // never run on the caller thread (a caller on Dispatchers.Main
+            // would ANR). Dispatching here makes that impossible to get wrong.
+            withContext(Dispatchers.IO) { runFlow(context, onState) }
         } catch (e: CancellationException) {
+            // The caller went away mid-flow (activity destroyed, scope
+            // cancelled). CloudflareScanner runs in its own scope, so it must be
+            // cancelled explicitly or it keeps probing and writing temp
+            // profiles after nobody is listening.
+            cancel()
             throw e
         } catch (e: Exception) {
             // Never leak exception text: it may embed the subscription URL,
@@ -245,7 +260,7 @@ class ConnectionOrchestrator {
 
         // 7. Scan for the best Cloudflare edge IP.
         onState(AutoConnectState.ScanningCloudflareIps)
-        val bestIp = scanForBestIp(context, selectedGuid)
+        val bestIp = scanForBestIp(context, selectedGuid, onState)
         if (cancelled) return cancelResult(onState)
         if (bestIp == null) {
             return AutoConnectResult.Failure("Cloudflare scan found no working IP")
@@ -258,6 +273,14 @@ class ConnectionOrchestrator {
         }
 
         // 9. Make the core run this exact config.
+        // A missing VPN consent makes CoreVpnService.setupVpnService() return
+        // false and stopSelf() WITHOUT broadcasting START_FAILURE, so waiting
+        // would burn the full 30 s timeout and then report a misleading core
+        // start failure. Fail fast instead.
+        if (SettingsManager.isVpnMode() && VpnService.prepare(context) != null) {
+            onState(AutoConnectState.Failed("VPN permission required"))
+            return AutoConnectResult.Failure("VPN permission required")
+        }
         onState(AutoConnectState.StartingVpn)
         val connected = ensureCoreRunning(context, selectedGuid)
         if (cancelled) return cancelResult(onState)
@@ -306,7 +329,11 @@ class ConnectionOrchestrator {
      * If the safety timeout fires first, the scan is cancelled so it does not
      * keep running in its own scope after the flow has given up.
      */
-    private suspend fun scanForBestIp(context: Context, guid: String): String? {
+    private suspend fun scanForBestIp(
+        context: Context,
+        guid: String,
+        onState: (AutoConnectState) -> Unit,
+    ): String? {
         val deferred = CompletableDeferred<CandidateResult?>()
         scanDeferred = deferred
 
@@ -315,7 +342,9 @@ class ConnectionOrchestrator {
             guid = guid,
             candidates = emptyList(),
             callback = object : ScanCallback {
-                override fun onProgress(result: CandidateResult, done: Int, total: Int) {}
+                override fun onProgress(result: CandidateResult, done: Int, total: Int) {
+                    onState(AutoConnectState.ScanProgress(done, total))
+                }
                 override fun onFinish(best: CandidateResult?) {
                     deferred.complete(best)
                 }
