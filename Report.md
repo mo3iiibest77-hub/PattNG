@@ -1240,10 +1240,49 @@ git diff --cached --name-only    # explicit staging only
 
 ### 15.9 CI result
 
-Recorded in the next commit after the workflow finished; see the table below.
+The first two attempts failed and are recorded here rather than hidden.
 
-| Item | Result |
+| Run | Commit | Result | Cause |
+|---|---|---|---|
+| [40448519357](https://github.com/mo3iiibest77-hub/PattNG/actions/runs/40448519357) | `9d9dc88a` | FAIL | `MainViewModel` switches exhaustively over `MainServiceEvent`; the new `TrafficUpdate` event had no branch. Fixed in `15013946`. |
+| [40448839787](https://github.com/mo3iiibest77-hub/PattNG/actions/runs/40448839787) | `15013946` | FAIL | `QsContractTest.progressStepsAreOrderedAndExcludeIdle` still expected 7 steps. The list now really has 10. Fixed in `89936e94`. |
+| [40449218538](https://github.com/mo3iiibest77-hub/PattNG/actions/runs/40449218538) | `89936e94` | **PASS** (4 m 37 s) | — |
+
+Build of record: [run 40449218538](https://github.com/mo3iiibest77-hub/PattNG/actions/runs/40449218538),
+commit `89936e9419bf46cae971adefbee1d4f4e9b7aa5f`.
+
+| Step | Result |
 |---|---|
-| Unit tests | NOT RUN at the time of writing |
-| Playstore release build | NOT RUN at the time of writing |
-| APK artifacts | NOT RUN at the time of writing |
+| Run unit tests (`testPlaystoreDebugUnitTest`) | PASS |
+| Build APK (`assemblePlaystoreRelease`) | PASS |
+| Verify APK identity, signature and features | PASS |
+| Upload arm64-v8a / armeabi-v7a / universal | PASS (three artifacts, no `fdroid` folder) |
+
+The runner's executed-test count is not exposed by the public API for this run, so it is not
+reported here rather than guessed. The test source tree contains 308 `@Test` annotations at this
+commit (static count with `grep -rc`), including the ten new classes listed in §15.5.
+
+### 15.10 APKs produced by the build of record
+
+| ABI | Artifact | File | Bytes | SHA-256 |
+|---|---|---|---|---|
+| arm64-v8a | `arm64-v8a` | `QuietStormNG_2.3.4_arm64-v8a.apk` | 32,905,081 | `0244784039d6cc3daea4e589b7081f37108011f704ad7fb28e21afd21168b641` |
+| armeabi-v7a | `armeabi-v7a` | `QuietStormNG_2.3.4_armeabi-v7a.apk` | 33,297,511 | `4b816523cc61e2d7e2f746d6eaac0a584eb356b837f4516d8c06f97265f892aa` |
+| universal | `universal-apk` | `QuietStormNG_2.3.4_universal.apk` | 72,701,566 | `a78d23c258862c3a5a161a8195e116433b84cccdb7da0fb33a1bc94dc6c3de2b` |
+
+Each artifact contains exactly one APK. All three were downloaded from the run and inspected
+locally:
+
+- `AndroidManifest.xml` of each file declares `com.quietstorm.ng`;
+- the dex of each file contains the new classes, which proves the installed app is not an older
+  build: `EdgeApplication` (7 hits in arm64 and armeabi-v7a), `QsScanScreen` (25 hits in arm64 and
+  universal), `qsEdgeIp`, `TrafficSnapshot` and `ConfigGrouping`.
+
+```sh
+unzip -p QuietStormNG_2.3.4_arm64-v8a.apk 'classes*.dex' | grep -ac EdgeApplication   # 7
+unzip -p QuietStormNG_2.3.4_arm64-v8a.apk 'classes*.dex' | grep -ac QsScanScreen       # 25
+unzip -p QuietStormNG_2.3.4_arm64-v8a.apk AndroidManifest.xml | strings -e l | grep -a com.quietstorm.ng
+```
+
+The report itself is committed after the build, so the documentation commit is newer than
+`89936e94`; application code is identical in both.
