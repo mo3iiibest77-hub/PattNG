@@ -43,6 +43,30 @@ object CoreNativeManager {
         }
     }
 
+    /** Cached answer, so the probe runs once per process. */
+    @Volatile
+    private var nativeAvailable: Boolean? = null
+
+    /**
+     * True when the core library can be loaded and called in this process.
+     *
+     * Loading a native library fails with an [Error] (UnsatisfiedLinkError,
+     * ExceptionInInitializerError), not an Exception, so callers that touch the
+     * core from a non-core process need a way to ask first instead of finding
+     * out by dying.
+     */
+    fun isNativeAvailable(): Boolean {
+        nativeAvailable?.let { return it }
+        val available = try {
+            Libv2ray.checkVersionX().isNotEmpty()
+        } catch (t: Throwable) {
+            LogUtil.e(AppConfig.TAG, "V2Ray core library unavailable: " + t.javaClass.name)
+            false
+        }
+        nativeAvailable = available
+        return available
+    }
+
     fun reconcileBrowserDialer(dialerAddr: String) {
         try {
             Libv2ray.reconcileBrowserDialer(dialerAddr)

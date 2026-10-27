@@ -10,6 +10,7 @@ import com.v2ray.ang.handler.AppLocaleManager
 import com.v2ray.ang.handler.MmkvManager
 import com.v2ray.ang.handler.SettingsManager
 import com.v2ray.ang.ui.compose.ThemeManager
+import com.v2ray.ang.ui.qsn.data.QsCrashRecorder
 
 class AngApplication : Application() {
     companion object {
@@ -34,6 +35,10 @@ class AngApplication : Application() {
      */
     override fun onCreate() {
         super.onCreate()
+
+        // Records the last uncaught exception so a process death can be
+        // explained on the next launch instead of staying a mystery.
+        QsCrashRecorder.install(this)
 
         MmkvManager.initialize(this)
 

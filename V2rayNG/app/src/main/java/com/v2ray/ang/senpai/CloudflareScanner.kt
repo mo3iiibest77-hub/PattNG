@@ -11,6 +11,7 @@ import com.v2ray.ang.ui.qsn.domain.CandidateRanker
 import com.v2ray.ang.ui.qsn.domain.Statistics
 import com.v2ray.ang.util.LogUtil
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -93,7 +94,21 @@ object CloudflareScanner {
     const val PRODUCTION_CIPHERSUITES_VALUE: String = PRODUCTION_CIPHERSUITES
 
     private var scanJob = SupervisorJob()
-    private var scanScope = CoroutineScope(scanJob + Dispatchers.IO)
+
+    /**
+     * Last line of defence for the scan scope.
+     *
+     * The scan calls native code in the UI process. A native failure arrives as
+     * an [Error] (UnsatisfiedLinkError, ExceptionInInitializerError, OOM), which
+     * no catch(Exception) can contain; without this handler it would reach the
+     * default handler and kill the app with no message. The handler turns it
+     * into a logged, reported scan failure instead.
+     */
+    private val scanExceptionHandler = CoroutineExceptionHandler { _, throwable ->
+        LogUtil.e(TAG, "Scan scope failed: " + throwable.javaClass.name, throwable)
+    }
+
+    private var scanScope = CoroutineScope(scanJob + Dispatchers.IO + scanExceptionHandler)
 
     private fun generateCandidates(context: Context): List<String> {
         val candidates = mutableListOf<String>()
@@ -158,13 +173,29 @@ object CloudflareScanner {
         callback: ScanCallback,
     ) {
         cancel()
+        // Fail fast with a clear reason when the core library cannot be loaded
+        // in this process: probing without it would only produce 30 identical
+        // failures, and a failed native load must never take the app down.
+        if (!CoreNativeManager.isNativeAvailable()) {
+            LogUtil.e(TAG, "Scan aborted: the core library is not available in this process")
+            callback.onFinish(null)
+            return
+        }
         scanJob = SupervisorJob()
-        scanScope = CoroutineScope(scanJob + Dispatchers.IO)
+        scanScope = CoroutineScope(scanJob + Dispatchers.IO + scanExceptionHandler)
         scanScope.launch {
-            purgeStaleTempProfiles()
-            val actual = if (candidates.isEmpty()) generateCandidates(context) else candidates
-            LogUtil.i(TAG, "Scan started: ${actual.size} candidates")
-            runScan(context, guid, actual, concurrency, callback)
+            try {
+                purgeStaleTempProfiles()
+                val actual = if (candidates.isEmpty()) generateCandidates(context) else candidates
+                LogUtil.i(TAG, "Scan started: ${actual.size} candidates")
+                runScan(context, guid, actual, concurrency, callback)
+            } catch (e: CancellationException) {
+                callback.onCancelled()
+            } catch (t: Throwable) {
+                // Includes Errors from the native layer: report, never crash.
+                LogUtil.e(TAG, "Scan failed: " + t.javaClass.name, t)
+                callback.onFinish(null)
+            }
         }
     }
 
@@ -404,8 +435,10 @@ object CloudflareScanner {
             callback.onFinish(best)
         } catch (_: CancellationException) {
             callback.onCancelled()
-        } catch (e: Exception) {
-            LogUtil.e(TAG, "Scan error: ${e.message}", e)
+        } catch (t: Throwable) {
+            // Throwable, not Exception: a native Error must become a reported
+            // scan failure instead of a process death.
+            LogUtil.e(TAG, "Scan error: " + t.javaClass.name, t)
             callback.onFinish(null)
         }
     }
@@ -473,7 +506,12 @@ object CloudflareScanner {
                 timeouts = 0,
                 hasTraffic = traffic != null,
             )
-        } catch (e: Exception) {
+        } catch (e: CancellationException) {
+            throw e
+        } catch (t: Throwable) {
+            // The probe runs native code in this process. An Error here used to
+            // escape every catch(Exception) and kill the app during a scan.
+            LogUtil.e(TAG, "$ip -> probe failed: " + t.javaClass.name)
             CandidateResult(ip, failures = 1)
         } finally {
             try { MmkvManager.removeServer(tempGuid) } catch (_: Exception) {}

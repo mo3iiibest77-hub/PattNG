@@ -127,7 +127,18 @@ class QuietStormActivity : HelperBaseComponentActivity() {
                 null
             }
             if (intent != null) {
-                vpnPermissionLauncher.launch(intent)
+                // Launching an unresolvable consent activity throws
+                // ActivityNotFoundException, which used to close the app the
+                // moment Connect was tapped on such a device.
+                val launched = try {
+                    vpnPermissionLauncher.launch(intent)
+                    true
+                } catch (e: Exception) {
+                    LogUtil.e(TAG, "VPN consent could not be requested: " + e.javaClass.simpleName)
+                    false
+                }
+                if (launched) return
+                qsViewModel.onVpnPermissionDenied()
                 return
             }
         }
@@ -258,6 +269,7 @@ class QuietStormActivity : HelperBaseComponentActivity() {
                                 onDisconnect = { qsViewModel.disconnect() },
                                 onCancel = { qsViewModel.cancel() },
                                 onDismissMessage = { qsViewModel.dismissMessage() },
+                                onDismissCrash = { qsViewModel.dismissCrash() },
                                 onToggleLanguage = { qsViewModel.toggleLanguage() },
                             )
                         }
@@ -289,6 +301,11 @@ class QuietStormActivity : HelperBaseComponentActivity() {
                             onToggleGroup = { qsViewModel.toggleConfigGroup(it) },
                             onToggleLanguage = { qsViewModel.toggleLanguage() },
                             onSelectConfig = { qsViewModel.selectConfig(it) },
+                            // A started connect shows its real progress on the
+                            // Connection tab; a disconnect stays here.
+                            onConfigAction = { guid ->
+                                if (qsViewModel.configAction(guid)) tab = 0
+                            },
                             onEditConfig = { openEditor(it) },
                             onDuplicateConfig = { qsViewModel.duplicateConfigToManual(it) },
                             onRequestDeleteConfig = { qsViewModel.requestDeleteConfig(it) },

@@ -118,12 +118,24 @@ data class QsUiState(
     val suggestedIp: String? = null,
     /** IP the user highlighted in the results list. */
     val pendingIp: String? = null,
+    /**
+     * Configuration the running core is actually using, as confirmed by the
+     * daemon. Null when nothing runs. Kept apart from the *selected* row so
+     * selecting another configuration cannot make its button claim a
+     * connection it does not have.
+     */
+    val connectedGuid: String? = null,
     /** Real traffic rates reported by the core, null when not measured yet. */
     val traffic: TrafficSnapshot? = null,
     /** Current app language code ("en", "fa", ...). */
     val languageCode: String = "en",
     /** Configurations sections the user collapsed, by stable group key. */
     val collapsedGroups: Set<String> = emptySet(),
+    /**
+     * Cause of the previous process death, when one was recorded. Shown so a
+     * crash is never again an unexplained close.
+     */
+    val lastCrash: String? = null,
 ) {
     /** True while a connect attempt is in flight; the button becomes Cancel. */
     val connecting: Boolean get() = status == QsStatus.Connecting
@@ -301,6 +313,7 @@ internal fun QsUiState.withConnectState(
         step = QsStep.Connected,
         busy = false,
         coreRunning = true,
+        connectedGuid = state.guid,
         message = null,
     )
 
@@ -322,6 +335,7 @@ internal fun QsUiState.withConnectState(
         status = if (coreRunning) QsStatus.Connected else QsStatus.Disconnected,
         step = QsStep.Idle,
         busy = false,
+        connectedGuid = if (coreRunning) connectedGuid else null,
         message = text.cancelled,
     )
 
@@ -329,6 +343,7 @@ internal fun QsUiState.withConnectState(
         status = if (coreRunning) QsStatus.Connected else QsStatus.Disconnected,
         step = QsStep.Idle,
         busy = false,
+        connectedGuid = if (coreRunning) connectedGuid else null,
     )
 }
 
@@ -368,6 +383,30 @@ internal object QsUrlValidator {
             false
         }
         return if (hasHost || lenient.containsMatchIn(trimmed)) trimmed else null
+    }
+}
+
+/** What a configuration row's single action must do right now. */
+enum class ConfigAction { Ignore, Connect, Disconnect }
+
+/**
+ * Decides the action of one configuration row.
+ *
+ * Pure, so the rule that a second connection can never be started is tested
+ * directly: while an attempt runs the row does nothing, and a row whose
+ * configuration is already the one the core runs disconnects instead of
+ * reconnecting.
+ */
+object ConfigActionRules {
+    fun decide(
+        status: QsStatus,
+        coreRunning: Boolean,
+        connectedGuid: String?,
+        guid: String,
+    ): ConfigAction = when {
+        status == QsStatus.Connecting || status == QsStatus.Disconnecting -> ConfigAction.Ignore
+        coreRunning && connectedGuid == guid -> ConfigAction.Disconnect
+        else -> ConfigAction.Connect
     }
 }
 

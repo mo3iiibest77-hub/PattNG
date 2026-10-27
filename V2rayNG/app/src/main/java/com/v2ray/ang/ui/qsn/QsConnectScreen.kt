@@ -35,6 +35,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -43,6 +44,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.v2ray.ang.R
 import com.v2ray.ang.ui.qsn.domain.MetricFormat
+import com.v2ray.ang.util.Utils
 
 /**
  * The Connection tab.
@@ -63,6 +65,7 @@ fun QsConnectScreen(
     onDisconnect: () -> Unit,
     onCancel: () -> Unit,
     onDismissMessage: () -> Unit,
+    onDismissCrash: () -> Unit,
     onToggleLanguage: () -> Unit,
 ) {
     Column(
@@ -79,6 +82,13 @@ fun QsConnectScreen(
         )
 
         QsStatusCard(state = state, onConnect = onConnect, onDisconnect = onDisconnect, onCancel = onCancel)
+
+        // A previous process death is shown with its recorded cause instead of
+        // being forgotten, so the next report can name it.
+        val lastCrash = state.lastCrash
+        if (lastCrash != null) {
+            QsCrashCard(crash = lastCrash, onDismiss = onDismissCrash)
+        }
 
         QsSubscriptionCard(
             state = state,
@@ -329,8 +339,14 @@ private fun QsSubscriptionCard(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     if (!state.subscriptionPanelExpanded && state.hasSubscription) {
+                        // The panel collapses on save, so the download it
+                        // started has to stay visible from here.
                         Text(
-                            text = stringResource(R.string.qs_configs, state.configCount),
+                            text = if (state.refreshing) {
+                                stringResource(R.string.qs_updating)
+                            } else {
+                                stringResource(R.string.qs_configs, state.configCount)
+                            },
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -351,6 +367,15 @@ private fun QsSubscriptionCard(
                             .rotate(rotation),
                     )
                 }
+            }
+
+            if (state.refreshing) {
+                Spacer(Modifier.height(8.dp))
+                LinearProgressIndicator(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(3.dp),
+                )
             }
 
             if (!state.subscriptionPanelExpanded) return@Column
@@ -448,6 +473,55 @@ private fun QsMessageCard(
                     TextButton(onClick = onRetry) {
                         Text(stringResource(R.string.qs_retry))
                     }
+                }
+                TextButton(onClick = onDismiss) {
+                    Text(stringResource(R.string.qs_dismiss))
+                }
+            }
+        }
+    }
+}
+
+/**
+ * The recorded cause of the previous process death.
+ *
+ * It is a diagnosis, not a decoration: the text is the exception line plus the
+ * first stack frame, and it can be copied so it can be sent back verbatim.
+ */
+@Composable
+private fun QsCrashCard(crash: String, onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.errorContainer,
+        ),
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                text = stringResource(R.string.qs_crash_title),
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onErrorContainer,
+            )
+            Spacer(Modifier.height(6.dp))
+            Text(
+                text = crash,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onErrorContainer,
+                maxLines = 6,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Spacer(Modifier.height(6.dp))
+            Text(
+                text = stringResource(R.string.qs_crash_hint),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onErrorContainer,
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                TextButton(onClick = { Utils.setClipboard(context, crash) }) {
+                    Text(stringResource(R.string.qs_copy))
                 }
                 TextButton(onClick = onDismiss) {
                     Text(stringResource(R.string.qs_dismiss))

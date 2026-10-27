@@ -21,6 +21,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilterChip
@@ -28,6 +29,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -88,6 +90,7 @@ fun QsConfigScreen(
     onClearFilters: () -> Unit,
     onToggleGroup: (String) -> Unit,
     onSelectConfig: (String) -> Unit,
+    onConfigAction: (String) -> Unit,
     onEditConfig: (String) -> Unit,
     onDuplicateConfig: (String) -> Unit,
     onRequestDeleteConfig: (String) -> Unit,
@@ -136,6 +139,12 @@ fun QsConfigScreen(
                 onDelete = onRequestDeleteSubscription,
                 onAdd = { addDialogOpen = true },
             )
+        }
+
+        if (state.status != QsStatus.Disconnected || state.message != null) {
+            item(key = "connection-status") {
+                ConnectionBanner(state = state)
+            }
         }
 
         item(key = "filters") {
@@ -194,7 +203,12 @@ fun QsConfigScreen(
                     items(items = visible, key = { it.guid }) { row ->
                         ConfigCard(
                             row = row,
+                            status = state.status,
+                            connected = state.coreRunning && state.connectedGuid == row.guid,
+                            busy = state.status == QsStatus.Connecting ||
+                                state.status == QsStatus.Disconnecting,
                             onSelect = { onSelectConfig(row.guid) },
+                            onAction = { onConfigAction(row.guid) },
                             onEdit = { onEditConfig(row.guid) },
                             onDuplicate = { onDuplicateConfig(row.guid) },
                             onDelete = { onRequestDeleteConfig(row.guid) },
@@ -538,18 +552,74 @@ private fun FilterRow(
     }
 }
 
+/**
+ * Compact connection state for this screen.
+ *
+ * The full progress lives on the Connection tab; this is the one line that
+ * makes the state visible without leaving Configurations, so a Connect pressed
+ * here never looks like it did nothing.
+ */
+@Composable
+private fun ConnectionBanner(state: QsUiState) {
+    val isError = state.status == QsStatus.Error
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(14.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = if (isError) {
+                MaterialTheme.colorScheme.errorContainer
+            } else {
+                qsCardSurface()
+            },
+        ),
+    ) {
+        Column(modifier = Modifier.padding(14.dp)) {
+            Text(
+                text = when (state.status) {
+                    QsStatus.Connecting -> stringResource(R.string.qs_status_connecting)
+                    QsStatus.Connected -> stringResource(R.string.qs_status_connected)
+                    QsStatus.Disconnecting -> stringResource(R.string.qs_status_disconnecting)
+                    QsStatus.Error -> stringResource(R.string.qs_status_error)
+                    QsStatus.Disconnected -> stringResource(R.string.qs_status_disconnected)
+                },
+                style = MaterialTheme.typography.labelLarge,
+                color = if (isError) {
+                    MaterialTheme.colorScheme.onErrorContainer
+                } else {
+                    MaterialTheme.colorScheme.onSurface
+                },
+            )
+            val message = state.message
+            if (!message.isNullOrBlank()) {
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    text = message,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (isError) {
+                        MaterialTheme.colorScheme.onErrorContainer
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                )
+            }
+        }
+    }
+}
+
 @Composable
 private fun ConfigCard(
     row: ConfigRow,
+    status: QsStatus,
+    connected: Boolean,
+    busy: Boolean,
     onSelect: () -> Unit,
+    onAction: () -> Unit,
     onEdit: () -> Unit,
     onDuplicate: () -> Unit,
     onDelete: () -> Unit,
 ) {
     Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onSelect),
+        modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(14.dp),
         colors = CardDefaults.cardColors(
             containerColor = if (row.active) {
@@ -560,9 +630,16 @@ private fun ConfigCard(
         ),
     ) {
         Row(
-            modifier = Modifier.padding(start = 14.dp, top = 10.dp, end = 4.dp, bottom = 10.dp),
+            modifier = Modifier.padding(start = 4.dp, top = 10.dp, end = 4.dp, bottom = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            // An explicit control, not a hidden tap target: which configuration
+            // will be connected is never ambiguous.
+            RadioButton(
+                selected = row.active,
+                onClick = onSelect,
+                enabled = !busy,
+            )
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = row.remarks,
@@ -608,6 +685,47 @@ private fun ConfigCard(
                     modifier = Modifier.size(18.dp),
                     tint = MaterialTheme.colorScheme.error,
                 )
+            }
+        }
+        // Only the selected configuration offers the action, so the button can
+        // never be read as belonging to a neighbouring row.
+        if (row.active) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 14.dp, end = 14.dp, bottom = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = when {
+                        connected -> stringResource(R.string.qs_status_connected)
+                        status == QsStatus.Connecting ->
+                            stringResource(R.string.qs_status_connecting)
+                        status == QsStatus.Disconnecting ->
+                            stringResource(R.string.qs_status_disconnecting)
+                        status == QsStatus.Error -> stringResource(R.string.qs_status_error)
+                        else -> stringResource(R.string.qs_choose_config_selected)
+                    },
+                    style = MaterialTheme.typography.labelMedium,
+                    color = if (connected) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                )
+                Spacer(Modifier.weight(1f))
+                Button(
+                    onClick = onAction,
+                    enabled = !busy,
+                ) {
+                    Text(
+                        text = if (connected) {
+                            stringResource(R.string.qs_disconnect)
+                        } else {
+                            stringResource(R.string.qs_connect)
+                        },
+                    )
+                }
             }
         }
     }

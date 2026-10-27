@@ -538,10 +538,20 @@ object CoreServiceManager {
                 AppConfig.MSG_QUERY_TRAFFIC -> {
                     // Answer with a real measurement taken in this process,
                     // which is the only one allowed to touch the native stats.
+                    // A throw here would kill the daemon process, and the user
+                    // would see the app close while the tunnel is up, so the
+                    // reply is contained: an unavailable snapshot is still a
+                    // truthful answer.
+                    val snapshot = try {
+                        currentTrafficSnapshot()
+                    } catch (t: Throwable) {
+                        LogUtil.e(AppConfig.TAG, "Traffic query failed: " + t.javaClass.name, t)
+                        TrafficSnapshot()
+                    }
                     MessageHelper.sendMsg2UI(
                         serviceControl.getService(),
                         AppConfig.MSG_TRAFFIC_RESULT,
-                        currentTrafficSnapshot(),
+                        snapshot,
                     )
                 }
 

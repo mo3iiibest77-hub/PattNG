@@ -20,11 +20,13 @@ import com.v2ray.ang.ui.connect.AutoConnectState
 import com.v2ray.ang.ui.connect.ConnectionOrchestrator
 import com.v2ray.ang.ui.main.MainDataSource
 import com.v2ray.ang.ui.main.MainServiceEvent
+import com.v2ray.ang.ui.qsn.data.QsCrashRecorder
 import com.v2ray.ang.ui.qsn.data.QsPrefs
 import com.v2ray.ang.ui.qsn.domain.ConfigFilter
 import com.v2ray.ang.ui.qsn.domain.ConfigFilterEngine
 import com.v2ray.ang.ui.qsn.domain.ConfigRow
 import com.v2ray.ang.ui.qsn.domain.ConfigSource
+import com.v2ray.ang.ui.qsn.domain.CrashReport
 import com.v2ray.ang.ui.qsn.domain.LanguageToggle
 import com.v2ray.ang.ui.qsn.domain.ManualConfigRules
 import com.v2ray.ang.ui.qsn.domain.NotificationDefaults
@@ -100,6 +102,7 @@ class QsViewModel(
     private var stopWatchJob: Job? = null
     private var scanJob: Job? = null
     private var trafficJob: Job? = null
+    private var updateJob: Job? = null
 
     /** True while a Quiet Storm NG screen is actually on screen. */
     private var foreground = false
@@ -112,7 +115,16 @@ class QsViewModel(
         // value is never overwritten: the key is only written when it has
         // never been set.
         ensureNotificationTrafficDefault()
-        _uiState.update { it.copy(languageCode = currentLanguageCode()) }
+        // A process that died without a message is explained on the next
+        // launch instead of being silently forgotten.
+        _uiState.update {
+            it.copy(
+                languageCode = currentLanguageCode(),
+                lastCrash = CrashReport.summary(
+                    QsCrashRecorder.readLast(getApplication<Application>()),
+                ),
+            )
+        }
         viewModelScope.launch {
             dataSource.mainServiceEvent.collect { event -> onServiceEvent(event) }
         }
@@ -146,11 +158,20 @@ class QsViewModel(
     }
 
     /**
-     * Persists the URL in the text field as the active subscription.
+     * Persists the URL in the text field as the active subscription and, by
+     * default, starts its update.
      *
+     * Saving a URL without fetching it left the panel closed and the list
+     * empty, which looked like a failed save. The write is still the only
+     * success condition for closing the panel; the download that follows is
+     * the same one the Update button runs, so it reports its own progress and
+     * its own error.
+     *
+     * @param startUpdate false when the caller is the connect flow, which
+     *   refreshes the subscription itself as its second step.
      * @return true when a valid URL is stored.
      */
-    fun saveSubscription(raw: String): Boolean {
+    fun saveSubscription(raw: String, startUpdate: Boolean = true): Boolean {
         val url = QsUrlValidator.normalize(raw)
         if (url == null) {
             // A rejected URL must not close the form: the user has to see the
@@ -189,6 +210,9 @@ class QsViewModel(
             )
         }
         refreshLocalSnapshot()
+        // The same Save action also refreshes the subscription. runUpdate is
+        // single-flight, so a second tap cannot start a second download.
+        if (startUpdate) runUpdate(listOf(SubscriptionCache(guid, item)))
         return true
     }
 
@@ -222,7 +246,9 @@ class QsViewModel(
             return
         }
         if (state.subscriptionUrl.isNotBlank() && state.subscriptionUrl.trim() != storedUrl) {
-            if (!saveSubscription(state.subscriptionUrl)) return
+            // The flow refreshes the subscription as its own step, so saving
+            // here must not start a second download.
+            if (!saveSubscription(state.subscriptionUrl, startUpdate = false)) return
         }
         // Manual-only setups have no subscription to refresh, so the connect
         // flow needs an explicit target. Pin the first eligible configuration.
@@ -235,6 +261,10 @@ class QsViewModel(
         }
 
         flowJob = viewModelScope.launch {
+            // Never race the download a Save started: the flow refreshes the
+            // same subscription itself, and two writers on one subscription
+            // could interleave their writes.
+            updateJob?.join()
             _uiState.update {
                 it.copy(
                     status = QsStatus.Connecting,
@@ -270,6 +300,7 @@ class QsViewModel(
                         step = QsStep.Connected,
                         busy = false,
                         coreRunning = true,
+                        connectedGuid = result.guid,
                         message = null,
                     )
 
@@ -289,6 +320,63 @@ class QsViewModel(
                 }
             }
             refreshLocalSnapshot()
+        }
+    }
+
+    /**
+     * Starts a connection with one explicit configuration.
+     *
+     * It pins the configuration and then calls [connect], so the Configurations
+     * screen uses the exact same path as the Connection screen: same
+     * eligibility check, same edge resolution, same single-flight guard and
+     * same core start. Nothing is duplicated and no second tunnel can start.
+     *
+     * @return true when a connect attempt was actually started.
+     */
+    fun connectConfig(guid: String): Boolean {
+        if (flowJob?.isActive == true) return false
+        val profile = MmkvManager.decodeServerConfig(guid)
+        if (profile == null) {
+            _uiState.update { it.copy(message = getString(R.string.qs_error_config_missing)) }
+            return false
+        }
+        if (!AutoConfigFilter.isEligible(profile)) {
+            _uiState.update { it.copy(message = getString(R.string.qs_error_no_eligible)) }
+            return false
+        }
+        QsPrefs.setPinnedGuid(guid)
+        MmkvManager.setSelectServer(guid)
+        refreshLocalSnapshot()
+        connect()
+        return flowJob?.isActive == true
+    }
+
+    /**
+     * The single action behind a configuration row.
+     *
+     * While a connection attempt is running the row does nothing, so a second
+     * tap cannot start a second connection. When the tunnel is already up on
+     * that same configuration the row disconnects instead of reconnecting.
+     *
+     * @return true when the caller should show the connection progress.
+     */
+    fun configAction(guid: String): Boolean {
+        val state = _uiState.value
+        return when (
+            ConfigActionRules.decide(
+                status = state.status,
+                coreRunning = state.coreRunning,
+                connectedGuid = state.connectedGuid,
+                guid = guid,
+            )
+        ) {
+            ConfigAction.Ignore -> false
+            ConfigAction.Disconnect -> {
+                disconnect()
+                false
+            }
+
+            ConfigAction.Connect -> connectConfig(guid)
         }
     }
 
@@ -368,6 +456,12 @@ class QsViewModel(
                 }
             }
         }
+    }
+
+    /** Forgets the recorded crash after the user has read or copied it. */
+    fun dismissCrash() {
+        QsCrashRecorder.clear(getApplication<Application>())
+        _uiState.update { it.copy(lastCrash = null) }
     }
 
     /** Clears the error/info card without changing the connection state. */
@@ -782,9 +876,17 @@ class QsViewModel(
 
     // ---------- Internal ----------
 
-    /** Runs one subscription refresh; blocking network work stays off the main thread. */
+    /**
+     * Runs one subscription refresh; blocking network work stays off the main
+     * thread.
+     *
+     * Single-flight: the guard lives here, not only in the callers, so the Save
+     * button, the Update button and a rapid double tap can never start two
+     * downloads that would interleave their writes to the same subscription.
+     */
     private fun runUpdate(targets: List<SubscriptionCache>) {
-        viewModelScope.launch {
+        if (updateJob?.isActive == true) return
+        updateJob = viewModelScope.launch {
             _uiState.update { it.copy(refreshing = true, message = null, inputError = null) }
             val results = withContext(Dispatchers.IO) {
                 targets.map { cache ->
@@ -912,6 +1014,9 @@ class QsViewModel(
                     coreRunning = true,
                     status = if (keepConnecting) QsStatus.Connecting else QsStatus.Connected,
                     busy = if (keepConnecting) state.busy else false,
+                    // A daemon started outside this screen still runs a known
+                    // configuration: the selected one.
+                    connectedGuid = state.connectedGuid ?: MmkvManager.getSelectServer(),
                     message = if (keepConnecting) state.message else null,
                 )
             } else {
@@ -920,6 +1025,7 @@ class QsViewModel(
                     coreRunning = false,
                     status = if (keepConnecting) QsStatus.Connecting else QsStatus.Disconnected,
                     busy = if (keepConnecting) state.busy else false,
+                    connectedGuid = null,
                 )
             }
         }

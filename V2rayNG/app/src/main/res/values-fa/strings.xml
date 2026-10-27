@@ -722,4 +722,8 @@
     <string name="qs_error_scan_none">اسکن هیچ IP قابل استفاده‌ای پیدا نکرد</string>
     <string name="qs_error_apply_failed">IP انتخاب‌شده روی کانفیگ‌ها نوشته نشد</string>
     <string name="qs_error_generic">تلاش برای اتصال ناموفق بود</string>
+    <string name="qs_error_config_missing">این کانفیگ دیگر وجود ندارد</string>
+    <string name="qs_copy">کپی</string>
+    <string name="qs_crash_title">نشست قبلی به‌طور غیرمنتظره پایان یافت</string>
+    <string name="qs_crash_hint">این علت ثبت‌شده است. آن را کپی کنید و بفرستید تا اشکال برطرف شود.</string>
 </resources>

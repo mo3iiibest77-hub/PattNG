@@ -722,4 +722,8 @@
     <string name="qs_error_scan_none">The scan found no usable IP address</string>
     <string name="qs_error_apply_failed">The selected IP could not be written to the configurations</string>
     <string name="qs_error_generic">The connection attempt failed</string>
+    <string name="qs_error_config_missing">This configuration no longer exists</string>
+    <string name="qs_copy">Copy</string>
+    <string name="qs_crash_title">The previous session ended unexpectedly</string>
+    <string name="qs_crash_hint">This is the recorded cause. Copy it and send it back so the defect can be fixed.</string>
 </resources>

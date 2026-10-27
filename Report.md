@@ -1286,3 +1286,145 @@ unzip -p QuietStormNG_2.3.4_arm64-v8a.apk AndroidManifest.xml | strings -e l | g
 
 The report itself is committed after the build, so the documentation commit is newer than
 `89936e94`; application code is identical in both.
+
+## 16. Next build — Save-and-update, the Connect crash, Connect from Configurations, original GIF background
+
+This section covers the four changes requested for the next build. Every claim below is tied to a
+file in this commit; the CI evidence is added in §16.8 after the run, not before it.
+
+### 16.1 Subscription Save now also updates
+
+**Symptom.** Pressing Save collapsed the panel but the subscription was never downloaded, so the
+configuration list stayed empty and the save looked like it had failed.
+
+**Cause.** `QsViewModel.saveSubscription()` only wrote the `SubscriptionItem` to MMKV. Downloading
+was a separate action behind the Update button, so a user who pressed Save and stopped there had a
+stored URL and zero configurations.
+
+**Fix.** The same Save action now writes the item and immediately starts the download of that
+subscription:
+
+| Behaviour | Implementation |
+|---|---|
+| The link is stored, then downloaded | `saveSubscription(raw, startUpdate = true)` ends with `runUpdate(listOf(SubscriptionCache(guid, item)))` |
+| The panel closes only after a real write | the write is still the only success condition; a rejected URL reopens the panel with the error |
+| Progress is visible while the panel is collapsed | the collapsed header shows "Updating…" and a 3 dp progress bar; `qs_updating` exists in EN and FA |
+| Errors are visible | `runUpdate` reports `qs_update_done` / `qs_update_partial` / `qs_error_update_failed` in the existing message card |
+| Rapid taps cannot start a second download | `runUpdate` is single-flight through a `Job` guard, so Save, Update and a double tap all share one download |
+| The connect flow does not race the save | `connect()` calls `saveSubscription(..., startUpdate = false)` and its coroutine `join()`s an in-flight update before refreshing the same subscription itself |
+
+The separate Update button is unchanged and still works on its own.
+
+### 16.2 The Connect crash
+
+The crash was described as "the app closes when I press Connect after saving a subscription". A
+process death leaves no message, so the first step was to find every path in the connect flow that
+can end the process instead of reporting an error. Four real ones existed:
+
+| # | Path | Mechanism | Fix |
+|---|---|---|---|
+| 1 | `QuietStormActivity.requestConnect()` | `vpnPermissionLauncher.launch(intent)` was unguarded. When the system VPN consent activity is not resolvable (restricted or OEM-modified ROM, VPN disabled by policy) the launcher throws `ActivityNotFoundException` synchronously, on the main thread, the first time Connect is pressed — the app closes with no message. | The launch is wrapped; on failure the screen reports the VPN-permission error instead of dying. |
+| 2 | `CloudflareScanner.testCandidate()` | The probe calls native code (`CoreNativeManager.measureOutboundDelay`, `RealTrafficSpeedTest`) **in the UI process**. A native failure arrives as an `Error` (`UnsatisfiedLinkError`, `ExceptionInInitializerError`, `OutOfMemoryError`), which `catch (e: Exception)` cannot contain, so it reached the default handler and killed the app during the scan. | `catch (Throwable)` with `CancellationException` rethrown; the candidate is reported as a failure instead. |
+| 3 | `CloudflareScanner.scan()` | The scan runs in its own `CoroutineScope` with no `CoroutineExceptionHandler`, so anything thrown outside the per-candidate block (stale-profile purge, candidate generation, ranking) also ended the process. | A `CoroutineExceptionHandler` on the scope plus a `catch (Throwable)` around the whole body; the scan reports `onFinish(null)`. |
+| 4 | `CoreServiceManager` `MSG_QUERY_TRAFFIC` | The daemon answered a traffic query with `currentTrafficSnapshot()` directly inside `onReceive`. A native throw there kills the `:RunSoLibV2RayDaemon` process, which the user sees as the app closing. | The reply is contained; a failed read answers with an unavailable snapshot, which is still truthful. |
+
+Two supporting changes:
+
+- `CoreNativeManager.isNativeAvailable()` probes the library once per process with
+  `catch (Throwable)`. `CloudflareScanner.scan()` checks it first, so a process that cannot load the
+  core aborts the scan with a logged reason instead of failing 30 times or dying.
+- `QsCrashRecorder` installs a default uncaught-exception handler that writes the trace to
+  `filesDir/qs_last_crash.txt` and then delegates to the previous handler. The app still crashes
+  exactly as before — nothing is swallowed — but the cause survives. On the next launch the
+  Connection screen shows the exception line and the first frame in an error card, with Copy and
+  Dismiss actions (`CrashReport.summary`, unit tested).
+
+**What is proven and what is not.** Items 1–4 are defects in the code and are fixed as described;
+each is a path that ends the process with no message, which is exactly the reported behaviour. The
+device-side stack trace itself was not available in this environment, so this section does not claim
+to know which of the four fired on that phone. If it happens again, the recorder now names it, and
+the card can be copied back verbatim.
+
+### 16.3 Connect from the Configurations screen
+
+Each configuration row now has an explicit selection control (a radio button, not a hidden tap
+target). The selected row carries the single action button, and its label follows the real state:
+
+| State | Row label | Button |
+|---|---|---|
+| nothing running | Selected | Connect |
+| this configuration is running | Connected | Disconnect |
+| an attempt is running | Connecting… | disabled |
+| a different configuration is running | Selected | Connect (the core is restarted with it) |
+| last attempt failed | Not connected | Connect |
+
+The action is routed through `QsViewModel.configAction()` → `connectConfig()` → the existing
+`connect()` → `ConnectionOrchestrator`, so the VPN service logic is not bypassed and no second
+tunnel can start: `connect()` and the orchestrator both keep their single-flight guards.
+
+`connectedGuid` was added to the UI state so the row cannot confuse "selected" with "connected": the
+value is set from `AutoConnectState.Connected(guid)`, from a daemon `MSG_STATE_RUNNING` reply (the
+selected configuration is the one the daemon runs) and cleared when the daemon stops. The decision
+itself is a pure function, `ConfigActionRules.decide()`, unit tested for all six cases.
+
+A compact banner at the top of the screen shows Connecting / Connected / Disconnecting / error with
+the message, so pressing Connect there never looks like it did nothing. A started connect switches
+to the Connection tab, where the full step list, the scan and the IP choice live.
+
+### 16.4 The original GIF as the background
+
+The file the user pointed at was used as-is; it was not re-created, re-compressed or converted.
+
+| Property | Value |
+|---|---|
+| Source | `background gif/1793075946100.gif` (server, outside the app) |
+| Shipped as | `V2rayNG/app/src/main/assets/qs_background.gif` |
+| Bytes | 2,593,961 |
+| SHA-256 (source and shipped file are identical) | `270ea8a4e69bab0e576882d9ddf11faba4d6242d9488bfd5d3a12b629ccb45fc` |
+| Format | GIF89a, global colour table, 64 colours |
+| Dimensions | 360 × 640 |
+| Frames | 30, 100 ms delay each → 3.0 s, 10 fps |
+
+Rendering (`ui/qsn/QsBackground.kt`):
+
+- API 28+: `ImageDecoder` + `AnimatedImageDrawable` with `REPEAT_INFINITE` — the platform decodes
+  and animates; Compose only draws it.
+- API 24–27: the same file through `android.graphics.Movie`, advanced at the same 100 ms rate.
+- `CENTER_CROP` for both, so the artwork is never squashed.
+- A `surface` scrim at 58 % opacity keeps text and cards readable over a mid-tone image; cards use
+  the existing `qsCardSurface()` (90 % surface), so lists stay legible without hiding the GIF.
+- The frame loop is gated by `shouldAnimateBackground(resumed, reduceMotion)`: it stops when the
+  screen is not `RESUMED` and when the system's animator duration scale is 0, and the last frame
+  stays visible. No external dependency was added.
+- The layer is a Compose canvas, so it never intercepts a touch or an accessibility traversal.
+
+Branding, drawn above the content: "Quiet Storm NG" in a serif face at 18 sp, letter-spaced, in the
+requested gold `#8A5A00`, next to a small Cloudflare mark built from three circles and a rounded
+rectangle in Cloudflare orange `#F6821F` — drawn, not shipped as an extra asset.
+
+### 16.5 Files changed
+
+| File | Change |
+|---|---|
+| `ui/qsn/QsViewModel.kt` | Save starts the update; single-flight `runUpdate`; `connectConfig`, `configAction`; crash state and `dismissCrash`; waits for an in-flight update before connecting |
+| `ui/qsn/QsContract.kt` | `connectedGuid`, `lastCrash`; `ConfigAction` / `ConfigActionRules`; connected-guid mapping |
+| `ui/qsn/QsConfigScreen.kt` | radio selection per row, per-row Connect/Disconnect, connection banner |
+| `ui/qsn/QsConnectScreen.kt` | update progress on the collapsed panel, recorded-crash card with Copy |
+| `ui/qsn/QuietStormActivity.kt` | guarded VPN-consent launch; `onConfigAction` switches to the Connection tab |
+| `ui/qsn/QsBackground.kt` | the GIF renderer, scrim, gold wordmark and Cloudflare mark |
+| `ui/qsn/data/QsCrashRecorder.kt` | new: records the last uncaught exception |
+| `ui/qsn/domain/CrashReport.kt` | new: pure trace summary |
+| `senpai/CloudflareScanner.kt` | native pre-flight, `Throwable` containment, scope handler |
+| `core/CoreNativeManager.kt` | `isNativeAvailable()` |
+| `core/CoreServiceManager.kt` | contained traffic reply in the daemon |
+| `AngApplication.kt` | installs the recorder |
+| `assets/qs_background.gif` | new: the user's original file, byte for byte |
+| `res/values/strings.xml`, `res/values-fa/strings.xml` | `qs_copy`, `qs_crash_title`, `qs_crash_hint`, `qs_error_config_missing` in both |
+
+### 16.6 Tests added
+
+| Class | Tests | What it pins |
+|---|---|---|
+| `CrashReportTest` | 5 | exception line + first frame extraction, header lines ignored, empty input, fallback, 400-char cap |
+| `ConnectFromConfigTest` | 9 | the six `ConfigActionRules` cases (ignore while connecting/disconnecting, disconnect on the running config, connect for another config, unknown running config, stopped selection), `connectedGuid` set on `Connected`, cleared on `Stopping`, `lastCrash` empty by default |
+
