@@ -100,7 +100,7 @@ jobs:
         echo "sdk.dir=${ANDROID_HOME}" > local.properties
         chmod 755 gradlew
         set +e
-        ./gradlew testFdroidDebugUnitTest \
+        ./gradlew testPlaystoreDebugUnitTest \
           --tests "com.v2ray.ang.ui.connect.*" \
           --tests "com.v2ray.ang.ui.qsn.*" \
           --tests "com.v2ray.ang.ui.qsn.domain.*" \
@@ -111,42 +111,117 @@ jobs:
           while IFS= read -r line; do echo "::error::$line"; done < <(grep -E "^e: |FAILED|not mocked|Execution failed|error:|Caused by" unit-test.log | head -n 25)
           exit $status
         fi
-        python3 ${{ github.workspace }}/.github/scripts/summarize-unit-tests.py app/build/test-results/testFdroidDebugUnitTest
+        python3 ${{ github.workspace }}/.github/scripts/summarize-unit-tests.py app/build/test-results/testPlaystoreDebugUnitTest
     - name: Build APK
       run: |
         cd ${{ github.workspace }}/V2rayNG
         echo "sdk.dir=${ANDROID_HOME}" > local.properties
         chmod 755 gradlew
-        ./gradlew licenseFdroidReleaseReport
-        ./gradlew assembleRelease -Pandroid.injected.signing.store.file=${{ steps.android_keystore.outputs.filePath }} -Pandroid.injected.signing.store.password=${{ secrets.APP_KEYSTORE_PASSWORD }} -Pandroid.injected.signing.key.alias=${{ secrets.APP_KEYSTORE_ALIAS }} -Pandroid.injected.signing.key.password=${{ secrets.APP_KEY_PASSWORD }}
+        ./gradlew licensePlaystoreReleaseReport
+        ./gradlew assemblePlaystoreRelease -Pandroid.injected.signing.store.file=${{ steps.android_keystore.outputs.filePath }} -Pandroid.injected.signing.store.password=${{ secrets.APP_KEYSTORE_PASSWORD }} -Pandroid.injected.signing.key.alias=${{ secrets.APP_KEYSTORE_ALIAS }} -Pandroid.injected.signing.key.password=${{ secrets.APP_KEY_PASSWORD }}
     
+    - name: Verify APK identity, signature and features
+      run: |
+        set -euo pipefail
+        cd ${{ github.workspace }}/V2rayNG
+
+        BUILD_TOOLS=$(ls -d "${ANDROID_HOME}"/build-tools/* | sort -V | tail -n 1)
+        echo "build-tools: ${BUILD_TOOLS}"
+
+        HEAD_SHA=$(git -C "${{ github.workspace }}" rev-parse HEAD)
+        echo "source commit: ${HEAD_SHA}"
+        test "${HEAD_SHA}" = "${GITHUB_SHA}"
+
+        # No F-Droid output may exist anywhere in the build tree. The build
+        # step only assembles the playstore variant, so this can only fire if
+        # someone reintroduces a flavour-wide task.
+        fdroid_files=$(find app/build/outputs/apk -type f -name '*-fdroid*' || true)
+        if [ -n "${fdroid_files}" ]; then
+          echo "::error::an F-Droid APK was produced by this build"
+          echo "${fdroid_files}"
+          exit 1
+        fi
+
+        fail=0
+        signer=""
+        for abi in arm64-v8a armeabi-v7a universal; do
+          set -- app/build/outputs/apk/playstore/release/QuietStormNG_*_"${abi}".apk
+          if [ "$#" -ne 1 ]; then
+            echo "::error::expected exactly one ${abi} APK, found $#"
+            ls -l app/build/outputs/apk/playstore/release || true
+            exit 1
+          fi
+          apk="$1"
+          if [ ! -f "${apk}" ]; then
+            echo "::error::missing APK: ${apk}"
+            ls -l app/build/outputs/apk/playstore/release || true
+            exit 1
+          fi
+          echo "== ${apk}"
+
+          badging=$("${BUILD_TOOLS}/aapt2" dump badging "${apk}")
+          line=$(printf '%s\n' "${badging}" | awk 'NR==1')
+          echo "   ${line}"
+          case "${line}" in
+            *"name='com.quietstorm.ng'"*) ;;
+            *) echo "::error::unexpected package for ${apk}: ${line}"; fail=1 ;;
+          esac
+
+          if ! certs=$("${BUILD_TOOLS}/apksigner" verify --print-certs "${apk}"); then
+            echo "::error::apksigner rejected ${apk}"
+            fail=1
+            continue
+          fi
+          cert=$(printf '%s\n' "${certs}" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p')
+          echo "   signer sha256: ${cert}"
+          if [ -z "${cert}" ]; then
+            echo "::error::unsigned or unverifiable APK: ${apk}"
+            fail=1
+          elif [ -z "${signer}" ]; then
+            signer="${cert}"
+          elif [ "${signer}" != "${cert}" ]; then
+            echo "::error::${apk} is signed by a different key"
+            fail=1
+          fi
+
+          ranker=$(unzip -p "${apk}" 'classes*.dex' | grep -ac 'CandidateRanker' || true)
+          ui=$(unzip -p "${apk}" 'classes*.dex' | grep -ac 'QsConfigScreen' || true)
+          res=$(unzip -p "${apk}" resources.arsc | grep -ac 'Cloudflare-ready' || true)
+          echo "   new-code markers: ranker=${ranker} ui=${ui} resources=${res}"
+          if [ "${ranker}" -lt 1 ] || [ "${ui}" -lt 1 ] || [ "${res}" -lt 1 ]; then
+            echo "::error::${apk} does not contain the new feature code"
+            fail=1
+          fi
+        done
+
+        if [ "${fail}" -ne 0 ]; then
+          exit 1
+        fi
+        echo "all three APKs are com.quietstorm.ng, share one signing key and contain the new code"
+
     - name: Upload arm64-v8a APK
       uses: actions/upload-artifact@v7
-      if: ${{  success() }}
+      if: ${{ success() }}
       with:
         name: arm64-v8a
-        path: ${{ github.workspace }}/V2rayNG/app/build/outputs/apk/*/release/*arm64-v8a*.apk
+        path: ${{ github.workspace }}/V2rayNG/app/build/outputs/apk/playstore/release/QuietStormNG_*_arm64-v8a.apk
+        if-no-files-found: error
 
     - name: Upload armeabi-v7a APK
       uses: actions/upload-artifact@v7
-      if: ${{  success() }}
+      if: ${{ success() }}
       with:
         name: armeabi-v7a
-        path: ${{ github.workspace }}/V2rayNG/app/build/outputs/apk/*/release/*armeabi-v7a*.apk
-
-    - name: Upload x86 APK
-      uses: actions/upload-artifact@v7
-      if: ${{  success() }}
-      with:
-        name: x86-apk
-        path: ${{ github.workspace }}/V2rayNG/app/build/outputs/apk/*/release/*x86*.apk
+        path: ${{ github.workspace }}/V2rayNG/app/build/outputs/apk/playstore/release/QuietStormNG_*_armeabi-v7a.apk
+        if-no-files-found: error
 
     - name: Upload universal APK
       uses: actions/upload-artifact@v7
       if: ${{ success() }}
       with:
         name: universal-apk
-        path: ${{ github.workspace }}/V2rayNG/app/build/outputs/apk/*/release/*universal*.apk
+        path: ${{ github.workspace }}/V2rayNG/app/build/outputs/apk/playstore/release/QuietStormNG_*_universal.apk
+        if-no-files-found: error
 
   sign-and-release:
     needs: build
