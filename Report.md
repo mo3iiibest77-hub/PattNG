@@ -2209,10 +2209,39 @@ Added: `ui/qsn/domain/DiscoveryRun.kt`, `ui/qsn/domain/DiscoveryEngineTest.kt`,
 ### 20.10 What is not verified
 
 **No Gradle or Android build was executed on this machine** — the task forbids it. Compilation and
-the unit suite are proven only by the GitHub Actions run of this commit; see 20.11. No device test
-was performed, so nothing here claims that a tunnel was established or that a real ISP produced a
-given number of qualified ranges.
+the unit suite would be proven only by a GitHub Actions run, and no run was created for this commit
+(20.11). No device test was performed, so nothing here claims that a tunnel was established or that
+a real ISP produced a given number of qualified ranges.
 
 ### 20.11 Build of record
 
-Filled in after the push, from the actual workflow run of this commit.
+| Item | Value |
+|---|---|
+| Branch | `feature/minimal-cloudflare-vpn` |
+| Implementation commit | `97d03a7c2074cf16b5c2026f3513aeb27d22b83e` |
+| Push | verified — `origin/feature/minimal-cloudflare-vpn` is `97d03a7c`, and `ui/qsn/domain/DiscoveryRun.kt` answers HTTP 200 on that ref |
+| Local Gradle / Android build | **NOT RUN** — forbidden by the task |
+| GitHub Actions run for this commit | **NOT RUN — no run was created.** `check-runs` for the SHA returned `total_count: 0`, and no run for `97d03a7c` appeared in `actions/runs` or in the `Build APK` workflow's runs after about ten minutes of polling |
+| Unit tests | **NOT RUN** — no CI run, and no local run |
+| Device test | **NOT RUN** |
+
+What was verified instead, on the exact tree of `97d03a7c`:
+
+* brace/state-machine balance of all 16 changed or added Kotlin files: `depth 0`, state `code`;
+* every `R.string.*` referenced by the app resolves to a resource (`missing: []`, 618 used, 698 defined);
+* no duplicate function names in the changed files, and the scanner's and `IspManager`'s function
+  lists are additive only (nothing removed that a caller still uses);
+* every `IspManager` / `CloudflareScanner` call site matches the current parameter names and types;
+  two `context =` / `ctx =` named-argument mismatches were found and fixed this way before the commit.
+
+The workflow runs on `push` to this branch with a `V2rayNG/**` path filter, and this commit changes
+20 files under `V2rayNG/`, so the missing run is a trigger/infrastructure fact, not a path-filter
+skip. To produce the missing evidence:
+
+```sh
+gh workflow run build.yml --ref feature/minimal-cloudflare-vpn
+# or, without gh:
+git commit --allow-empty -m "ci: trigger build for 97d03a7c" && git push
+```
+
+Until that run exists, **no claim is made that this commit compiles or that the unit tests pass.**
