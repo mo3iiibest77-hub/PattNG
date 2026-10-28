@@ -44,9 +44,13 @@ class DiscoveryQualityTest {
     }
 
     @Test
-    fun theGateIsTheDocumentedTwentyKilobytesPerSecond() {
+    fun theGateAndSamplingAreTheHistoricalOnes() {
+        // The last pre-redesign implementation on master used 20 KB/s, two
+        // sampled addresses per range and six concurrent ranges.
         assertEquals(20L, DiscoveryQuality.MIN_UPLOAD_KBPS)
-        assertEquals(5, DiscoveryQuality.TARGET_RANGES)
+        assertEquals(2, DiscoveryQuality.IPS_PER_RANGE)
+        assertEquals(6, DiscoveryQuality.CONCURRENCY)
+        assertEquals(2, DiscoveryQuality.MAX_ATTEMPTS)
     }
 
     // ── The accumulator ──
@@ -55,30 +59,24 @@ class DiscoveryQualityTest {
         QualifiedRange(cidr = cidr, uploadKBps = upload, latencyMs = 40L, validatedAt = 1L)
 
     @Test
-    fun fiveDistinctRangesStopTheRun() {
+    fun everyDistinctRangeIsAccepted() {
+        // Discovery must reach the end of the dataset. There is no target that
+        // makes the accumulator refuse a sixth, tenth or six-hundredth range.
         val accumulator = DiscoveryAccumulator()
-        val accepted = listOf(
-            "104.16.0.0/24",
-            "104.17.0.0/24",
-            "104.18.0.0/24",
-            "104.19.0.0/24",
-            "104.20.0.0/24",
-        ).map { accumulator.offer(range(it)) }
-
+        val accepted = (0 until 40).map { index ->
+            accumulator.offer(range("104." + (16 + index) + ".0.0/24"))
+        }
         assertTrue(accepted.all { it })
-        assertTrue(accumulator.reachedTarget)
-        assertEquals(5, accumulator.size)
-        assertFalse("a sixth range must be refused", accumulator.offer(range("104.21.0.0/24")))
-        assertEquals(5, accumulator.qualified.size)
+        assertEquals(40, accumulator.size)
+        assertEquals(40, accumulator.qualified.size)
     }
 
     @Test
     fun theSameRangeIsNeverCountedTwice() {
-        val accumulator = DiscoveryAccumulator(target = 5)
+        val accumulator = DiscoveryAccumulator()
         assertTrue(accumulator.offer(range("104.16.0.0/24")))
         assertFalse(accumulator.offer(range("104.16.0.0/24")))
         assertEquals(1, accumulator.size)
-        assertFalse(accumulator.reachedTarget)
     }
 
     @Test

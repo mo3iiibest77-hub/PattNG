@@ -16,6 +16,7 @@ import com.v2ray.ang.helper.MessageHelper
 import com.v2ray.ang.senpai.CandidateResult
 import com.v2ray.ang.senpai.CloudflareScanner
 import com.v2ray.ang.senpai.DiscoveryOutcome
+import com.v2ray.ang.senpai.IspManager
 import com.v2ray.ang.senpai.ProbeProfile
 import com.v2ray.ang.senpai.ScanCallback
 import com.v2ray.ang.ui.qsn.data.IpHealthChecker
@@ -26,7 +27,6 @@ import com.v2ray.ang.ui.qsn.domain.ConfigChoice
 import com.v2ray.ang.ui.qsn.domain.ConnectDecision
 import com.v2ray.ang.ui.qsn.domain.ConnectMode
 import com.v2ray.ang.ui.qsn.domain.ConnectPolicy
-import com.v2ray.ang.ui.qsn.domain.DiscoveryQuality
 import com.v2ray.ang.ui.qsn.domain.EdgeApplication
 import com.v2ray.ang.ui.qsn.domain.IpAddress
 import com.v2ray.ang.ui.qsn.domain.IpFingerprint
@@ -152,8 +152,12 @@ private const val RUNNING_TIMEOUT_MS = 30_000L
 private const val SCAN_TIMEOUT_MS = 300_000L
 
 /**
- * Safety net for Stage 1. Discovery stops on its own once five ranges qualify;
- * this only bounds the pathological case where almost nothing qualifies.
+ * Safety net for Stage 1.
+ *
+ * Discovery measures the whole dataset and is resumable, so a connection must
+ * not wait for it indefinitely. When this expires the flow continues with the
+ * ranges already stored; the discovery run itself is left running (it is not
+ * cancelled) and its progress stays visible on the IP Ranges screen.
  */
 private const val DISCOVERY_TIMEOUT_MS = 300_000L
 
@@ -365,6 +369,7 @@ class ConnectionOrchestrator {
         context: Context,
         guid: String,
         profile: ProfileItem,
+        ispName: String? = null,
         onState: (AutoConnectState) -> Unit = {},
     ): CandidateResult? {
         if (!mutex.tryLock()) {
@@ -376,7 +381,18 @@ class ConnectionOrchestrator {
         return try {
             withContext(Dispatchers.IO) {
                 onState(AutoConnectState.ScanningCloudflareIps)
-                val winner = scanForBestIp(context, guid, onState) { } ?: return@withContext null
+                // Stage 2 measures the ranges that really qualified for the
+                // chosen ISP. The global store is the fallback for a connection
+                // started before any ISP was named; the user's manual ranges are
+                // the last resort and stay supported.
+                val isp = ispName?.trim()?.ifEmpty { null } ?: QsPrefs.lastIsp()
+                val ispRanges = isp
+                    ?.let { IspManager.getProfile(context, it)?.goodCidrs }
+                    .orEmpty()
+                val stored = RangeSet.cidrs(QualifiedRangeStore.snapshot())
+                val ranges = ispRanges.ifEmpty { stored }
+                val winner = scanForBestIp(context, guid, onState, ranges) { }
+                    ?: return@withContext null
                 // Persist the winner so the next connect can reuse it; the
                 // cache TTL and health check still apply.
                 QsPrefs.saveSelection(
@@ -708,7 +724,11 @@ class ConnectionOrchestrator {
             // The tunnel is confirmed: keep collecting ranges in the background.
             // The scheduler only writes the range database, never the profile
             // the tunnel is using.
-            DiscoveryScheduler.start(context, selectedGuid)
+            DiscoveryScheduler.start(
+                context,
+                selectedGuid,
+                QsPrefs.lastIsp() ?: DiscoveryScheduler.DEFAULT_ISP,
+            )
         }
         return result
     }
@@ -902,16 +922,21 @@ class ConnectionOrchestrator {
             QsPrefs.clearSelection()
         }
 
-        // From here on this attempt may need the scanner. A background pass
-        // must not compete with it for probes, so it is stopped first; its
-        // qualified ranges are already persisted, so nothing is lost.
-        DiscoveryScheduler.stop()
+        // Stage 1 and Stage 2 are independent. A discovery run that is already
+        // active is left running: starting the candidate scan is not a reason
+        // to cancel it, and its results are persisted as they arrive.
 
-        // Qualified ranges are the canonical source, read from the same store
-        // discovery writes. A user who configured ranges by hand keeps them as
-        // the fallback, which is what the IP Ranges screen has always done.
+        // The chosen ISP's qualified ranges are the canonical source. The
+        // global store covers a connection made before an ISP was named, and a
+        // user who configured ranges by hand keeps them as the last fallback.
+        val isp = QsPrefs.lastIsp()
+        val ispRanges = isp
+            ?.let { IspManager.getProfile(context, it)?.goodCidrs }
+            .orEmpty()
         val manual = ScanRangePlanner.dedupe(QsPrefs.loadRanges()).map { it.cidr }
-        var ranges = RangeSet.cidrs(storedRanges).ifEmpty { manual }
+        var ranges = ispRanges
+            .ifEmpty { RangeSet.cidrs(storedRanges) }
+            .ifEmpty { manual }
 
         // Stage 1 runs only when there is nothing to scan with, or when the
         // user explicitly asked for a refresh. A saved edge that failed its
@@ -919,7 +944,8 @@ class ConnectionOrchestrator {
         // still has entries.
         if (refresh || ranges.isEmpty()) {
             onState(AutoConnectState.DiscoveringRanges)
-            ranges = RangeSet.cidrs(discoverRanges(context, guid, onState)).ifEmpty { manual }
+            ranges = RangeSet.cidrs(discoverRanges(context, guid, onState, force = refresh))
+                .ifEmpty { manual }
             if (cancelled) return null
         }
 
@@ -988,15 +1014,17 @@ class ConnectionOrchestrator {
         context: Context,
         guid: String,
         onState: (AutoConnectState) -> Unit,
+        force: Boolean = false,
     ): List<QualifiedRange> {
         val deferred = CompletableDeferred<DiscoveryOutcome>()
         discoveryDeferred = deferred
+        val isp = QsPrefs.lastIsp() ?: DiscoveryScheduler.DEFAULT_ISP
         CloudflareScanner.discoverRanges(
             context = context,
             guid = guid,
-            ispName = DiscoveryScheduler.DEFAULT_ISP,
-            target = DiscoveryQuality.TARGET_RANGES,
-            startIndex = 0,
+            ispName = isp,
+            background = false,
+            force = force,
             onProgress = { done, total, _, qualified ->
                 onState(AutoConnectState.DiscoveryProgress(done, total, qualified))
             },
@@ -1005,9 +1033,11 @@ class ConnectionOrchestrator {
         val outcome = withTimeoutOrNull(DISCOVERY_TIMEOUT_MS) { deferred.await() }
         discoveryDeferred = null
         if (outcome == null) {
-            LogUtil.w(TAG, "Discovery timed out; continuing with the stored ranges")
-            CloudflareScanner.cancel()
-            return QualifiedRangeStore.snapshot()
+            // The run is still measuring. It is not cancelled: Stage 2 can use
+            // what this ISP already stored while discovery continues, and a
+            // later screen shows the real phase and progress.
+            LogUtil.w(TAG, "Discovery is still running; continuing with the stored ranges")
+            return IspManager.getProfile(context, isp)?.toQualifiedRanges().orEmpty()
         }
         // The scanner persisted every qualified range as it found it, so this
         // is the same canonical set a later connection reads. Nothing to merge
@@ -1016,7 +1046,9 @@ class ConnectionOrchestrator {
             QualifiedRangeStore.add(outcome.qualified)
             LogUtil.i(TAG, "Discovery qualified " + outcome.qualified.size + " range(s)")
         }
-        return QualifiedRangeStore.snapshot()
+        // Only this ISP's ranges: Stage 2 must not measure ranges that were
+        // qualified for a different ISP.
+        return outcome.qualified
     }
 
     /** Reads and clears the candidate the user confirmed mid-scan. */

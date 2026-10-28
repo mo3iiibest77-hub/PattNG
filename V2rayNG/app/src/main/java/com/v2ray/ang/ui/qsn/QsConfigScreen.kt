@@ -772,11 +772,21 @@ private fun ConfigCard(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    // The transport label yields space to the badge. Without
+                    // this weight the badge was measured with whatever width
+                    // was left, which could be a few pixels: Persian then broke
+                    // at every character and the label read vertically.
                     Text(
                         text = row.transportLabel,
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false),
                     )
                     Spacer(Modifier.width(6.dp))
                     EligibilityBadge(row)
@@ -868,6 +878,12 @@ private fun EligibilityBadge(row: ConfigRow) {
         text = text,
         style = MaterialTheme.typography.labelSmall,
         color = color,
+        // The badge is one short label, never a paragraph. Keeping it on one
+        // line with soft wrapping off is what stops a narrow row from breaking
+        // Persian letters apart and stacking them vertically.
+        maxLines = 1,
+        softWrap = false,
+        overflow = TextOverflow.Ellipsis,
     )
     if (row.source == ConfigSource.Manual) {
         Spacer(Modifier.width(6.dp))
@@ -875,6 +891,9 @@ private fun EligibilityBadge(row: ConfigRow) {
             text = stringResource(R.string.qs_badge_manual),
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            softWrap = false,
+            overflow = TextOverflow.Ellipsis,
         )
     }
 }

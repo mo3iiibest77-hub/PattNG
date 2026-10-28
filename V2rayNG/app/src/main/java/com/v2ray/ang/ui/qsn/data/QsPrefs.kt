@@ -30,6 +30,7 @@ object QsPrefs {
     private const val KEY_PINNED_GUID = "qsn_pinned_guid"
     private const val KEY_ACTIVE_SUB = "qsn_active_sub_guid"
     private const val KEY_SUB_PANEL_OPEN = "qsn_sub_panel_open"
+    private const val KEY_LAST_ISP = "qsn_last_isp"
 
     // ---------- Selected Cloudflare IP ----------
 
@@ -76,6 +77,22 @@ object QsPrefs {
         } catch (e: Exception) {
             LogUtil.e(TAG, "saveRanges failed: " + e.javaClass.simpleName)
         }
+    }
+
+    // ---------- Last ISP used for discovery ----------
+
+    /**
+     * ISP the user last ran discovery for.
+     *
+     * The connection flow and the IP Ranges screen read the same value, so a
+     * Stage 2 scan uses the ranges of the ISP the user actually discovered
+     * instead of an unrelated default.
+     */
+    fun lastIsp(): String? =
+        MmkvManager.decodeSettingsString(KEY_LAST_ISP)?.takeIf { it.isNotBlank() }
+
+    fun setLastIsp(name: String) {
+        MmkvManager.encodeSettings(KEY_LAST_ISP, name.trim())
     }
 
     // ---------- Explicitly selected configuration ----------

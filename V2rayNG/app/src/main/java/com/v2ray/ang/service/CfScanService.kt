@@ -60,6 +60,7 @@ class CfScanService : Service() {
         fun stop(ctx: Context) {
             currentState = null
             CloudflareScanner.cancel()
+            CloudflareScanner.stopDiscovery()
             ctx.stopService(Intent(ctx, CfScanService::class.java))
         }
     }
@@ -76,6 +77,7 @@ class CfScanService : Service() {
         if (intent?.action == ACTION_STOP) {
             currentState = null
             CloudflareScanner.cancel()
+            CloudflareScanner.stopDiscovery()
             stopSelf()
             return START_NOT_STICKY
         }
@@ -179,6 +181,7 @@ class CfScanService : Service() {
     override fun onDestroy() {
         currentState = null
         CloudflareScanner.cancel()
+        CloudflareScanner.stopDiscovery()
         super.onDestroy()
     }
 }

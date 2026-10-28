@@ -1,5 +1,6 @@
 package com.v2ray.ang.ui.qsn
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -28,6 +29,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -42,6 +44,10 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.v2ray.ang.R
 import com.v2ray.ang.ui.qsn.domain.DiscoveryPhase
+import com.v2ray.ang.ui.qsn.domain.IspProfile
+import com.v2ray.ang.ui.qsn.domain.RangeOutcome
+import com.v2ray.ang.ui.qsn.domain.RangeState
+import com.v2ray.ang.ui.qsn.domain.ScanCandidate
 import com.v2ray.ang.ui.qsn.domain.DiscoveryStatus
 import com.v2ray.ang.ui.qsn.domain.MetricFormat
 import com.v2ray.ang.ui.qsn.domain.QualifiedRange
@@ -67,6 +73,12 @@ fun QsRangesScreen(
     onRescanNext: () -> Unit,
     onDismissMessage: () -> Unit,
     onToggleLanguage: () -> Unit,
+    onSelectIsp: (String) -> Unit,
+    onStartDiscovery: (String) -> Unit,
+    onResumeDiscovery: () -> Unit,
+    onRestartDiscovery: (String) -> Unit,
+    onStopDiscovery: () -> Unit,
+    onUseCandidate: (String) -> Unit,
 ) {
     var input by rememberSaveable { mutableStateOf("") }
     val enabled = RangesSummary.enabled(state.ranges)
@@ -153,6 +165,17 @@ fun QsRangesScreen(
             }
         }
 
+        item(key = "isp-discovery") {
+            IspDiscoveryCard(
+                state = state,
+                onSelectIsp = onSelectIsp,
+                onStartDiscovery = onStartDiscovery,
+                onResumeDiscovery = onResumeDiscovery,
+                onRestartDiscovery = onRestartDiscovery,
+                onStopDiscovery = onStopDiscovery,
+            )
+        }
+
         item(key = "discovered") {
             DiscoveredRangesCard(
                 ranges = state.qualifiedRanges,
@@ -204,12 +227,18 @@ fun QsRangesScreen(
                         }
                         OutlinedButton(
                             onClick = onScanNow,
-                            enabled = !state.scanningNow && enabled > 0,
+                            // Stage 2 measures the ISP's stored ranges, so a
+                            // user who never added a manual range must still be
+                            // able to scan after discovery qualified some.
+                            enabled = !state.scanningNow &&
+                                (enabled > 0 || state.discovery.qualified > 0),
                             modifier = Modifier.weight(1f),
                         ) {
                             Text(
                                 text = if (state.scanningNow) {
                                     stringResource(R.string.qs_scanning)
+                                } else if (state.discovery.qualified > 0) {
+                                    stringResource(R.string.qs_isp_use)
                                 } else {
                                     stringResource(R.string.qs_scan_now)
                                 },
@@ -289,6 +318,34 @@ fun QsRangesScreen(
             }
         }
 
+        if (state.discovery.rows.isNotEmpty()) {
+            item(key = "discovery-rows-header") {
+                DiscoveryRowsHeader(state.discovery.rows)
+            }
+            items(
+                items = state.discovery.rows,
+                key = { row -> "disc-" + row.cidr },
+            ) { row ->
+                DiscoveryRangeRow(row)
+            }
+        }
+
+        if (state.scanCandidates.isNotEmpty()) {
+            item(key = "stage2-header") {
+                Stage2Header(state.scanCandidates.size)
+            }
+            items(
+                items = state.scanCandidates,
+                key = { candidate -> "ip-" + candidate.ip },
+            ) { candidate ->
+                Stage2ResultRow(
+                    candidate = candidate,
+                    best = candidate.ip == state.scanCandidates.firstOrNull()?.ip,
+                    onUse = { onUseCandidate(candidate.ip) },
+                )
+            }
+        }
+
         item(key = "rescan") {
             TextButton(onClick = onRescanNext, modifier = Modifier.fillMaxWidth()) {
                 Text(stringResource(R.string.qs_range_rescan))
@@ -300,7 +357,7 @@ fun QsRangesScreen(
 /**
  * The measured range database, with the live state of the discovery run.
  *
- * Collapsed by default: the list can hold up to 64 CIDRs and the user came to
+ * Collapsed by default: the list can hold the whole qualified set and the user came to
  * this screen for their own ranges. The count and the run state stay visible
  * either way, so a paused or background run is never mistaken for a finished
  * one, and nothing spins when no run is active.
@@ -410,7 +467,13 @@ private fun DiscoveryStatusLine(status: DiscoveryStatus) {
             stringResource(R.string.qs_discovery_running, status.done, status.total, status.qualified)
         }
 
-        DiscoveryPhase.Paused -> stringResource(R.string.qs_discovery_paused, status.qualified)
+        DiscoveryPhase.Paused -> stringResource(
+            R.string.qs_discovery_paused_counts,
+            status.qualified,
+            status.done,
+            status.total,
+        )
+        DiscoveryPhase.Interrupted -> stringResource(R.string.qs_isp_phase_interrupted)
         DiscoveryPhase.Completed -> stringResource(R.string.qs_discovery_completed, status.qualified)
         DiscoveryPhase.Cancelled -> stringResource(R.string.qs_discovery_cancelled)
         DiscoveryPhase.Failed -> stringResource(R.string.qs_discovery_failed)
@@ -482,6 +545,361 @@ private fun RangeRow(
                     modifier = Modifier.size(18.dp),
                     tint = MaterialTheme.colorScheme.error,
                 )
+            }
+        }
+    }
+}
+
+
+/**
+ * Discovery controls for one ISP.
+ *
+ * The card is the honest view of the run: the phase, how many ranges have a
+ * final result, how many qualified, and the three-way split between good,
+ * failed and uncertain. Stop is always available while the run is active, and
+ * Resume continues from the persisted per-range results instead of starting
+ * over.
+ */
+@Composable
+private fun IspDiscoveryCard(
+    state: QsUiState,
+    onSelectIsp: (String) -> Unit,
+    onStartDiscovery: (String) -> Unit,
+    onResumeDiscovery: () -> Unit,
+    onRestartDiscovery: (String) -> Unit,
+    onStopDiscovery: () -> Unit,
+) {
+    var ispInput by rememberSaveable { mutableStateOf(state.selectedIsp) }
+    // Selecting a saved ISP updates the field; typing a new name is not
+    // overwritten by progress updates because this key does not change.
+    LaunchedEffect(state.selectedIsp) { ispInput = state.selectedIsp }
+    val status = state.discovery
+    val active = status.isActive
+    val phaseLabel = when (status.phase) {
+        DiscoveryPhase.Idle -> stringResource(R.string.qs_isp_phase_idle)
+        DiscoveryPhase.Running -> stringResource(R.string.qs_isp_phase_running)
+        DiscoveryPhase.Paused -> stringResource(R.string.qs_isp_phase_paused)
+        DiscoveryPhase.Completed -> stringResource(R.string.qs_isp_phase_completed)
+        DiscoveryPhase.Interrupted -> stringResource(R.string.qs_isp_phase_interrupted)
+        DiscoveryPhase.Cancelled -> stringResource(R.string.qs_isp_phase_cancelled)
+        DiscoveryPhase.Failed -> stringResource(R.string.qs_isp_phase_failed)
+    }
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                text = stringResource(R.string.qs_isp_title),
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                text = stringResource(R.string.qs_isp_status, phaseLabel) +
+                    if (status.ispName.isNotBlank()) " · " + status.ispName else "",
+                style = MaterialTheme.typography.bodySmall,
+                color = if (status.phase == DiscoveryPhase.Failed) {
+                    MaterialTheme.colorScheme.error
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                },
+            )
+
+            if (status.total > 0 || active) {
+                Spacer(Modifier.height(8.dp))
+                if (status.total > 0) {
+                    LinearProgressIndicator(
+                        progress = { status.percent / 100f },
+                        modifier = Modifier.fillMaxWidth().height(4.dp),
+                    )
+                } else {
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth().height(4.dp))
+                }
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    text = stringResource(
+                        R.string.qs_isp_progress,
+                        status.done,
+                        status.total,
+                        status.percent,
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    text = stringResource(
+                        R.string.qs_isp_counts,
+                        status.qualified,
+                        status.failed,
+                        status.errors,
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+
+            Spacer(Modifier.height(10.dp))
+            OutlinedTextField(
+                value = ispInput,
+                onValueChange = { ispInput = it },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                enabled = !active,
+                label = { Text(stringResource(R.string.qs_isp_hint)) },
+            )
+            Spacer(Modifier.height(8.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                if (active) {
+                    OutlinedButton(
+                        onClick = onStopDiscovery,
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text(stringResource(R.string.qs_isp_stop))
+                    }
+                } else {
+                    Button(
+                        onClick = {
+                            when {
+                                status.phase == DiscoveryPhase.Completed ->
+                                    onRestartDiscovery(ispInput)
+                                status.isResumable -> onResumeDiscovery()
+                                else -> onStartDiscovery(ispInput)
+                            }
+                        },
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text(
+                            stringResource(
+                                when {
+                                    status.phase == DiscoveryPhase.Completed ->
+                                        R.string.qs_isp_restart
+                                    status.isResumable -> R.string.qs_isp_resume
+                                    else -> R.string.qs_isp_start
+                                },
+                            ),
+                        )
+                    }
+                    if (status.isResumable) {
+                        TextButton(onClick = { onRestartDiscovery(ispInput) }) {
+                            Text(stringResource(R.string.qs_isp_restart))
+                        }
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(10.dp))
+            Text(
+                text = stringResource(R.string.qs_isp_saved),
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.SemiBold,
+            )
+            if (state.ispProfiles.isEmpty()) {
+                Text(
+                    text = stringResource(R.string.qs_isp_none),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            } else {
+                state.ispProfiles.forEach { profile ->
+                    SavedIspRow(
+                        profile = profile,
+                        selected = profile.name.equals(state.selectedIsp, ignoreCase = true),
+                        onSelect = { onSelectIsp(profile.name) },
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SavedIspRow(profile: IspProfile, selected: Boolean, onSelect: () -> Unit) {
+    val phase = when (profile.phase) {
+        DiscoveryPhase.Idle -> stringResource(R.string.qs_isp_phase_idle)
+        DiscoveryPhase.Running -> stringResource(R.string.qs_isp_phase_running)
+        DiscoveryPhase.Paused -> stringResource(R.string.qs_isp_phase_paused)
+        DiscoveryPhase.Completed -> stringResource(R.string.qs_isp_phase_completed)
+        DiscoveryPhase.Interrupted -> stringResource(R.string.qs_isp_phase_interrupted)
+        DiscoveryPhase.Cancelled -> stringResource(R.string.qs_isp_phase_cancelled)
+        DiscoveryPhase.Failed -> stringResource(R.string.qs_isp_phase_failed)
+    }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onSelect)
+            .padding(vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = profile.name,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+            )
+            Text(
+                text = phase + " · " + profile.scanned + "/" + profile.total +
+                    " · " + profile.goodRanges.size,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        if (selected) {
+            Text(
+                text = stringResource(R.string.qs_isp_select),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.primary,
+            )
+        }
+    }
+}
+
+@Composable
+private fun DiscoveryRowsHeader(rows: List<RangeOutcome>) {
+    Column(modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp)) {
+        Text(
+            text = stringResource(R.string.qs_isp_rows_title, rows.size),
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.SemiBold,
+        )
+        Text(
+            text = stringResource(R.string.qs_isp_rows_hint),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+/**
+ * One range result.
+ *
+ * The label is the persisted verdict, not a spinner: a range that was measured
+ * keeps its Good/Failed/Uncertain result even while the rest of the run is
+ * still going, which is what makes the list trustworthy on resume.
+ */
+@Composable
+private fun DiscoveryRangeRow(row: RangeOutcome) {
+    val label = when (row.state) {
+        RangeState.Pending -> stringResource(R.string.qs_isp_range_pending)
+        RangeState.Running -> stringResource(R.string.qs_isp_range_running)
+        RangeState.Good -> stringResource(R.string.qs_isp_range_good)
+        RangeState.Failed -> stringResource(R.string.qs_isp_range_failed)
+        RangeState.Error -> stringResource(R.string.qs_isp_range_error)
+    }
+    val color = when (row.state) {
+        RangeState.Good -> MaterialTheme.colorScheme.primary
+        RangeState.Failed -> MaterialTheme.colorScheme.error
+        RangeState.Error -> MaterialTheme.colorScheme.tertiary
+        RangeState.Running -> MaterialTheme.colorScheme.secondary
+        RangeState.Pending -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 8.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = row.cidr,
+                style = MaterialTheme.typography.bodySmall,
+                maxLines = 1,
+            )
+            val upload = row.uploadKBps
+            val latency = row.latencyMs
+            if (upload != null || latency != null) {
+                Text(
+                    text = stringResource(
+                        R.string.qs_isp_range_metrics,
+                        MetricFormat.speed(upload),
+                        MetricFormat.speed(row.downloadKBps),
+                        MetricFormat.latency(latency),
+                    ),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                )
+            }
+        }
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = color,
+            maxLines = 1,
+        )
+    }
+}
+
+
+@Composable
+private fun Stage2Header(count: Int) {
+    Column(modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp)) {
+        Text(
+            text = stringResource(R.string.qs_stage2_title, count),
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.SemiBold,
+        )
+        Text(
+            text = stringResource(R.string.qs_stage2_hint),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+/**
+ * One Stage 2 candidate.
+ *
+ * Every number is a measurement; a missing one is "N/A". The first row is the
+ * ranker's best score, not simply the fastest ping.
+ */
+@Composable
+private fun Stage2ResultRow(
+    candidate: ScanCandidate,
+    best: Boolean,
+    onUse: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 8.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = candidate.ip,
+                style = MaterialTheme.typography.bodySmall,
+                fontWeight = if (best) FontWeight.SemiBold else FontWeight.Normal,
+                maxLines = 1,
+            )
+            Text(
+                text = stringResource(
+                    R.string.qs_stage2_metrics,
+                    MetricFormat.latency(candidate.pingMs),
+                    MetricFormat.speed(candidate.downloadKBps),
+                    MetricFormat.speed(candidate.uploadKBps),
+                    candidate.score.toInt(),
+                ),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+            )
+        }
+        if (best) {
+            Text(
+                text = stringResource(R.string.qs_scan_suggested),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.primary,
+                maxLines = 1,
+            )
+        }
+        if (candidate.answered) {
+            TextButton(onClick = onUse) {
+                Text(stringResource(R.string.qs_use_ip))
             }
         }
     }

@@ -330,6 +330,14 @@ class QuietStormActivity : HelperBaseComponentActivity() {
                             onRescanNext = { qsViewModel.rescanOnNextConnect() },
                             onDismissMessage = { qsViewModel.dismissMessage() },
                             onToggleLanguage = { qsViewModel.toggleLanguage() },
+                            onSelectIsp = { qsViewModel.selectIsp(it) },
+                            onStartDiscovery = { qsViewModel.startDiscovery(it) },
+                            onResumeDiscovery = { qsViewModel.startDiscovery() },
+                            onRestartDiscovery = {
+                                qsViewModel.startDiscovery(it, force = true)
+                            },
+                            onStopDiscovery = { qsViewModel.stopDiscovery() },
+                            onUseCandidate = { qsViewModel.useCandidateNow(it) },
                         )
 
                         else -> QsAppsScreen(

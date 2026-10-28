@@ -51,6 +51,26 @@ class DiscoveryStatusTest {
     }
 
     @Test
+    fun anInterruptedRunIsResumableAndNotFinished() {
+        val status = DiscoveryStatus(phase = DiscoveryPhase.Interrupted, done = 12, total = 628)
+        assertTrue(status.isResumable)
+        assertFalse(status.isTerminal)
+        assertFalse(status.isActive)
+    }
+
+    @Test
+    fun aUserStopIsResumable() {
+        val status = DiscoveryStatus(phase = DiscoveryPhase.Paused, done = 12, total = 628)
+        assertTrue(status.isResumable)
+    }
+
+    @Test
+    fun progressIsDerivedFromDoneAndTotal() {
+        assertEquals(50, DiscoveryStatus(done = 314, total = 628).percent)
+        assertEquals(0, DiscoveryStatus().percent)
+    }
+
+    @Test
     fun theBackgroundPassIsMarked() {
         val status = DiscoveryStatus(phase = DiscoveryPhase.Running, background = true)
         assertTrue(status.background)

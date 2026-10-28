@@ -17,6 +17,8 @@ import com.v2ray.ang.handler.AppLocaleManager
 import com.v2ray.ang.handler.MmkvManager
 import com.v2ray.ang.handler.SpeedtestManager
 import com.v2ray.ang.senpai.CloudflareScanner
+import com.v2ray.ang.senpai.IspManager
+import com.v2ray.ang.senpai.IspProfile
 import com.v2ray.ang.ui.connect.AutoConfigFilter
 import com.v2ray.ang.ui.connect.AutoConnectResult
 import com.v2ray.ang.ui.connect.AutoConnectState
@@ -33,6 +35,7 @@ import com.v2ray.ang.ui.qsn.domain.ConfigRow
 import com.v2ray.ang.ui.qsn.domain.ConfigSelection
 import com.v2ray.ang.ui.qsn.domain.ConfigSource
 import com.v2ray.ang.ui.qsn.domain.CrashReport
+import com.v2ray.ang.ui.qsn.domain.DiscoveryStatus
 import com.v2ray.ang.ui.qsn.domain.LanguageToggle
 import com.v2ray.ang.ui.qsn.domain.ManualConfigRules
 import com.v2ray.ang.ui.qsn.domain.NotificationDefaults
@@ -144,6 +147,13 @@ class QsViewModel(
                     _uiState.value.qualifiedRanges
                 }
                 _uiState.update { it.copy(discovery = status, qualifiedRanges = qualified) }
+                // The persisted profile is the source for the saved-ISP list
+                // and for a screen recreated after the run ended. Reading it on
+                // every row would parse the whole file 600 times, so it is
+                // refreshed when the run changes phase or finishes.
+                if (status.phase != previous.phase || status.isTerminal) {
+                    refreshIspProfiles()
+                }
             }
         }
         viewModelScope.launch(Dispatchers.IO) {
@@ -159,6 +169,16 @@ class QsViewModel(
             }
         }
         refreshLocalSnapshot()
+        // A run that was active when the process died is marked Interrupted;
+        // a live run is left alone. The last persisted state is published, so a
+        // recreated screen shows real results instead of an empty Idle state.
+        // Storage work stays off the main thread: a migrated profile can hold
+        // hundreds of ranges and each write re-serialises the whole file.
+        viewModelScope.launch(Dispatchers.IO) {
+            val lastIsp = QsPrefs.lastIsp() ?: IspManager.DEFAULT_ISP
+            CloudflareScanner.reconcileDiscovery(getApplication(), lastIsp)
+            refreshIspProfiles(lastIsp)
+        }
         // MainRepository probes the daemon in its constructor, which can be
         // before this collector exists, so the reply may be dropped. Probe
         // again once the collector is attached to restore the real state of a
@@ -587,6 +607,7 @@ class QsViewModel(
         refreshConfigRows()
         refreshRanges()
         refreshSelectedProfile()
+        refreshIspProfiles()
         _uiState.update { it.copy(lastScanAt = QsPrefs.lastScanAt()) }
     }
 
@@ -1026,6 +1047,82 @@ class QsViewModel(
         _uiState.update { it.copy(ranges = next) }
     }
 
+    // ---------- ISP discovery ----------
+
+    /** Chooses which ISP the discovery controls and the next Stage 2 act on. */
+    fun selectIsp(name: String) {
+        val isp = name.trim().ifEmpty { IspManager.DEFAULT_ISP }
+        QsPrefs.setLastIsp(isp)
+        refreshIspProfiles(isp)
+    }
+
+    /**
+     * Starts or resumes discovery for [ispName].
+     *
+     * [force] is an explicit restart: it forgets the stored results of that ISP
+     * and measures the whole dataset again. A plain start resumes from the
+     * persisted per-range results, so a paused or interrupted run never loses
+     * what it already measured.
+     */
+    fun startDiscovery(ispName: String? = null, force: Boolean = false) {
+        if (CloudflareScanner.isDiscoveryActive) {
+            _uiState.update { it.copy(message = getString(R.string.qs_discovery_already_running)) }
+            return
+        }
+        val isp = (ispName ?: _uiState.value.selectedIsp).trim()
+            .ifEmpty { IspManager.DEFAULT_ISP }
+        val target = connectTarget()
+        if (target == null) {
+            _uiState.update { it.copy(rangeError = getString(R.string.qs_range_scan_needs_config)) }
+            return
+        }
+        QsPrefs.setLastIsp(isp)
+        _uiState.update {
+            it.copy(
+                selectedIsp = isp,
+                rangeError = null,
+                message = null,
+            )
+        }
+        val started = CloudflareScanner.discoverRanges(
+            context = getApplication(),
+            guid = target.first,
+            ispName = isp,
+            background = false,
+            force = force,
+            onFinish = { outcome ->
+                refreshIspProfiles(isp)
+                val text = when {
+                    outcome.cancelled -> getString(R.string.qs_discovery_stopped)
+                    outcome.exhausted -> getString(
+                        R.string.qs_discovery_finished,
+                        outcome.good,
+                        outcome.scanned,
+                        outcome.total,
+                    )
+                    else -> getString(
+                        R.string.qs_discovery_paused_counts,
+                        outcome.good,
+                        outcome.scanned,
+                        outcome.total,
+                    )
+                }
+                _uiState.update { it.copy(message = text) }
+            },
+        )
+        if (!started) {
+            refreshIspProfiles(isp)
+        }
+    }
+
+    /** Explicitly stops the active discovery; every completed result is kept. */
+    fun stopDiscovery() {
+        if (!CloudflareScanner.isDiscoveryActive) return
+        CloudflareScanner.stopDiscovery()
+        refreshIspProfiles()
+        _uiState.update { it.copy(message = getString(R.string.qs_discovery_stopped)) }
+    }
+
     /** Forgets the saved edge so the next connect scans again. */
     fun rescanOnNextConnect() {
         QsPrefs.clearSelection()
@@ -1061,7 +1158,12 @@ class QsViewModel(
                     suggestedIp = null,
                 )
             }
-            val result = orchestrator.scanOnly(getApplication(), target.first, target.second) { state ->
+            val result = orchestrator.scanOnly(
+                context = getApplication(),
+                guid = target.first,
+                profile = target.second,
+                ispName = _uiState.value.selectedIsp,
+            ) { state ->
                 when (state) {
                     is AutoConnectState.ScanProgress -> _uiState.update {
                         it.copy(scanningNow = true, scanDone = state.done, scanTotal = state.total)
@@ -1391,7 +1493,54 @@ class QsViewModel(
                 qualifiedRanges = QualifiedRangeStore.snapshot(),
             )
         }
+        refreshIspProfiles()
     }
+
+    /**
+     * Re-reads every ISP profile and keeps the selected one consistent.
+     *
+     * The list is the persisted truth: it survives a screen change, a process
+     * restart and a paused run. A live run is not overwritten by this read.
+     */
+    private fun refreshIspProfiles(preferred: String? = null) {
+        val app = getApplication<Application>()
+        val profiles = IspManager.loadAll(app)
+            .sortedWith(compareByDescending<IspProfile> { it.updatedAt }.thenBy { it.name })
+        val wanted = preferred
+            ?: _uiState.value.selectedIsp.takeIf { it.isNotBlank() }
+            ?: QsPrefs.lastIsp()
+            ?: IspManager.DEFAULT_ISP
+        val selected = profiles.firstOrNull { it.name.equals(wanted, ignoreCase = true) }
+            ?.name ?: wanted
+        val live = CloudflareScanner.discovery.value
+        val shown = if (live.isActive && live.ispName.equals(selected, ignoreCase = true)) {
+            live
+        } else {
+            profiles.firstOrNull { it.name.equals(selected, ignoreCase = true) }
+                ?.let { statusFromProfile(it) }
+                ?: if (live.isActive) live else statusFromProfile(
+                    IspProfile(selected, emptyList()),
+                )
+        }
+        _uiState.update {
+            it.copy(
+                ispProfiles = profiles,
+                selectedIsp = selected,
+                discovery = shown,
+            )
+        }
+    }
+
+    private fun statusFromProfile(profile: IspProfile): DiscoveryStatus = DiscoveryStatus(
+        phase = profile.phase,
+        ispName = profile.name,
+        done = profile.scanned,
+        total = profile.total,
+        qualified = profile.goodRanges.size,
+        failed = profile.failedCount,
+        errors = profile.errorCount,
+        rows = profile.toStatusRows(),
+    )
 
     private fun refreshSelectedProfile() {
         val guid = MmkvManager.getSelectServer()

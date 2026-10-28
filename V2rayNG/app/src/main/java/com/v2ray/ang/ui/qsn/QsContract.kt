@@ -1,5 +1,6 @@
 package com.v2ray.ang.ui.qsn
 
+import com.v2ray.ang.senpai.IspProfile
 import com.v2ray.ang.ui.connect.AutoConnectState
 import com.v2ray.ang.ui.qsn.domain.ConfigChoice
 import com.v2ray.ang.ui.qsn.domain.ConfigFilter
@@ -104,6 +105,10 @@ data class QsUiState(
     val qualifiedRanges: List<QualifiedRange> = emptyList(),
     /** Live Stage 1 state, published by the scanner for both runs. */
     val discovery: DiscoveryStatus = DiscoveryStatus(),
+    /** Every ISP with persisted discovery results, newest first. */
+    val ispProfiles: List<IspProfile> = emptyList(),
+    /** ISP the discovery controls act on. */
+    val selectedIsp: String = "default",
     /** Persian/English text explaining why the last range was rejected. */
     val rangeError: String? = null,
     /** Text explaining why the last manual import was rejected. */

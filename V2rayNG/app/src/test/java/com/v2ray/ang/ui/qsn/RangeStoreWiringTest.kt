@@ -5,22 +5,25 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * The range database has one writer and one reader.
+ * The range database has one writer and one reader, and the two stages are
+ * independent.
  *
- * The reported defect was a split: discovery saved its results through one
- * component while the connection flow read another, so a successful scan could
- * leave the next connection with nothing to scan. These checks pin the single
- * canonical store, and pin the two things the background pass must never do:
- * write a profile or start a tunnel.
+ * The reported defects were a split store (discovery wrote one place while the
+ * connection flow read another), an early stop that hid unfinished ranges, and
+ * Stage 2 cancelling a Stage 1 run. These checks pin the current wiring.
  */
 class RangeStoreWiringTest {
 
     @Test
-    fun discoveryPersistsEachQualifiedRangeThroughTheStore() {
+    fun discoveryPersistsEachResultAndEachGoodRangeThroughTheStore() {
         val scanner = SourceFiles.main("senpai/CloudflareScanner.kt")
         assertTrue(
-            "a range must be saved the moment it qualifies",
-            scanner.contains("QualifiedRangeStore.add(listOf(qualified))"),
+            "every final range result must be written immediately",
+            scanner.contains("IspManager.recordOutcome(context, isp, outcome)"),
+        )
+        assertTrue(
+            "a qualified range must reach the canonical candidate store",
+            scanner.contains("QualifiedRangeStore.add(listOf(outcome.toQualifiedRange()))"),
         )
         assertFalse(
             "the scanner must not write the database itself",
@@ -29,9 +32,9 @@ class RangeStoreWiringTest {
     }
 
     @Test
-    fun theBackgroundPassUsesTheSameStoreAndTouchesNoProfile() {
+    fun theBackgroundPassDelegatesToTheScannerAndTouchesNoProfile() {
         val scheduler = SourceFiles.main("ui/connect/DiscoveryScheduler.kt")
-        assertTrue(scheduler.contains("QualifiedRangeStore.add(outcome.qualified)"))
+        assertTrue(scheduler.contains("CloudflareScanner.discoverRanges("))
         listOf(
             "encodeServerConfig",
             "setSelectServer",
@@ -82,4 +85,42 @@ class RangeStoreWiringTest {
             viewModel.contains("QualifiedRangeStore.snapshot()"),
         )
     }
+
+    @Test
+    fun stageTwoDoesNotCancelDiscovery() {
+        val scanner = SourceFiles.main("senpai/CloudflareScanner.kt")
+        val cancel = SourceFiles.body(scanner, "fun cancel() {")
+        assertTrue("Stage 2 cancel must only stop Stage 2", cancel.contains("cancelScan()"))
+        assertFalse("Stage 2 cancel must not touch the discovery job", cancel.contains("discoveryJob"))
+
+        val scanRanges = SourceFiles.body(scanner, "fun scanRanges(")
+        assertTrue(scanRanges.contains("cancelScan()"))
+        assertFalse(scanRanges.contains("discoveryJob.cancel"))
+        assertFalse(scanRanges.contains("stopDiscovery"))
+    }
+
+    @Test
+    fun stageTwoReadsTheSelectedIspsStoredRanges() {
+        val scanner = SourceFiles.main("senpai/CloudflareScanner.kt")
+        val scanForIsp = SourceFiles.body(scanner, "fun scanForIsp(")
+        assertTrue(scanForIsp.contains("IspManager.getProfile(context, ispName)"))
+        assertTrue(scanForIsp.contains("profile?.goodCidrs"))
+        assertFalse(
+            "an ISP scan must not silently fall back to unrelated ranges",
+            scanForIsp.contains("scan(context"),
+        )
+    }
+
+    @Test
+    fun discoveryHasNoTargetOrHiddenRangeLimit() {
+        val scanner = SourceFiles.main("senpai/CloudflareScanner.kt")
+        val discovery = SourceFiles.body(scanner, "fun discoverRanges(")
+        assertFalse(discovery.contains("TARGET_RANGES"))
+        assertFalse(discovery.contains(".take(30)"))
+        assertTrue(
+            "the engine measures every range without a final result",
+            scanner.contains("DiscoveryEngine("),
+        )
+    }
 }
+

@@ -2050,3 +2050,169 @@ token, so their SHA-256 values are not stated rather than guessed. The file name
 
 This subsection was added after that run, in a documentation-only commit. The code described above
 is exactly the tree run 40472868254 built.
+
+## 20. Restoring the historical discovery behaviour inside the current engine (two-stage scanner)
+
+This pass restores the capabilities of the old Cloudflare scanner **inside** the current Quiet
+Storm NG architecture. It does not restore the old architecture: the current UI, the scanner object,
+the MMKV data layer and the connection orchestrator stay as they are, and only the lost behaviour is
+ported back into them.
+
+### 20.1 Objective
+
+Five reported defects on `feature/minimal-cloudflare-vpn`:
+
+1. discovery stopped early and never measured the whole range dataset;
+2. leaving the IP Ranges screen cancelled the run, and re-entering showed an empty state;
+3. a stop was destructive: there was no honest resume from the exact point;
+4. discovered ranges were not stored per ISP and could be silently truncated;
+5. the Persian "Cloudflare-ready" badge in Configurations rendered vertically.
+
+### 20.2 Reference points in history
+
+| Commit | What it is |
+|---|---|
+| `be9f3cef` | first Cloudflare discovery: 15 KB/s upload gate, 3 latency samples, top 10 by average upload |
+| `e9ca5d26` | last pre-redesign discovery on `master`: 20 KB/s gate, `Semaphore(6)`, `IPS_PER_CIDR = 2`, `take(30)` candidate cap |
+| `2ce6d9ef` | the current two-stage flow this pass builds on |
+
+The numbers kept from that history are `MIN_UPLOAD_KBPS = 20`, `IPS_PER_RANGE = 2` and
+`CONCURRENCY = 6`. Stage 2 still samples `IPS_PER_CIDR = 2` addresses per range and still caps the
+candidate list at `MAX_CANDIDATES = 30`, with `LATENCY_SAMPLES = 3` and `DEFAULT_CONCURRENCY = 4`.
+
+**"GT" does not exist.** `git grep` over the current tree and over the whole history found no field,
+column, criterion or constant named `GT` in the scanner, the profile DTO, the outbound builder or
+the parsers. It is therefore not invented here; the real criteria are the ones listed above and in
+20.6.
+
+### 20.3 Why discovery never finished (five separate causes)
+
+1. **An early stop by design.** `DiscoveryQuality.TARGET_RANGES = 5`, `DiscoveryAccumulator.reachedTarget`
+   and a `stopped` flag ended the run as soon as five ranges qualified. A sixth range was refused.
+2. **A hidden cap.** `RangeSet.MAX_RANGES = 64` truncated the persisted database; the bundled dataset
+   holds 628 CIDRs, so a full run could not be stored even if it had been measured.
+3. **One shared job.** `CloudflareScanner.cancel()` cancelled the single `scanJob`, which both stages
+   used. Starting Stage 2 cancelled Stage 1, and a cancelled screen cancelled whichever stage was
+   running.
+4. **No per-range state.** Progress lived only in the scanner's `StateFlow`. The persisted cursor
+   `lastScannedIndex` was a position in a list that concurrency had already reordered, so a resume
+   could skip ranges or repeat them, and a failed range and a never-reached range looked the same.
+5. **Silent fallbacks.** `scanRanges(emptyList())` and `scanForIsp` fell back to the bundled dataset,
+   so an incomplete discovery still produced a "successful" scan over unrelated ranges.
+
+### 20.4 What changed
+
+**A pure engine** — `ui/qsn/domain/DiscoveryRun.kt` (new). `DiscoveryEngine` measures every range
+that has no final result, with `RangeState { Pending, Running, Good, Failed, Error }` and one
+persisted `RangeOutcome` per CIDR. It never stops early, a failure is recorded and the run
+continues, and only an *uncertain* result (native/config error, or an answer without a throughput
+measurement) is retried — at most `MAX_ATTEMPTS = 2`, after `RETRY_DELAY_MS = 250`. Good and Failed
+are final and are never re-measured by a plain resume; Pending, Running and Error are measured again.
+The engine has no Android dependency: the probe and the store are injected, which is what makes the
+behaviour testable on the JVM.
+
+**Two independent jobs** — `senpai/CloudflareScanner.kt`. `scanJob`/`scanScope` (Stage 2) and
+`discoveryJob`/`discoveryScope` (Stage 1) are separate. `cancel()` is now `cancelScan()` and only
+touches Stage 2. `stopDiscovery()` is the only way to stop Stage 1, it takes the same lock as a
+start (a stop racing a start cannot cancel the new run), and it marks the profile `Paused` without
+losing a result. `isDiscoveryActive` and `reconcileDiscovery` let a screen read the real state:
+a run whose process died is marked `Interrupted` and is resumable.
+
+**Per-ISP persistence** — `senpai/IspManager.kt`. One MMKV key (`qsn_isp_profiles_v2`) holds, per ISP:
+name, every result (`cidr`, state, upload, download, latency, attempts, timestamp), phase, total,
+scanned, the dataset the results belong to, manual CIDRs and `updatedAt`. Every read-modify-write is
+serialised, because six coroutines finish at the same time. The old SharedPreferences file
+(`isp_profiles`/`profiles`) is imported once, copied rather than moved, and a legacy profile that has
+only `goodCidrs` is seeded into the result list and into `QualifiedRangeStore`, so no previously
+saved range is lost.
+
+**Stage 2 from the selected ISP's stored ranges** — `ui/connect/ConnectionOrchestrator.kt`.
+`DiscoveryScheduler.stop()` is gone from the connect path: starting Stage 2 no longer cancels
+Stage 1. Ranges come from `QsPrefs.lastIsp()` → `IspManager.getProfile(...).goodCidrs` →
+`QualifiedRangeStore.snapshot()` → manual ranges. `scanOnly` takes the ISP, and the discovery
+timeout no longer cancels a run that is still measuring; the flow continues with what is already
+stored.
+
+**UI** — `ui/qsn/QsRangesScreen.kt`, `QsViewModel.kt`, `QsContract.kt`, `QuietStormActivity.kt`.
+An "ISP discovery" card shows the phase, a determinate progress bar with percent, done/total, and the
+good/failed/uncertain split; Start, Resume, Restart and Stop are explicit. Every range of the run is
+listed with its own state (unchecked, checking, good, failed, uncertain), and the Stage 2 candidates
+are listed with latency, upload, download and score plus "Use this IP". The screen is a viewer: it
+collects `CloudflareScanner.discovery` and never starts or cancels a run in its own scope.
+
+**Badge fix** — `ui/qsn/QsConfigScreen.kt`. The transport label now carries
+`Modifier.weight(1f, fill = false)` and ellipsises, and both badges are `maxLines = 1`,
+`softWrap = false`, `overflow = TextOverflow.Ellipsis`. The Row previously measured the badge with
+whatever width was left, which could be a few pixels; Persian then broke at every character. No font
+size was reduced and no text was hidden.
+
+### 20.5 Storage and migration rules
+
+* Results are written **when they finish**, not at the end of the run: leaving the screen, a crash or
+  a killed process cannot lose them.
+* A completed profile (`phase == Completed && scanned >= total`) is **reused**, never re-measured,
+  unless the user explicitly asks for a restart (`force = true`) or the bundled dataset changed.
+* `resetDiscovery` clears that ISP's results and phase but keeps its manual CIDRs and the global
+  qualified-range store, so a restart cannot erase a range another ISP qualified.
+* `RangeSet.MAX_RANGES` is now 1024, far above the 628-CIDR dataset, so the limit is a corruption
+  guard rather than a hidden truncation.
+
+### 20.6 Quality criteria (unchanged, and deliberately not a ping)
+
+A range qualifies only when a sampled address answers **through the real configuration** and carries
+at least 20 KB/s of upload. Each candidate gets three latency samples (median and median absolute
+deviation), and the bounded 1 MiB up / 1 MiB down test through `RealTrafficSpeedTest`. A missing
+traffic measurement is "not measured", never zero: the range is recorded as uncertain and retried,
+not silently failed. Stage 2 ranks with `CandidateRanker` (latency .30, jitter .10, download .25,
+upload .15, stability .20), and the winner is the highest score, not the lowest ping. Probes run in
+throw-away profiles under the private `qsn-probe` subscription, so a measurement never rewrites the
+profile the tunnel uses.
+
+### 20.7 Tests added
+
+| File | Methods | What they pin |
+|---|---|---|
+| `ui/qsn/domain/DiscoveryEngineTest.kt` (new) | 8 | every range measured, a failure does not stop the rest, 40 good ranges still finish, resume measures only non-final ranges, a completed dataset is not re-probed, uncertain is retried then recorded, a transient error can still qualify, the plan keeps retryable ranges |
+| `ui/qsn/DiscoveryLifecycleTest.kt` (new) | 6 | separate jobs, the connect flow never stops discovery, the screen does not own the run, the state and results are persisted, a completed ISP is reused, stop only touches Stage 1 |
+| `ui/qsn/CloudflareReadyBadgeTest.kt` (new) | 2 | the badge is one non-wrapping line, the transport label yields space instead of squeezing it |
+| `ui/qsn/RangeStoreWiringTest.kt` (extended) | +3 (8 total) | Stage 2 does not cancel discovery, `scanForIsp` reads the ISP's ranges and has no bundled fallback, discovery has no target and no `.take(30)` |
+| `ui/qsn/domain/DiscoveryStatusTest.kt` (extended) | +3 (9 total) | Interrupted is resumable and not finished, a user stop is resumable, percent is derived from done/total |
+| `ui/qsn/domain/DiscoveryQualityTest.kt` (updated) | 16 | the historical 20/2/6 numbers, every distinct range accepted, no duplicate counting |
+
+That is **22 new test methods** across the four filtered packages; the earlier
+`TARGET_RANGES`/early-stop assertions were replaced rather than deleted.
+
+### 20.8 Files changed
+
+Modified: `senpai/CloudflareScanner.kt`, `senpai/IspManager.kt`, `service/CfScanService.kt`,
+`ui/connect/ConnectionOrchestrator.kt`, `ui/connect/DiscoveryScheduler.kt`,
+`ui/qsn/QsConfigScreen.kt`, `ui/qsn/QsContract.kt`, `ui/qsn/QsRangesScreen.kt`,
+`ui/qsn/QsViewModel.kt`, `ui/qsn/QuietStormActivity.kt`, `ui/qsn/data/QsPrefs.kt`,
+`ui/qsn/domain/Discovery.kt`, `res/values/strings.xml`, `res/values-fa/strings.xml`,
+`ui/qsn/RangeStoreWiringTest.kt`, `ui/qsn/domain/DiscoveryQualityTest.kt`,
+`ui/qsn/domain/DiscoveryStatusTest.kt`.
+
+Added: `ui/qsn/domain/DiscoveryRun.kt`, `ui/qsn/domain/DiscoveryEngineTest.kt`,
+`ui/qsn/DiscoveryLifecycleTest.kt`, `ui/qsn/CloudflareReadyBadgeTest.kt`.
+
+36 new string resources, English and Persian, with identical placeholders.
+
+### 20.9 Deliberately not changed
+
+* The VPN connect/disconnect path, the native AAR contract, the protocol parsers, the subscription
+  importer, Per-App Proxy, the settings screens and `applyBestIp`'s behaviour (it still writes
+  `qsEdgeIp`, never `server`).
+* The old scanner screen (`CfScanActivity`/`CfScanService`) keeps working through
+  `discoverGoodCidrs`, which now delegates to the same engine.
+* Stage 2 does not cancel Stage 1, and Stage 1 never writes the profile the tunnel uses.
+
+### 20.10 What is not verified
+
+**No Gradle or Android build was executed on this machine** — the task forbids it. Compilation and
+the unit suite are proven only by the GitHub Actions run of this commit; see 20.11. No device test
+was performed, so nothing here claims that a tunnel was established or that a real ISP produced a
+given number of qualified ranges.
+
+### 20.11 Build of record
+
+Filled in after the push, from the actual workflow run of this commit.
