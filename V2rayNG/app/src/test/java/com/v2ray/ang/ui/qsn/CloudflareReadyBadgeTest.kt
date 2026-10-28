@@ -17,9 +17,35 @@ class CloudflareReadyBadgeTest {
 
     private val screen = SourceFiles.main("ui/qsn/QsConfigScreen.kt")
 
+    /**
+     * The whole function, brace-balanced.
+     *
+     * [SourceFiles.body] stops at the first four-space closing brace, which is
+     * correct for a flat function but ends early for one that opens with an
+     * if/else expression, as [EligibilityBadge] does.
+     */
+    private fun function(text: String, signature: String): String {
+        val start = text.indexOf(signature)
+        check(start >= 0) { "missing " + signature }
+        var depth = 0
+        var i = text.indexOf('{', start)
+        check(i >= 0) { "no body for " + signature }
+        while (i < text.length) {
+            when (text[i]) {
+                '{' -> depth++
+                '}' -> {
+                    depth--
+                    if (depth == 0) return text.substring(start, i + 1)
+                }
+            }
+            i++
+        }
+        error("unterminated " + signature)
+    }
+
     @Test
     fun theBadgeIsOneNonWrappingLine() {
-        val badge = SourceFiles.body(screen, "private fun EligibilityBadge(")
+        val badge = function(screen, "private fun EligibilityBadge(")
         assertTrue("the badge must be limited to one line", badge.contains("maxLines = 1"))
         assertTrue("the badge must not soft-wrap", badge.contains("softWrap = false"))
         assertTrue("a long badge must ellipsise", badge.contains("overflow = TextOverflow.Ellipsis"))
