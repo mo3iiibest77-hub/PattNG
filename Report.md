@@ -2209,9 +2209,14 @@ Added: `ui/qsn/domain/DiscoveryRun.kt`, `ui/qsn/domain/DiscoveryEngineTest.kt`,
 ### 20.10 What is not verified
 
 **No Gradle or Android build was executed on this machine** — the task forbids it. Compilation and
-the unit suite would be proven only by a GitHub Actions run, and no run was created for this commit
-(20.11). No device test was performed, so nothing here claims that a tunnel was established or that
-a real ISP produced a given number of qualified ranges.
+the unit suite are proven by the GitHub Actions runs recorded in 20.11, on commit `ffd2cbd5`.
+
+Not verified, and therefore not claimed anywhere in this report:
+
+* no device or emulator test was run, so nothing here claims that a tunnel was established;
+* no real ISP was measured, so no qualified-range count, upload figure or download figure is claimed;
+* the UI changes compile and are covered by source-level tests, but no screen was observed on a
+  device.
 
 ### 20.11 Build of record
 
@@ -2219,29 +2224,38 @@ a real ISP produced a given number of qualified ranges.
 |---|---|
 | Branch | `feature/minimal-cloudflare-vpn` |
 | Implementation commit | `97d03a7c2074cf16b5c2026f3513aeb27d22b83e` |
-| Push | verified — `origin/feature/minimal-cloudflare-vpn` is `97d03a7c`, and `ui/qsn/domain/DiscoveryRun.kt` answers HTTP 200 on that ref |
+| CI fixes | `87b78fa0` (compile), `ffd2cbd5` (test) |
+| Verified commit | `ffd2cbd56180fb73f6a17e2c88de73d48818e926` |
+| Workflow | Build APK (`build.yml`), job `build` |
+| Run | [`40749478956`](https://github.com/mo3iiibest77-hub/PattNG/actions/runs/40749478956), `workflow_dispatch` |
+| Result | **success**, 2026-10-28T18:54:39Z → 19:01:58Z |
+| Second run | `40749458601` (`push`, same SHA) — also **success** |
+| Unit tests | **439 tests, 0 failures, 0 errors, 0 skipped** |
+| APKs | three signed playstore APKs, versionName 2.3.4, one signing key; the workflow's own check printed `all three APKs are com.***.ng, share one signing key and contain the new code` |
 | Local Gradle / Android build | **NOT RUN** — forbidden by the task |
-| GitHub Actions run for this commit | **NOT RUN — no run was created.** `check-runs` for the SHA returned `total_count: 0`, and no run for `97d03a7c` appeared in `actions/runs` or in the `Build APK` workflow's runs after about ten minutes of polling |
-| Unit tests | **NOT RUN** — no CI run, and no local run |
 | Device test | **NOT RUN** |
 
-What was verified instead, on the exact tree of `97d03a7c`:
+The six classes this pass touched or added, as counted by CI:
 
-* brace/state-machine balance of all 16 changed or added Kotlin files: `depth 0`, state `code`;
-* every `R.string.*` referenced by the app resolves to a resource (`missing: []`, 618 used, 698 defined);
-* no duplicate function names in the changed files, and the scanner's and `IspManager`'s function
-  lists are additive only (nothing removed that a caller still uses);
-* every `IspManager` / `CloudflareScanner` call site matches the current parameter names and types;
-  two `context =` / `ctx =` named-argument mismatches were found and fixed this way before the commit.
+| Class | Tests | Failures |
+|---|---|---|
+| `domain.DiscoveryEngineTest` (new) | 8 | 0 |
+| `DiscoveryLifecycleTest` (new) | 6 | 0 |
+| `CloudflareReadyBadgeTest` (new) | 2 | 0 |
+| `RangeStoreWiringTest` | 8 | 0 |
+| `domain.DiscoveryStatusTest` | 9 | 0 |
+| `domain.DiscoveryQualityTest` | 16 | 0 |
 
-The workflow runs on `push` to this branch with a `V2rayNG/**` path filter, and this commit changes
-20 files under `V2rayNG/`, so the missing run is a trigger/infrastructure fact, not a path-filter
-skip. To produce the missing evidence:
+Two CI failures happened before that green run. Both were real defects in this pass, not
+infrastructure:
 
-```sh
-gh workflow run build.yml --ref feature/minimal-cloudflare-vpn
-# or, without gh:
-git commit --allow-empty -m "ci: trigger build for 97d03a7c" && git push
-```
-
-Until that run exists, **no claim is made that this commit compiles or that the unit tests pass.**
+1. **`40747675105`** (for `97d03a7c`) — `:app:compilePlaystoreDebugKotlin` failed with two errors:
+   `CloudflareScanner.kt:571` called `withContext(Dispatchers.Main)` inside a non-suspend
+   `onOutcome` lambda, and `QsRangesScreen.kt` imported `IspProfile` from `ui.qsn.domain` instead of
+   `com.v2ray.ang.senpai`. Fixed in `87b78fa0` by making the engine's `onStart`/`onOutcome`
+   `suspend` and correcting the import.
+2. **`40748575702`** (for `87b78fa0`) — 438 of 439 tests passed; `CloudflareReadyBadgeTest`
+   failed on `the badge must be limited to one line`. The badge itself was correct; the test read it
+   with `SourceFiles.body`, which stops at the first four-space closing brace and therefore ended at
+   the `if/else` expression before the `Text` that carries `maxLines`. Fixed in `ffd2cbd5` by
+   walking braces from the signature to the matching close.
