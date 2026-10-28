@@ -173,8 +173,8 @@ class DiscoveryEngine(
     suspend fun run(
         isp: String,
         dataset: List<String>,
-        onStart: (String) -> Unit = {},
-        onOutcome: (RangeOutcome) -> Unit = {},
+        onStart: suspend (String) -> Unit = {},
+        onOutcome: suspend (RangeOutcome) -> Unit = {},
     ): DiscoveryRunSummary = coroutineScope {
         val before = store.snapshot(isp)
         val pending = DiscoveryPlan.pending(dataset, before)

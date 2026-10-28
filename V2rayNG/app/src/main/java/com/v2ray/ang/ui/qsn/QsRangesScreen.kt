@@ -43,8 +43,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.v2ray.ang.R
+import com.v2ray.ang.senpai.IspProfile
 import com.v2ray.ang.ui.qsn.domain.DiscoveryPhase
-import com.v2ray.ang.ui.qsn.domain.IspProfile
 import com.v2ray.ang.ui.qsn.domain.RangeOutcome
 import com.v2ray.ang.ui.qsn.domain.RangeState
 import com.v2ray.ang.ui.qsn.domain.ScanCandidate
