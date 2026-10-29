@@ -396,16 +396,17 @@ class ConnectionOrchestrator {
                 // started before any ISP was named; the user's manual ranges are
                 // the last resort and stay supported.
                 val isp = ispName?.trim()?.ifEmpty { null } ?: QsPrefs.lastIsp()
-                val profile = isp?.let { IspManager.getProfile(context, it) }
+                // Named ispProfile: "profile" is this function's ProfileItem.
+                val ispProfile = isp?.let { IspManager.getProfile(context, it) }
                 // Stage 2 measures what the user picked for this ISP: the
                 // selection when there is one, otherwise its good ranges. A
                 // failed or unchecked range never joins on its own, and another
                 // ISP's ranges can never leak in.
-                val ranges = if (profile != null) {
+                val ranges = if (ispProfile != null) {
                     Stage2Ranges.resolve(
-                        good = profile.goodCidrs,
-                        manual = profile.manualCidrs,
-                        selected = QsPrefs.selectedRanges(profile.name),
+                        good = ispProfile.goodCidrs,
+                        manual = ispProfile.manualCidrs,
+                        selected = QsPrefs.selectedRanges(ispProfile.name),
                     )
                 } else {
                     RangeSet.cidrs(QualifiedRangeStore.snapshot())
