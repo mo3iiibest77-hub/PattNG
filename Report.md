@@ -2432,9 +2432,10 @@ while it measured. The per-range results were already safe.
 
 | Suite | Count | Status |
 |---|---|---|
-| `ui.qsn.DiscoverySurvivalTest` | 13 | added, CI pending |
-| `ui.qsn.domain.DiscoveryResumeTest` | 10 | added, CI pending |
-| Existing `ui.qsn`, `ui.qsn.domain`, `ui.qsn.data`, `ui.connect` suites | 461 | unchanged, CI pending |
+| `ui.qsn.DiscoverySurvivalTest` | 13 | **PASS** (counted in the 484 below) |
+| `ui.qsn.domain.DiscoveryResumeTest` | 10 | **PASS** (counted in the 484 below) |
+| Existing `ui.qsn`, `ui.qsn.domain`, `ui.qsn.data`, `ui.connect` suites | 461 | **PASS**, unchanged |
+| **Total executed by CI** | **484** | **0 failures, 0 errors, 0 skipped** |
 
 Device-requiring behaviour (task removal, system kill, force-stop, reboot) is **not** unit tested
 and is not claimed as verified. It is documented platform behaviour, and it is listed as a
@@ -2450,14 +2451,21 @@ limitation in 22.10.
 | `python3 /tmp/balance.py` | brace/paren balance 0 for every changed Kotlin file |
 | `git diff --stat` | 5 files changed, 2 test files added |
 | `./gradlew ...` locally | **NOT RUN** — forbidden by the task; Android builds and tests run only in GitHub Actions |
+| `git commit` / `git push origin feature/minimal-cloudflare-vpn` | `6bb59851`, pushed `bf3e7cb6..6bb59851`, exit 0 |
+| `curl .../actions/runs` (poll) | run `40831738806` **completed / success** |
+| `curl .../check-runs/{job}/annotations` | `unit tests executed: 484 (failures=0 errors=0 skipped=0)` |
 
 ### 22.9 Build of record
 
 | Item | Value |
 |---|---|
 | Branch | `feature/minimal-cloudflare-vpn` |
-| Commit | _filled after the commit exists_ |
-| CI run | _filled after the run exists_ |
+| Commit | `6bb59851` (parent `bf3e7cb6`) |
+| Push | `bf3e7cb6..6bb59851` to `origin/feature/minimal-cloudflare-vpn`, exit 0 |
+| CI run | [`40831738806`](https://github.com/mo3iiibest77-hub/PattNG/actions/runs/40831738806) (`push`, started by the push) |
+| Result | **success** |
+| Steps | 13 Run unit tests, 14 Build APK, 15 Verify APK, 16-18 Upload — all **success** (`Build libhevtun` / `Save libhevtun` are conditionally skipped) |
+| Unit tests | **484 tests, 0 failures, 0 errors, 0 skipped** (461 before this pass; +13 wiring, +10 domain) |
 | Local Gradle / Android build | **NOT RUN** — forbidden by the task |
 | Device test | **NOT RUN** |
 
