@@ -15,9 +15,10 @@ class ManualRangeTest {
 
     @Test
     fun aValidCidrIsNormalisedBeforeItIsStored() {
+        // /24 keeps the first three octets: 104.16.5.9 -> 104.16.5.0.
         val result = ManualRangePolicy.classify("104.16.5.9/24", emptyList())
         assertTrue(result is ManualRangeResult.Added)
-        assertEquals("104.16.0.0/24", (result as ManualRangeResult.Added).cidr)
+        assertEquals("104.16.5.0/24", (result as ManualRangeResult.Added).cidr)
     }
 
     @Test
@@ -28,8 +29,8 @@ class ManualRangeTest {
 
     @Test
     fun theSameRangeWrittenDifferentlyIsStillADuplicate() {
-        // 104.16.5.9/24 normalises to 104.16.0.0/24, so it must not be added twice.
-        val result = ManualRangePolicy.classify("104.16.5.9/24", listOf("104.16.0.0/24"))
+        // 104.16.5.9/24 normalises to 104.16.5.0/24, so it must not be added twice.
+        val result = ManualRangePolicy.classify("104.16.5.9/24", listOf("104.16.5.0/24"))
         assertTrue(result is ManualRangeResult.Duplicate)
     }
 
