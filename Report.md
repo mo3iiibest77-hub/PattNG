@@ -2259,3 +2259,101 @@ infrastructure:
    with `SourceFiles.body`, which stops at the first four-space closing brace and therefore ended at
    the `if/else` expression before the `Text` that carries `maxLines`. Fixed in `ffd2cbd5` by
    walking braces from the signature to the matching close.
+
+## 21. Discovery start, live sample IPs, manual ranges and selected Stage 2
+
+Section 20 rebuilt the engine and its storage. This pass connects the screen to that engine and
+finishes the parts the requirement names as missing: a start that really starts, a live view of what
+is being measured, a first connection that does not wait for the whole dataset, per-ISP manual
+ranges, and a Stage 2 that measures only the ranges the user picked.
+
+### 21.1 What was still broken after section 20
+
+1. **No dedicated Discovery view.** The run state existed, but the only place to watch it was a card
+   inside the IP Ranges tab, and it never showed which addresses were being probed.
+2. **A first connection waited for the whole dataset.** The connect flow ran Stage 1 and then waited
+   for the run to finish (or for a five minute timeout), so a first connection was as slow as a full
+   discovery even though one good range was enough to try.
+3. **Manual ranges were global.** The add field wrote to a single list shared by every ISP, the
+   button was labelled with the generic range hint, and there was no way to delete one.
+4. **Stage 2 measured everything the ISP had.** There was no way to narrow a scan to the ranges the
+   user trusted.
+
+### 21.2 What changed
+
+**The Discovery view** — `ui/qsn/QsDiscoveryScreen.kt` (new, 232 lines). A full-screen view with the
+ISP name, a determinate progress bar and real percentage, the good/failed/uncertain split, the last
+result, the list of ranges with their own verdicts, and Stop / Resume / Restart. It reads
+`QsUiState.discovery` and owns no job: leaving it changes nothing, and a re-entry shows the state the
+scanner is publishing.
+
+**Live sample addresses** — `senpai/CloudflareScanner.kt`, `domain/Discovery.kt`.
+`DiscoveryStatus` gained `measuring: Map<String, List<String>>`. `probeRange` reports the addresses
+it sampled through a new `onSample` callback before it measures them, and `publish` exposes only the
+entries of ranges that are really running. The row renders `IP <addresses>` while checking, so the
+screen shows the addresses behind a measurement instead of a placeholder.
+
+**Two discovery modes.**
+*Manual*: the whole dataset, no early stop (unchanged from section 20, now pinned by a second test).
+*First connection*: `awaitFirstQualifiedRange(timeoutMs)` plus a `CompletableDeferred` completed by
+the first `Good` result. `resolveEdgeIp` starts the run in the background, takes the first qualified
+range for Stage 2, and leaves the run measuring. Nothing qualifies within
+`FIRST_RANGE_TIMEOUT_MS = 120_000` → the flow falls back to what the run already stored, then to
+manual ranges. It never scans unrelated data.
+
+**Manual ranges per ISP** — `domain/ManualRange.kt` (new), `QsViewModel`, `QsRangesScreen`,
+`senpai/IspManager`. `ManualRangePolicy.classify` parses the CIDR with the existing
+`ScanRangeParser`, normalises it to its network address, rejects a bad format/address/prefix and
+reports a duplicate instead of storing it twice. `IspManager.addManualCidr` /
+`removeManualCidr` store it under the selected ISP, the card lists them with a delete button and a
+`manual` label, and a manual range is never marked good on its own.
+
+**Range selection for Stage 2** — `domain/ManualRange.kt` (`Stage2Ranges`), `QsPrefs`,
+`ConnectionOrchestrator`. `QsPrefs.selectedRanges(isp)` stores the ticked ranges per ISP.
+`Stage2Ranges.resolve` intersects the selection with what that ISP owns, so a stale selection cannot
+pull in another ISP's range; an empty selection means every good range. `scanOnly` and
+`resolveEdgeIp` both resolve through it.
+
+### 21.3 The four CI failures of this pass (all real)
+
+| Run | Commit | Failure | Fix |
+|---|---|---|---|
+| `40826396757` | `38922283` | `ConnectionOrchestrator.kt:419:60` — `IspProfile?` where `ProfileItem` was expected | the new local shadowed `scanOnly`'s `profile` parameter; renamed to `ispProfile` (`b0a0e5c1`) |
+| `40827015061` | `b0a0e5c1` | three test failures: `ManualRangeTest` (2, the `104.16.0.0/24` expectation) and `DiscoveryScreenWiringTest.stageTwoMeasuresOnlyTheSelectedRangesOfTheIsp` | the wiring test asserted `profile.goodCidrs` while the code reads `ispProfile.goodCidrs` (`84682748`) |
+| `40828273399` | `84682748` | the two `ManualRangeTest` failures remained: expected `104.16.0.0/24`, got `104.16.5.0/24` | the production code was right (a /24 keeps the third octet); the test expectation was wrong (`cbb4e99a`) |
+| `40828882531` | `cbb4e99a` | — | **success** |
+
+### 21.4 Tests added or changed
+
+| File | Methods | What it pins |
+|---|---|---|
+| `domain/ManualRangeTest.kt` (new) | 13 | CIDR normalisation, duplicate detection across formats, format/address/prefix/empty rejections, Stage 2 selection: good by default, manual when nothing qualified, explicit narrowing, no cross-ISP leak, duplicate collapse |
+| `DiscoveryScreenWiringTest.kt` (new) | 8 | the view shows the sampled IPs and every range; the view owns no job; the activity opens and closes it; a start opens it and refuses a second run; manual ranges are validated and stored per ISP; the manual card has a title, an add and a delete; the first good range unblocks a connection without stopping the run; Stage 2 reads the ISP's selected ranges |
+| `domain/DiscoveryEngineTest.kt` | +1 (9) | a manual run keeps measuring after the first three good ranges |
+| `RangeStoreWiringTest.kt` | 8 | assertion updated to the new `Good` path (`QualifiedRangeStore.add(listOf(range))`) |
+
+### 21.5 Build of record
+
+| Item | Value |
+|---|---|
+| Branch | `feature/minimal-cloudflare-vpn` |
+| Implementation commit | `38922283` |
+| CI fixes | `b0a0e5c1`, `84682748`, `cbb4e99a` |
+| Verified commit | `cbb4e99a` |
+| Run | [`40828882531`](https://github.com/mo3iiibest77-hub/PattNG/actions/runs/40828882531) (`push`) |
+| Result | **success**, 2026-10-29T06:23:11Z → 06:30:06Z |
+| Steps | 13 Run unit tests, 14 Build APK, 15 Verify APK, 16-18 Upload — all **success** |
+| Unit tests | **461 tests, 0 failures, 0 errors, 0 skipped** (439 before this pass) |
+| Local Gradle / Android build | **NOT RUN** — forbidden by the task |
+| Device test | **NOT RUN** |
+
+### 21.6 What is still not verified
+
+* No device or emulator test: nothing here claims that a tunnel was established, that a first
+  connection used the first qualified range on a real network, or that a manual range improved a
+  scan.
+* No real ISP measurement: the counts, upload and latency figures shown by the screen come from the
+  engine at runtime and are not reproduced here.
+* Background continuation after a process kill is still limited by Android: the run lives in the app
+  process with a scanner-owned coroutine and persisted per-range state, so results survive, but the
+  measurement itself does not continue once the process is gone. Resuming is explicit.
