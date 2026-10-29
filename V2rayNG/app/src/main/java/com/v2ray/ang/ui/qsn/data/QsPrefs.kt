@@ -34,6 +34,7 @@ object QsPrefs {
     private const val KEY_SUB_PANEL_OPEN = "qsn_sub_panel_open"
     private const val KEY_LAST_ISP = "qsn_last_isp"
     private const val KEY_RANGE_SELECTION = "qsn_range_selection_v1"
+    private const val KEY_DISCOVERY_TARGET = "qsn_discovery_target_v1"
 
     // ---------- Selected Cloudflare IP ----------
 
@@ -96,6 +97,38 @@ object QsPrefs {
 
     fun setLastIsp(name: String) {
         MmkvManager.encodeSettings(KEY_LAST_ISP, name.trim())
+    }
+
+    // ---------- Discovery target ----------
+
+    /**
+     * ISP and server GUID of the last discovery start.
+     *
+     * A foreground service that the system starts again after killing the
+     * process gets a null intent and has no other way to know which run it was
+     * hosting. Only identifiers are stored: the ISP name and a configuration
+     * GUID, never a credential.
+     */
+    fun setDiscoveryTarget(isp: String, guid: String) {
+        val json = JSONObject()
+            .put("isp", isp.trim())
+            .put("guid", guid.trim())
+            .toString()
+        MmkvManager.encodeSettings(KEY_DISCOVERY_TARGET, json)
+    }
+
+    fun discoveryTarget(): Pair<String, String>? {
+        val json = MmkvManager.decodeSettingsString(KEY_DISCOVERY_TARGET)
+        if (json.isNullOrBlank()) return null
+        return try {
+            val obj = JSONObject(json)
+            val isp = obj.optString("isp").trim()
+            val guid = obj.optString("guid").trim()
+            if (isp.isEmpty() || guid.isEmpty()) null else isp to guid
+        } catch (e: Exception) {
+            LogUtil.e(TAG, "discoveryTarget failed: " + e.javaClass.simpleName)
+            null
+        }
     }
 
     // ---------- Stage 2 range selection ----------

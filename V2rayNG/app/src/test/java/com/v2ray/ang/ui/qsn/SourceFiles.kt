@@ -28,6 +28,9 @@ internal object SourceFiles {
     fun main(relative: String): String =
         File(moduleDir, "src/main/java/com/v2ray/ang/" + relative).readText()
 
+    /** The text of any file of the module, given its path under `app/`. */
+    fun file(relative: String): String = File(moduleDir, relative).readText()
+
     /** The text of one function, from its signature to its closing brace. */
     fun body(text: String, signature: String): String {
         val start = text.indexOf(signature)

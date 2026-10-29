@@ -2357,3 +2357,119 @@ pull in another ISP's range; an empty selection means every good range. `scanOnl
 * Background continuation after a process kill is still limited by Android: the run lives in the app
   process with a scanner-owned coroutine and persisted per-range state, so results survive, but the
   measurement itself does not continue once the process is gone. Resuming is explicit.
+
+## 22. Discovery survival — foreground hosting, durable progress and resume
+
+### 22.1 Objective
+
+Establish why the measurements of a Discovery run stop when the app is force-stopped or the
+process is killed, and then make the run survive exactly as much as Android allows — without
+replacing the engine, the per-ISP storage or the existing screens.
+
+### 22.2 Phase 1 — what owned the run before this change
+
+| Question | Evidence | Finding |
+|---|---|---|
+| Where does a run execute? | `senpai/CloudflareScanner.kt:462` — `discoveryScope = CoroutineScope(discoveryJob + Dispatchers.IO + scanExceptionHandler)` | An application-scoped coroutine owned by the `CloudflareScanner` object and created inside `discoverRanges`. It is not tied to a ViewModel, an Activity or a service. |
+| Is the ViewModel the owner? | `ui/qsn/QsViewModel.kt:1098` calls `CloudflareScanner.discoverRanges(...)`; the collector at `:143` reads `CloudflareScanner.discovery` | No. The ViewModel starts and observes; it never hosts the work. |
+| Did the QSN path use a foreground service? | `grep -rn CfScanService app/src/main` before this change | No. `CfScanService` existed, but only the legacy `ui/CfScanActivity.kt` used it. |
+| Is progress durable? | `senpai/IspManager.kt:178` `recordOutcome` ends in `write(all)`; `setPhase` at `:221` does the same | Yes. Every measured range is written to MMKV before the next range starts, and the phase is persisted. |
+| Is an unfinished range skipped on resume? | `ui/qsn/domain/DiscoveryRun.kt:36` `isTerminal = Good or Failed`; `DiscoveryPlan.pending` drops only terminal results | No. `Pending`, `Running` and `Error` are measured again; `Good` and `Failed` never are. |
+| What does the next app start see? | `CloudflareScanner.reconcileDiscovery` calls `IspManager.markInterrupted` (`IspManager.kt:252`) | A `Running` phase with no active job becomes `Interrupted`, which is resumable, and the persisted state is published to the UI. |
+
+So the limitation was **not** in the engine or in the storage: it was in the hosting. The run
+lived only as long as the app process did, and nothing asked Android to keep that process alive
+while it measured. The per-range results were already safe.
+
+### 22.3 What Android actually allows, per scenario
+
+| Scenario | Before this change | After this change |
+|---|---|---|
+| Leaving the Discovery screen | Kept measuring (the run is not owned by the screen) | Unchanged, and the run is now backed by a foreground notification |
+| App to background | Kept measuring while the process lived, with no kill protection | Kept measuring with foreground-service priority |
+| Swiping the task away | Kept measuring while the process lived | Kept measuring: the service is not `stopWithTask`, so it outlives the task |
+| System kill under memory pressure | Run ended; results kept; the next launch marked it `Interrupted` | `START_STICKY` starts the service again with a null intent and the run resumes from the first unfinished range |
+| Explicit force-stop (Settings / `adb shell am force-stop`) | Run ended; results kept | Identical. Force-stop puts the package in the stopped state: no service, no broadcast, no WorkManager job and no boot receiver runs until the user opens the app again. No app-level change can alter this. The run is then `Interrupted` and resumable, and at most the ranges in flight are measured again |
+| Device reboot | Run ended; results kept | Identical, and deliberately so: there is no boot receiver for discovery, because starting a measurement the user did not ask for after a reboot is not this feature's contract |
+
+### 22.4 Options considered
+
+| Option | Verdict |
+|---|---|
+| Move the run into `WorkManager` | Rejected. A `CoroutineWorker` is scheduled, batched and subject to a quota; it cannot publish per-range progress with the latency this screen shows, it cannot be attached to while it runs, and its own limit would split a full 628-range dataset across several deferrable jobs. Continuous progress, precise resume and one run per ISP do not fit a scheduled job. |
+| Start the legacy `CfScanService` discovery mode | Rejected as-is. That mode runs its own discovery through `discoverGoodCidrs` and reports through broadcasts; using it would give the run a second owner and duplicate the scanner's single-flight logic. |
+| Host the existing run in the existing service | **Chosen.** The scanner keeps ownership, storage stays the source of truth, and the service only contributes the foreground state, the notification and the sticky restart. |
+| Persist more state | Not needed. Progress, phase, dataset and results were already written per range. |
+
+### 22.5 Changes
+
+| File | Why |
+|---|---|
+| `app/src/main/java/com/v2ray/ang/service/CfScanService.kt` | Added `MODE_HOST`: attaches to a run the scanner already owns, updates the notification from `CloudflareScanner.discovery`, and stops itself when the run is no longer active. `START_STICKY` is returned only for hosting, and a null intent (system restart after a kill) goes through `resumeAfterRestart`, which resumes only a phase stored as `Running`/`Interrupted`. `onDestroy` no longer cancels the scanner: destroying the host must not abort a run it does not own. The notification Stop action is scoped to the stage the service is hosting. The two legacy modes (`discovery`, `scan`) keep their broadcasts and `START_NOT_STICKY`. |
+| `app/src/main/java/com/v2ray/ang/ui/qsn/QsViewModel.kt` | `startDiscovery` hands a successfully started run to the service, and re-attaches only the run this screen recorded (matched by ISP) when a start is requested while one is active. Single-flight behaviour is unchanged. |
+| `app/src/main/java/com/v2ray/ang/ui/qsn/data/QsPrefs.kt` | Stores the discovery target (ISP + configuration GUID) so a service the system starts again knows what it was hosting. Identifiers only, in the existing settings MMKV file. |
+| `app/src/main/AndroidManifest.xml` | Declares `PROPERTY_SPECIAL_USE_FGS_SUBTYPE` for the `specialUse` foreground type, which targetSdk 37 requires for Play review. |
+| `app/src/test/java/com/v2ray/ang/ui/qsn/SourceFiles.kt` | Added `file()` so the manifest can be asserted like the sources. |
+| `app/src/test/java/com/v2ray/ang/ui/qsn/DiscoverySurvivalTest.kt` (new) | 13 wiring tests: the hosting guarantees above, the single-flight guard, the durable target, per-range persistence. |
+| `app/src/test/java/com/v2ray/ang/ui/qsn/domain/DiscoveryResumeTest.kt` (new) | 10 pure tests: resume starts at the first unfinished range, a killed range is measured again, final results are never repeated, `Error` is retried, dataset order is kept, duplicates collapse, ISPs do not share progress, paused/interrupted are resumable and completed is not. |
+
+### 22.6 Resume semantics
+
+* **Stop (UI) / Stop (notification)** — ends the run, keeps every result, phase `Paused`. The
+  service observes the phase change and removes its notification. This is a pause, not a loss.
+* **Resume (UI)** — `discoverRanges(force = false)` measures only `DiscoveryPlan.pending`, i.e.
+  from the first range without a final result, in dataset order. Nothing already measured is
+  measured again.
+* **Restart (UI)** — `force = true` forgets that ISP's results and measures the whole dataset
+  again. Manual ranges are kept.
+* **System restart of the service** — resumes only `Running`/`Interrupted`; a `Paused`,
+  `Completed` or `Failed` profile is never restarted behind the user's back.
+* **Two runs at once** — impossible: `discoverRanges` holds `discoveryLock` and refuses a second
+  start while `discoveryJob` is active; the ViewModel checks `isDiscoveryActive` first, and the
+  service never starts a run in host mode.
+
+### 22.7 Tests
+
+| Suite | Count | Status |
+|---|---|---|
+| `ui.qsn.DiscoverySurvivalTest` | 13 | added, CI pending |
+| `ui.qsn.domain.DiscoveryResumeTest` | 10 | added, CI pending |
+| Existing `ui.qsn`, `ui.qsn.domain`, `ui.qsn.data`, `ui.connect` suites | 461 | unchanged, CI pending |
+
+Device-requiring behaviour (task removal, system kill, force-stop, reboot) is **not** unit tested
+and is not claimed as verified. It is documented platform behaviour, and it is listed as a
+limitation in 22.10.
+
+### 22.8 Commands actually executed
+
+| Command | Result |
+|---|---|
+| `git status --short` / `git rev-parse --short HEAD` | clean except the untracked `background gif/`; HEAD `bf3e7cb6` on `feature/minimal-cloudflare-vpn` |
+| `grep -rn 'CfScanService' app/src` | only the legacy `CfScanActivity` used it |
+| `python3 /tmp/sim_survival.py` | 37/37 simulated assertions of the new tests pass against the real sources |
+| `python3 /tmp/balance.py` | brace/paren balance 0 for every changed Kotlin file |
+| `git diff --stat` | 5 files changed, 2 test files added |
+| `./gradlew ...` locally | **NOT RUN** — forbidden by the task; Android builds and tests run only in GitHub Actions |
+
+### 22.9 Build of record
+
+| Item | Value |
+|---|---|
+| Branch | `feature/minimal-cloudflare-vpn` |
+| Commit | _filled after the commit exists_ |
+| CI run | _filled after the run exists_ |
+| Local Gradle / Android build | **NOT RUN** — forbidden by the task |
+| Device test | **NOT RUN** |
+
+### 22.10 Remaining limitations
+
+* Force-stop and reboot cannot be survived by any app-level mechanism. The run stops and is
+  resumed explicitly after relaunch; completed ranges are never lost.
+* `START_STICKY` is a request, not a guarantee: the system decides when (and whether) to restart
+  the service after a kill. When it does, the resume is automatic; when it does not, the run is
+  `Interrupted` and the Resume button is the recovery path.
+* A foreground start from the background can be refused on Android 12+. The run then keeps
+  measuring in the process without the notification and without kill protection; this is logged
+  and does not abort the measurement.
+* Nothing here is verified on a device: the behaviour above follows documented Android semantics
+  and the code paths are pinned by tests, but no task-removal, kill or reboot experiment was run.

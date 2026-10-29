@@ -19,6 +19,7 @@ import com.v2ray.ang.handler.SpeedtestManager
 import com.v2ray.ang.senpai.CloudflareScanner
 import com.v2ray.ang.senpai.IspManager
 import com.v2ray.ang.senpai.IspProfile
+import com.v2ray.ang.service.CfScanService
 import com.v2ray.ang.ui.connect.AutoConfigFilter
 import com.v2ray.ang.ui.connect.AutoConnectResult
 import com.v2ray.ang.ui.connect.AutoConnectState
@@ -1071,6 +1072,15 @@ class QsViewModel(
         if (CloudflareScanner.isDiscoveryActive) {
             // Already measuring: open the live view instead of starting a
             // second run. The run keeps its own state and its own job.
+            // Re-attach only the run this screen recorded. A run started by the
+            // background pass is already protected by the tunnel service, and
+            // attaching with an unrelated configuration would make a later
+            // restart measure with the wrong base config.
+            val live = CloudflareScanner.discovery.value
+            val target = QsPrefs.discoveryTarget()
+            if (target != null && target.first.equals(live.ispName, ignoreCase = true)) {
+                hostDiscoveryService(target.second, target.first)
+            }
             _uiState.update {
                 it.copy(
                     message = getString(R.string.qs_discovery_already_running),
@@ -1121,9 +1131,25 @@ class QsViewModel(
                 _uiState.update { it.copy(message = text) }
             },
         )
-        if (!started) {
+        if (started) {
+            hostDiscoveryService(target.first, isp)
+        } else {
             refreshIspProfiles(isp)
         }
+    }
+
+    /**
+     * Keeps a running discovery in a foreground service.
+     *
+     * The scanner stays the only owner of the run; the service only holds the
+     * foreground state and the notification, which is what keeps the process
+     * alive when the screen is left, the app goes to the background or the task
+     * is removed from the recent list. A refusal is not fatal: the run keeps
+     * measuring in the process without that protection.
+     */
+    private fun hostDiscoveryService(guid: String, isp: String) {
+        val name = isp.trim().ifEmpty { IspManager.DEFAULT_ISP }
+        CfScanService.hostDiscovery(getApplication(), guid, name)
     }
 
     /** Opens the full-screen Discovery view for the selected ISP. */

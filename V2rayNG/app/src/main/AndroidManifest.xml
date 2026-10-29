@@ -223,7 +223,11 @@
             android:name=".service.CfScanService"
             android:enabled="true"
             android:exported="false"
-            android:foregroundServiceType="specialUse" />
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="cloudflare_range_measurement" />
+        </service>
 
         <service
             android:name=".service.CoreVpnService"
