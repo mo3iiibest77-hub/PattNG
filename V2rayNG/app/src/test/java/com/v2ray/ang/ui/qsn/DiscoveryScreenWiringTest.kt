@@ -116,7 +116,7 @@ class DiscoveryScreenWiringTest {
         assertTrue(orchestrator.contains("Stage2Ranges.resolve("))
         assertTrue(orchestrator.contains("QsPrefs.selectedRanges("))
         val scan = SourceFiles.body(orchestrator, "suspend fun scanOnly(")
-        assertTrue(scan.contains("profile.goodCidrs"))
-        assertTrue(scan.contains("profile.manualCidrs"))
+        assertTrue(scan.contains("ispProfile.goodCidrs"))
+        assertTrue(scan.contains("ispProfile.manualCidrs"))
     }
 }
