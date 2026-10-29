@@ -23,7 +23,7 @@ class RangeStoreWiringTest {
         )
         assertTrue(
             "a qualified range must reach the canonical candidate store",
-            scanner.contains("QualifiedRangeStore.add(listOf(outcome.toQualifiedRange()))"),
+            scanner.contains("QualifiedRangeStore.add(listOf(range))"),
         )
         assertFalse(
             "the scanner must not write the database itself",

@@ -7,6 +7,8 @@ import com.v2ray.ang.ui.qsn.domain.RangeSet
 import com.v2ray.ang.ui.qsn.domain.ScanRange
 import com.v2ray.ang.util.JsonUtil
 import com.v2ray.ang.util.LogUtil
+import org.json.JSONArray
+import org.json.JSONObject
 
 /**
  * Durable storage for the Quiet Storm NG extras.
@@ -31,6 +33,7 @@ object QsPrefs {
     private const val KEY_ACTIVE_SUB = "qsn_active_sub_guid"
     private const val KEY_SUB_PANEL_OPEN = "qsn_sub_panel_open"
     private const val KEY_LAST_ISP = "qsn_last_isp"
+    private const val KEY_RANGE_SELECTION = "qsn_range_selection_v1"
 
     // ---------- Selected Cloudflare IP ----------
 
@@ -93,6 +96,38 @@ object QsPrefs {
 
     fun setLastIsp(name: String) {
         MmkvManager.encodeSettings(KEY_LAST_ISP, name.trim())
+    }
+
+    // ---------- Stage 2 range selection ----------
+
+    /**
+     * Ranges the user chose to measure in Stage 2, per ISP.
+     *
+     * Empty means "not chosen yet", and the flow then uses every good range of
+     * that ISP. A non-empty set is an explicit narrowing: a failed or unchecked
+     * range can only reach Stage 2 when the user asks for it.
+     */
+    fun selectedRanges(isp: String): Set<String> {
+        val raw = MmkvManager.decodeSettingsString(KEY_RANGE_SELECTION).orEmpty()
+        if (raw.isBlank()) return emptySet()
+        return try {
+            val all = JSONObject(raw)
+            val arr = all.optJSONArray(isp.trim()) ?: return emptySet()
+            (0 until arr.length()).mapNotNull { arr.optString(it)?.takeIf(String::isNotBlank) }.toSet()
+        } catch (e: Exception) {
+            emptySet()
+        }
+    }
+
+    fun setSelectedRanges(isp: String, cidrs: Set<String>) {
+        val raw = MmkvManager.decodeSettingsString(KEY_RANGE_SELECTION).orEmpty()
+        val all = try {
+            if (raw.isBlank()) JSONObject() else JSONObject(raw)
+        } catch (e: Exception) {
+            JSONObject()
+        }
+        all.put(isp.trim(), JSONArray(cidrs.sorted()))
+        MmkvManager.encodeSettings(KEY_RANGE_SELECTION, all.toString())
     }
 
     // ---------- Explicitly selected configuration ----------

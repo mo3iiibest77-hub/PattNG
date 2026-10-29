@@ -239,6 +239,21 @@ class QuietStormActivity : HelperBaseComponentActivity() {
         ) { padding ->
             QsBackground(modifier = Modifier.padding(padding)) {
                 Box {
+                    // The Discovery view is its own full screen: the run keeps
+                    // measuring while it is open or closed, and this screen only
+                    // reads the state the scanner publishes.
+                    if (state.discoveryOpen) {
+                        QsDiscoveryScreen(
+                            state = state,
+                            onBack = { qsViewModel.closeDiscovery() },
+                            onStop = { qsViewModel.stopDiscovery() },
+                            onResume = { qsViewModel.startDiscovery() },
+                            onRestart = {
+                                qsViewModel.startDiscovery(force = true)
+                            },
+                        )
+                        return@Box
+                    }
                     when (tab) {
                         // The scan step is a full screen of its own: the flow
                         // is parked there until the user answers or cancels.
@@ -338,6 +353,10 @@ class QuietStormActivity : HelperBaseComponentActivity() {
                             },
                             onStopDiscovery = { qsViewModel.stopDiscovery() },
                             onUseCandidate = { qsViewModel.useCandidateNow(it) },
+                            onAddManual = { qsViewModel.addManualRange(it) },
+                            onRemoveManual = { qsViewModel.removeManualRange(it) },
+                            onToggleRange = { qsViewModel.toggleRangeSelection(it) },
+                            onOpenDiscovery = { qsViewModel.openDiscovery() },
                         )
 
                         else -> QsAppsScreen(

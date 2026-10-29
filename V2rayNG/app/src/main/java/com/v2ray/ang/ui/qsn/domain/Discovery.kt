@@ -211,6 +211,14 @@ data class DiscoveryStatus(
     val lastCidr: String? = null,
     /** Every range of the run, so the screen can show one row per range. */
     val rows: List<RangeOutcome> = emptyList(),
+    /**
+     * The addresses the engine is measuring right now, per CIDR.
+     *
+     * A range is probed through two sampled addresses, so "the current range"
+     * alone would hide what is actually being measured. Empty when nothing is
+     * running.
+     */
+    val measuring: Map<String, List<String>> = emptyMap(),
 ) {
     val isActive: Boolean get() = phase == DiscoveryPhase.Running
     val isTerminal: Boolean get() =

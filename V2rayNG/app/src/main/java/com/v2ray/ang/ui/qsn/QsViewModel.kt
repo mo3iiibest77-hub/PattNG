@@ -38,12 +38,15 @@ import com.v2ray.ang.ui.qsn.domain.CrashReport
 import com.v2ray.ang.ui.qsn.domain.DiscoveryStatus
 import com.v2ray.ang.ui.qsn.domain.LanguageToggle
 import com.v2ray.ang.ui.qsn.domain.ManualConfigRules
+import com.v2ray.ang.ui.qsn.domain.ManualRangePolicy
+import com.v2ray.ang.ui.qsn.domain.ManualRangeResult
 import com.v2ray.ang.ui.qsn.domain.NotificationDefaults
 import com.v2ray.ang.ui.qsn.domain.SubscriptionPanelRules
 import com.v2ray.ang.ui.qsn.domain.RangeError
 import com.v2ray.ang.ui.qsn.domain.RangeParseResult
 import com.v2ray.ang.ui.qsn.domain.ScanRange
 import com.v2ray.ang.ui.qsn.domain.ScanRangeParser
+import com.v2ray.ang.ui.qsn.domain.Stage2Ranges
 import com.v2ray.ang.ui.qsn.domain.SubscriptionRow
 import com.v2ray.ang.ui.qsn.domain.SubscriptionRules
 import com.v2ray.ang.util.LogUtil
@@ -1066,7 +1069,14 @@ class QsViewModel(
      */
     fun startDiscovery(ispName: String? = null, force: Boolean = false) {
         if (CloudflareScanner.isDiscoveryActive) {
-            _uiState.update { it.copy(message = getString(R.string.qs_discovery_already_running)) }
+            // Already measuring: open the live view instead of starting a
+            // second run. The run keeps its own state and its own job.
+            _uiState.update {
+                it.copy(
+                    message = getString(R.string.qs_discovery_already_running),
+                    discoveryOpen = true,
+                )
+            }
             return
         }
         val isp = (ispName ?: _uiState.value.selectedIsp).trim()
@@ -1082,6 +1092,7 @@ class QsViewModel(
                 selectedIsp = isp,
                 rangeError = null,
                 message = null,
+                discoveryOpen = true,
             )
         }
         val started = CloudflareScanner.discoverRanges(
@@ -1113,6 +1124,90 @@ class QsViewModel(
         if (!started) {
             refreshIspProfiles(isp)
         }
+    }
+
+    /** Opens the full-screen Discovery view for the selected ISP. */
+    fun openDiscovery() {
+        _uiState.update { it.copy(discoveryOpen = true) }
+        refreshIspProfiles()
+    }
+
+    /** Leaves the Discovery view. The run is untouched and keeps measuring. */
+    fun closeDiscovery() {
+        _uiState.update { it.copy(discoveryOpen = false) }
+    }
+
+    /**
+     * Adds one manual CIDR to the selected ISP.
+     *
+     * The CIDR is parsed and normalised before it is stored, so a typo never
+     * becomes a range. A duplicate is reported instead of silently appended,
+     * and adding a range does not mark it good: it only becomes available to
+     * Stage 2, where it is measured like any other candidate.
+     */
+    fun addManualRange(input: String) {
+        val isp = _uiState.value.selectedIsp.ifBlank { IspManager.DEFAULT_ISP }
+        val profile = IspManager.getProfile(getApplication(), isp)
+        val existing = buildList {
+            addAll(profile?.manualCidrs.orEmpty())
+            addAll(profile?.results.orEmpty().map { it.cidr })
+        }
+        when (val result = ManualRangePolicy.classify(input, existing)) {
+            is ManualRangeResult.Invalid -> {
+                val text = when (result.error) {
+                    RangeError.EMPTY -> getString(R.string.qs_manual_range_empty)
+                    RangeError.BAD_IP -> getString(R.string.qs_manual_range_bad_ip)
+                    RangeError.BAD_PREFIX -> getString(R.string.qs_manual_range_bad_prefix)
+                    RangeError.TOO_LARGE -> getString(R.string.qs_manual_range_too_large)
+                    RangeError.BAD_FORMAT -> getString(R.string.qs_manual_range_bad_format)
+                }
+                _uiState.update { it.copy(manualRangeError = text) }
+            }
+
+            is ManualRangeResult.Duplicate -> {
+                _uiState.update {
+                    it.copy(manualRangeError = getString(R.string.qs_manual_range_duplicate, result.cidr))
+                }
+            }
+
+            is ManualRangeResult.Added -> {
+                IspManager.addManualCidr(getApplication(), isp, result.cidr)
+                _uiState.update { it.copy(manualRangeError = null) }
+                refreshIspProfiles(isp)
+            }
+        }
+    }
+
+    /** Removes one manual range of the selected ISP; discovered results stay. */
+    fun removeManualRange(cidr: String) {
+        val isp = _uiState.value.selectedIsp.ifBlank { IspManager.DEFAULT_ISP }
+        IspManager.removeManualCidr(getApplication(), isp, cidr)
+        val selection = QsPrefs.selectedRanges(isp) - cidr
+        QsPrefs.setSelectedRanges(isp, selection)
+        _uiState.update { it.copy(manualRangeError = null) }
+        refreshIspProfiles(isp)
+    }
+
+    /**
+     * Ticks or unticks one range for Stage 2.
+     *
+     * An empty selection means "every good range of this ISP", so the first
+     * toggle materialises that set before removing one entry; otherwise
+     * unchecking a single row would look like "select nothing".
+     */
+    fun toggleRangeSelection(cidr: String) {
+        val state = _uiState.value
+        val isp = state.selectedIsp.ifBlank { IspManager.DEFAULT_ISP }
+        val profile = IspManager.getProfile(getApplication(), isp)
+        val current = state.selectedRanges.ifEmpty {
+            Stage2Ranges.resolve(
+                good = profile?.goodCidrs.orEmpty(),
+                manual = profile?.manualCidrs.orEmpty(),
+            ).toSet()
+        }
+        val next = if (current.contains(cidr)) current - cidr else current + cidr
+        QsPrefs.setSelectedRanges(isp, next)
+        _uiState.update { it.copy(selectedRanges = next) }
     }
 
     /** Explicitly stops the active discovery; every completed result is kept. */
@@ -1522,11 +1617,17 @@ class QsViewModel(
                     IspProfile(selected, emptyList()),
                 )
         }
+        val manual = selected
+            .let { name -> profiles.firstOrNull { it.name.equals(name, ignoreCase = true) } }
+            ?.manualCidrs
+            .orEmpty()
         _uiState.update {
             it.copy(
                 ispProfiles = profiles,
                 selectedIsp = selected,
                 discovery = shown,
+                manualRanges = manual,
+                selectedRanges = QsPrefs.selectedRanges(selected),
             )
         }
     }

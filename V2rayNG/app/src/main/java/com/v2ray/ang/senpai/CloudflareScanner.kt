@@ -23,6 +23,7 @@ import com.v2ray.ang.ui.qsn.domain.RangeState
 import com.v2ray.ang.ui.qsn.domain.Statistics
 import com.v2ray.ang.util.LogUtil
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -36,6 +37,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.random.Random
 
 data class CandidateResult(
@@ -157,6 +159,23 @@ object CloudflareScanner {
 
     /** Ranges currently being measured; transient, never persisted. */
     private val runningCidrs = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+
+    /**
+     * Sample addresses being measured right now, per CIDR. Transient.
+     *
+     * The screen shows what the engine is really probing, so a range row is
+     * never just a label: it carries the addresses behind it.
+     */
+    private val measuringIps = java.util.concurrent.ConcurrentHashMap<String, List<String>>()
+
+    /**
+     * Completed by the first range that qualifies in the current run.
+     *
+     * A first connection may use that range immediately; the run itself keeps
+     * measuring the rest of the dataset. Completed with null when a run ends
+     * without qualifying anything, so a waiter never hangs.
+     */
+    @Volatile private var firstGood: CompletableDeferred<QualifiedRange?>? = null
 
     /** Live Stage 1 state, shared by the screen and the connection flow. */
     private val _discovery = MutableStateFlow(DiscoveryStatus())
@@ -435,6 +454,10 @@ object CloudflareScanner {
             discoveryBackground = background
             discoveryContext = context.applicationContext
             runningCidrs.clear()
+            measuringIps.clear()
+            // A fresh run gets a fresh gate: a waiter from the previous run must
+            // not be handed a range that this run has not measured yet.
+            firstGood = CompletableDeferred()
             discoveryJob = SupervisorJob()
             discoveryScope = CoroutineScope(discoveryJob + Dispatchers.IO + scanExceptionHandler)
             publish(IspManager.getProfile(context, isp), null, background)
@@ -473,6 +496,20 @@ object CloudflareScanner {
                 publish(IspManager.getProfile(ctx, isp), null, discoveryBackground)
             }
         }
+    }
+
+    /**
+     * Waits for the first range that qualifies in the active run.
+     *
+     * This is what makes the first connection cheap: as soon as one range
+     * passes the real quality gate, that range can go to Stage 2 while the run
+     * keeps measuring the rest of the dataset. Returns null when the timeout
+     * expires or the run ends without qualifying anything; it never stops the
+     * run.
+     */
+    suspend fun awaitFirstQualifiedRange(timeoutMs: Long): QualifiedRange? {
+        val gate = firstGood ?: return null
+        return withTimeoutOrNull(timeoutMs) { gate.await() }
     }
 
     /**
@@ -547,6 +584,7 @@ object CloudflareScanner {
             IspManager.setPhase(context, isp, DiscoveryPhase.Failed, 0, 0)
             publish(IspManager.getProfile(context, isp), null, background)
             onFinish(outcomeFromProfile(IspManager.getProfile(context, isp), cancelled = false))
+            firstGood?.complete(null)
             return
         }
 
@@ -555,7 +593,15 @@ object CloudflareScanner {
         val store = AndroidDiscoveryStore(context, isp)
         val engine = DiscoveryEngine(
             store = store,
-            probe = { cidr -> probeRange(context, guid, base, cidr) },
+            probe = { cidr ->
+                // The sampled addresses are published before the measurement, so
+                // the screen shows the IPs the engine is really probing instead
+                // of an invented placeholder.
+                probeRange(context, guid, base, cidr) { ips ->
+                    measuringIps[cidr] = ips
+                    publish(IspManager.getProfile(context, isp), cidr, background)
+                }
+            },
         )
         try {
             val summary = engine.run(
@@ -567,6 +613,7 @@ object CloudflareScanner {
                 },
             ) { outcome ->
                 runningCidrs.remove(outcome.cidr)
+                measuringIps.remove(outcome.cidr)
                 publish(IspManager.getProfile(context, isp), outcome.cidr, background)
                 withContext(Dispatchers.Main) {
                     onProgress(
@@ -606,6 +653,11 @@ object CloudflareScanner {
             )
             publish(IspManager.getProfile(context, isp), null, background)
             onFinish(outcomeFromProfile(IspManager.getProfile(context, isp), cancelled = false))
+        } finally {
+            // Nothing is being measured any more, and a waiter that never saw a
+            // good range is released instead of sitting out its whole timeout.
+            measuringIps.clear()
+            firstGood?.complete(null)
         }
     }
 
@@ -615,12 +667,14 @@ object CloudflareScanner {
         guid: String,
         base: ProfileItem,
         cidr: String,
+        onSample: (List<String>) -> Unit = {},
     ): RangeMeasurement {
         val parts = cidr.trim().split("/")
         if (parts.size != 2) return RangeMeasurement(reachable = false, error = true)
         val prefix = parts[1].toIntOrNull() ?: return RangeMeasurement(reachable = false, error = true)
         val ips = randomIpsFromCidr(parts[0], prefix, DiscoveryQuality.IPS_PER_RANGE)
         if (ips.isEmpty()) return RangeMeasurement(reachable = false, error = true)
+        onSample(ips)
 
         var reachable = false
         var allConfigErrors = true
@@ -686,7 +740,11 @@ object CloudflareScanner {
         override fun record(isp: String, outcome: RangeOutcome) {
             IspManager.recordOutcome(context, isp, outcome)
             if (outcome.state == RangeState.Good) {
-                QualifiedRangeStore.add(listOf(outcome.toQualifiedRange()))
+                val range = outcome.toQualifiedRange()
+                QualifiedRangeStore.add(listOf(range))
+                // First usable range: unblocks a first connection immediately.
+                // The run itself is untouched and keeps measuring the dataset.
+                firstGood?.complete(range)
             }
         }
 
@@ -722,6 +780,8 @@ object CloudflareScanner {
                 errors = snapshot.errors,
                 lastCidr = lastCidr ?: it.lastCidr,
                 rows = rows.sortedBy { row -> row.cidr },
+                // Only ranges that are really running carry sample addresses.
+                measuring = measuringIps.filterKeys { cidr -> runningCidrs.contains(cidr) },
             )
         }
     }

@@ -33,6 +33,7 @@ import com.v2ray.ang.ui.qsn.domain.IpFingerprint
 import com.v2ray.ang.ui.qsn.domain.IpSelection
 import com.v2ray.ang.ui.qsn.domain.QualifiedRange
 import com.v2ray.ang.ui.qsn.domain.RangeSet
+import com.v2ray.ang.ui.qsn.domain.Stage2Ranges
 import com.v2ray.ang.ui.qsn.domain.ScanCandidate
 import com.v2ray.ang.ui.qsn.domain.ScanRangePlanner
 import com.v2ray.ang.ui.qsn.domain.SubscriptionRules
@@ -160,6 +161,15 @@ private const val SCAN_TIMEOUT_MS = 300_000L
  * cancelled) and its progress stays visible on the IP Ranges screen.
  */
 private const val DISCOVERY_TIMEOUT_MS = 300_000L
+
+/**
+ * How long a first connection waits for one usable range.
+ *
+ * The discovery run is not bounded by this: it keeps measuring the whole
+ * dataset in the background. The timeout only decides how long the connection
+ * attempt waits before it falls back to whatever is already stored.
+ */
+private const val FIRST_RANGE_TIMEOUT_MS = 120_000L
 
 /**
  * Pairs each GUID with its decoded [ProfileItem], dropping GUIDs whose profile
@@ -386,11 +396,20 @@ class ConnectionOrchestrator {
                 // started before any ISP was named; the user's manual ranges are
                 // the last resort and stay supported.
                 val isp = ispName?.trim()?.ifEmpty { null } ?: QsPrefs.lastIsp()
-                val ispRanges = isp
-                    ?.let { IspManager.getProfile(context, it)?.goodCidrs }
-                    .orEmpty()
-                val stored = RangeSet.cidrs(QualifiedRangeStore.snapshot())
-                val ranges = ispRanges.ifEmpty { stored }
+                val profile = isp?.let { IspManager.getProfile(context, it) }
+                // Stage 2 measures what the user picked for this ISP: the
+                // selection when there is one, otherwise its good ranges. A
+                // failed or unchecked range never joins on its own, and another
+                // ISP's ranges can never leak in.
+                val ranges = if (profile != null) {
+                    Stage2Ranges.resolve(
+                        good = profile.goodCidrs,
+                        manual = profile.manualCidrs,
+                        selected = QsPrefs.selectedRanges(profile.name),
+                    )
+                } else {
+                    RangeSet.cidrs(QualifiedRangeStore.snapshot())
+                }
                 val winner = scanForBestIp(context, guid, onState, ranges) { }
                     ?: return@withContext null
                 // Persist the winner so the next connect can reuse it; the
@@ -944,8 +963,27 @@ class ConnectionOrchestrator {
         // still has entries.
         if (refresh || ranges.isEmpty()) {
             onState(AutoConnectState.DiscoveringRanges)
-            ranges = RangeSet.cidrs(discoverRanges(context, guid, onState, force = refresh))
-                .ifEmpty { manual }
+            val ispName = isp ?: DiscoveryScheduler.DEFAULT_ISP
+            // A first connection must not wait for the whole dataset. The run
+            // starts in the background and the flow takes the first range that
+            // passes the real quality gate; the run then keeps measuring.
+            CloudflareScanner.discoverRanges(
+                context = context,
+                guid = guid,
+                ispName = ispName,
+                background = true,
+                force = refresh,
+            ) { }
+            val first = CloudflareScanner.awaitFirstQualifiedRange(FIRST_RANGE_TIMEOUT_MS)
+            if (cancelled) return null
+            ranges = if (first != null) {
+                listOf(first.cidr)
+            } else {
+                // Nothing qualified in time: use what the run already stored
+                // (or the manual ranges) rather than scanning unrelated data.
+                RangeSet.cidrs(discoverRanges(context, guid, onState, force = false))
+                    .ifEmpty { manual }
+            }
             if (cancelled) return null
         }
 

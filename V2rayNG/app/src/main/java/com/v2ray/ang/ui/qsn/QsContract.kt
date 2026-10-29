@@ -109,6 +109,14 @@ data class QsUiState(
     val ispProfiles: List<IspProfile> = emptyList(),
     /** ISP the discovery controls act on. */
     val selectedIsp: String = "default",
+    /** Manual ranges stored for [selectedIsp]; never mixed with another ISP. */
+    val manualRanges: List<String> = emptyList(),
+    /** Ranges the user picked for Stage 2; empty means "all good ranges". */
+    val selectedRanges: Set<String> = emptySet(),
+    /** True while the full-screen Discovery view is open. */
+    val discoveryOpen: Boolean = false,
+    /** Text explaining why a manual CIDR was rejected. */
+    val manualRangeError: String? = null,
     /** Persian/English text explaining why the last range was rejected. */
     val rangeError: String? = null,
     /** Text explaining why the last manual import was rejected. */

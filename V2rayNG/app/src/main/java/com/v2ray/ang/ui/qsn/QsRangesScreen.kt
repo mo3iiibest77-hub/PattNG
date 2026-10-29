@@ -19,6 +19,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -79,6 +80,10 @@ fun QsRangesScreen(
     onRestartDiscovery: (String) -> Unit,
     onStopDiscovery: () -> Unit,
     onUseCandidate: (String) -> Unit,
+    onAddManual: (String) -> Unit,
+    onRemoveManual: (String) -> Unit,
+    onToggleRange: (String) -> Unit,
+    onOpenDiscovery: () -> Unit,
 ) {
     var input by rememberSaveable { mutableStateOf("") }
     val enabled = RangesSummary.enabled(state.ranges)
@@ -173,6 +178,7 @@ fun QsRangesScreen(
                 onResumeDiscovery = onResumeDiscovery,
                 onRestartDiscovery = onRestartDiscovery,
                 onStopDiscovery = onStopDiscovery,
+                onOpenDiscovery = onOpenDiscovery,
             )
         }
 
@@ -183,67 +189,52 @@ fun QsRangesScreen(
             )
         }
 
-        item(key = "input") {
+        item(key = "manual") {
+            ManualRangeCard(
+                state = state,
+                input = input,
+                onInputChange = { input = it },
+                onAdd = {
+                    onAddManual(input)
+                    input = ""
+                },
+                onRemove = onRemoveManual,
+                onToggle = onToggleRange,
+            )
+        }
+
+        item(key = "stage2-action") {
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(18.dp),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
-                    OutlinedTextField(
-                        value = input,
-                        onValueChange = { input = it },
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true,
-                        isError = state.rangeError != null,
-                        label = { Text(stringResource(R.string.qs_range_hint)) },
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                    Text(
+                        text = stringResource(R.string.qs_ranges_select_hint),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    if (state.rangeError != null) {
-                        Text(
-                            text = state.rangeError,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.error,
-                            modifier = Modifier.padding(top = 4.dp),
-                        )
-                    }
                     Spacer(Modifier.height(8.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button(
-                            onClick = {
-                                onAdd(input)
-                                input = ""
+                    OutlinedButton(
+                        onClick = onScanNow,
+                        // Stage 2 measures the ISP's stored ranges, so a user who
+                        // never added a manual range must still be able to scan
+                        // after discovery qualified some.
+                        enabled = !state.scanningNow &&
+                            (enabled > 0 || state.discovery.qualified > 0 ||
+                                state.manualRanges.isNotEmpty()),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(
+                            text = if (state.scanningNow) {
+                                stringResource(R.string.qs_scanning)
+                            } else if (state.discovery.qualified > 0) {
+                                stringResource(R.string.qs_isp_use)
+                            } else {
+                                stringResource(R.string.qs_scan_now)
                             },
-                            enabled = input.isNotBlank() && !state.scanningNow,
-                            modifier = Modifier.weight(1f),
-                        ) {
-                            Icon(
-                                painter = painterResource(R.drawable.ic_add_24dp),
-                                contentDescription = null,
-                                modifier = Modifier.size(18.dp),
-                            )
-                            Spacer(Modifier.width(4.dp))
-                            Text(stringResource(R.string.qs_range_add))
-                        }
-                        OutlinedButton(
-                            onClick = onScanNow,
-                            // Stage 2 measures the ISP's stored ranges, so a
-                            // user who never added a manual range must still be
-                            // able to scan after discovery qualified some.
-                            enabled = !state.scanningNow &&
-                                (enabled > 0 || state.discovery.qualified > 0),
-                            modifier = Modifier.weight(1f),
-                        ) {
-                            Text(
-                                text = if (state.scanningNow) {
-                                    stringResource(R.string.qs_scanning)
-                                } else if (state.discovery.qualified > 0) {
-                                    stringResource(R.string.qs_isp_use)
-                                } else {
-                                    stringResource(R.string.qs_scan_now)
-                                },
-                            )
-                        }
+                        )
                     }
                     if (state.scanningNow) {
                         Spacer(Modifier.height(10.dp))
@@ -326,7 +317,21 @@ fun QsRangesScreen(
                 items = state.discovery.rows,
                 key = { row -> "disc-" + row.cidr },
             ) { row ->
-                DiscoveryRangeRow(row)
+                // Only a range that really qualified, or one the user added by
+                // hand, may be picked for Stage 2.
+                val selectable = row.state == RangeState.Good ||
+                    state.manualRanges.contains(row.cidr)
+                DiscoveryRangeRow(
+                    row = row,
+                    measuring = state.discovery.measuring[row.cidr].orEmpty(),
+                    selectable = selectable,
+                    selected = if (state.selectedRanges.isEmpty()) {
+                        row.state == RangeState.Good
+                    } else {
+                        state.selectedRanges.contains(row.cidr)
+                    },
+                    onToggle = { onToggleRange(row.cidr) },
+                )
             }
         }
 
@@ -568,6 +573,7 @@ private fun IspDiscoveryCard(
     onResumeDiscovery: () -> Unit,
     onRestartDiscovery: (String) -> Unit,
     onStopDiscovery: () -> Unit,
+    onOpenDiscovery: () -> Unit,
 ) {
     var ispInput by rememberSaveable { mutableStateOf(state.selectedIsp) }
     // Selecting a saved ISP updates the field; typing a new name is not
@@ -637,6 +643,15 @@ private fun IspDiscoveryCard(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+            }
+
+            if (status.rows.isNotEmpty() || active) {
+                TextButton(
+                    onClick = onOpenDiscovery,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(stringResource(R.string.qs_discovery_open))
+                }
             }
 
             Spacer(Modifier.height(10.dp))
@@ -759,7 +774,7 @@ private fun SavedIspRow(profile: IspProfile, selected: Boolean, onSelect: () -> 
 }
 
 @Composable
-private fun DiscoveryRowsHeader(rows: List<RangeOutcome>) {
+internal fun DiscoveryRowsHeader(rows: List<RangeOutcome>) {
     Column(modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp)) {
         Text(
             text = stringResource(R.string.qs_isp_rows_title, rows.size),
@@ -782,7 +797,13 @@ private fun DiscoveryRowsHeader(rows: List<RangeOutcome>) {
  * still going, which is what makes the list trustworthy on resume.
  */
 @Composable
-private fun DiscoveryRangeRow(row: RangeOutcome) {
+internal fun DiscoveryRangeRow(
+    row: RangeOutcome,
+    measuring: List<String> = emptyList(),
+    selectable: Boolean = false,
+    selected: Boolean = false,
+    onToggle: () -> Unit = {},
+) {
     val label = when (row.state) {
         RangeState.Pending -> stringResource(R.string.qs_isp_range_pending)
         RangeState.Running -> stringResource(R.string.qs_isp_range_running)
@@ -803,15 +824,35 @@ private fun DiscoveryRangeRow(row: RangeOutcome) {
             .padding(horizontal = 8.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        if (selectable) {
+            Checkbox(
+                checked = selected,
+                onCheckedChange = { onToggle() },
+                modifier = Modifier.size(28.dp),
+            )
+            Spacer(Modifier.width(4.dp))
+        }
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = row.cidr,
                 style = MaterialTheme.typography.bodySmall,
                 maxLines = 1,
             )
+            if (row.state == RangeState.Running && measuring.isNotEmpty()) {
+                // The addresses the engine is really probing, not a placeholder.
+                Text(
+                    text = stringResource(
+                        R.string.qs_isp_range_measuring_ips,
+                        measuring.joinToString(", "),
+                    ),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.secondary,
+                    maxLines = 1,
+                )
+            }
             val upload = row.uploadKBps
             val latency = row.latencyMs
-            if (upload != null || latency != null) {
+            if (row.state != RangeState.Running && (upload != null || latency != null)) {
                 Text(
                     text = stringResource(
                         R.string.qs_isp_range_metrics,
@@ -900,6 +941,110 @@ private fun Stage2ResultRow(
         if (candidate.answered) {
             TextButton(onClick = onUse) {
                 Text(stringResource(R.string.qs_use_ip))
+            }
+        }
+    }
+}
+
+/**
+ * The manual range list of the selected ISP.
+ *
+ * A manual CIDR is owned by one ISP, is validated before it is stored, and is
+ * never marked good on its own: it only becomes available to Stage 2, where it
+ * is measured like any other candidate.
+ */
+@Composable
+private fun ManualRangeCard(
+    state: QsUiState,
+    input: String,
+    onInputChange: (String) -> Unit,
+    onAdd: () -> Unit,
+    onRemove: (String) -> Unit,
+    onToggle: (String) -> Unit,
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                text = stringResource(R.string.qs_manual_title),
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Spacer(Modifier.height(8.dp))
+            OutlinedTextField(
+                value = input,
+                onValueChange = onInputChange,
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                isError = state.manualRangeError != null,
+                label = { Text(stringResource(R.string.qs_manual_hint)) },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+            )
+            state.manualRangeError?.let { error ->
+                Text(
+                    text = error,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.padding(top = 4.dp),
+                )
+            }
+            Spacer(Modifier.height(8.dp))
+            Button(
+                onClick = onAdd,
+                enabled = input.isNotBlank(),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Icon(
+                    painter = painterResource(R.drawable.ic_add_24dp),
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp),
+                )
+                Spacer(Modifier.width(4.dp))
+                Text(stringResource(R.string.qs_manual_add))
+            }
+            if (state.manualRanges.isEmpty()) {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = stringResource(R.string.qs_manual_none),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            } else {
+                state.manualRanges.forEach { cidr ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Checkbox(
+                            checked = state.selectedRanges.contains(cidr),
+                            onCheckedChange = { onToggle(cidr) },
+                            modifier = Modifier.size(28.dp),
+                        )
+                        Text(
+                            text = cidr,
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.weight(1f),
+                            maxLines = 1,
+                        )
+                        Text(
+                            text = stringResource(R.string.qs_manual_source),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        IconButton(onClick = { onRemove(cidr) }) {
+                            Icon(
+                                painter = painterResource(R.drawable.ic_delete_24dp),
+                                contentDescription = stringResource(
+                                    R.string.qs_manual_remove,
+                                    cidr,
+                                ),
+                            )
+                        }
+                    }
+                }
             }
         }
     }

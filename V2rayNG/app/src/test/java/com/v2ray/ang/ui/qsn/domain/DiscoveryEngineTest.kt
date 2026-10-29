@@ -61,6 +61,27 @@ class DiscoveryEngineTest {
     private fun failed() = RangeMeasurement(reachable = false)
 
     @Test
+    fun aManualRunKeepsGoingAfterTheFirstThreeGoodRanges() {
+        // The reported defect: the run ended as soon as a few ranges qualified.
+        // A manual discovery must reach the end of the dataset regardless.
+        val store = MemoryStore()
+        val probes = Collections.synchronizedList(mutableListOf<String>())
+        val engine = DiscoveryEngine(
+            store = store,
+            probe = { cidr -> probes.add(cidr); good(cidr) },
+            concurrency = 1,
+            retryDelayMs = 0,
+        )
+
+        val summary = runBlocking { engine.run("MCI", dataset) }
+
+        assertEquals(5, probes.size)
+        assertEquals(dataset, probes)
+        assertEquals(5, summary.good)
+        assertTrue(summary.completed)
+    }
+
+    @Test
     fun everyRangeIsMeasuredAndTheRunCompletes() {
         val store = MemoryStore()
         val probes = Collections.synchronizedList(mutableListOf<String>())
