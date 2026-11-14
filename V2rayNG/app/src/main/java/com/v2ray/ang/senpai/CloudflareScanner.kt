@@ -62,11 +62,16 @@ object CloudflareScanner {
     private fun generateCandidates(context: Context): List<String> {
         val candidates = mutableListOf<String>()
         try {
-            val lines = context.assets.open("cf_ranges_v4.txt")
-                .bufferedReader()
-                .readLines()
-                .filter { it.isNotBlank() && !it.startsWith("#") }
-                .shuffled()
+            val poolCidrs = ProviderRangeStore.getScanPoolCidrs(context, CdnType.CLOUDFLARE)
+            val lines = if (poolCidrs.isNotEmpty()) {
+                poolCidrs.shuffled()
+            } else {
+                context.assets.open("cf_ranges_v4.txt")
+                    .bufferedReader()
+                    .readLines()
+                    .filter { it.isNotBlank() && !it.startsWith("#") }
+                    .shuffled()
+            }
 
             for (cidr in lines) {
                 if (candidates.size >= MAX_CANDIDATES) break
@@ -80,10 +85,17 @@ object CloudflareScanner {
                 }
             }
         } catch (e: Exception) {
-            LogUtil.e(TAG, "Failed to load cf_ranges_v4.txt: ${e.message}")
+            LogUtil.e(TAG, "Failed to load Cloudflare scan pool: ${e.message}")
             candidates.addAll(listOf("104.16.0.1", "104.17.0.1", "172.64.0.1", "162.159.0.1"))
         }
         return candidates.take(MAX_CANDIDATES)
+    }
+
+    internal fun sampleIpsFromCidr(cidr: String, count: Int = IPS_PER_CIDR): List<String> {
+        val parts = cidr.trim().split("/")
+        if (parts.size != 2) return emptyList()
+        val prefix = parts[1].toIntOrNull() ?: return emptyList()
+        return randomIpsFromCidr(parts[0], prefix, count)
     }
 
     private fun randomIpsFromCidr(baseIp: String, prefix: Int, count: Int): List<String> {
@@ -148,10 +160,16 @@ object CloudflareScanner {
         scanScope = CoroutineScope(scanJob + Dispatchers.IO)
         scanScope.launch {
             val allLines = try {
-                context.assets.open("cf_ranges_v4.txt")
+                context.assets.open("cf_ranges_discovery_v4.txt")
                     .bufferedReader().readLines()
                     .filter { it.isNotBlank() && !it.startsWith("#") }
-            } catch (e: Exception) { emptyList() }
+            } catch (_: Exception) {
+                try {
+                    context.assets.open("cf_ranges_v4.txt")
+                        .bufferedReader().readLines()
+                        .filter { it.isNotBlank() && !it.startsWith("#") }
+                } catch (_: Exception) { emptyList() }
+            }
 
             val existing     = IspManager.getProfile(context, ispName)
             val startFrom    = existing?.lastScannedIndex ?: 0
@@ -221,12 +239,14 @@ object CloudflareScanner {
                         createdAt = existing?.createdAt ?: System.currentTimeMillis(),
                     )
                 )
+                ProviderRangeStore.appendDiscoveredCidrs(context, CdnType.CLOUDFLARE, allGood)
                 withContext(Dispatchers.Main) { onFinish(allGood) }
             } catch (_: CancellationException) {
                 val partial = synchronized(lock) {
                     (alreadyFound + newGoodCidrs.map { it.first }).distinct()
                 }
                 IspManager.savePartialProgress(context, ispName, partial, done)
+                ProviderRangeStore.appendDiscoveredCidrs(context, CdnType.CLOUDFLARE, partial)
                 withContext(Dispatchers.Main) { onFinish(partial) }
             }
         }
@@ -240,7 +260,9 @@ object CloudflareScanner {
         callback: ScanCallback,
     ) {
         val profile = IspManager.getProfile(context, ispName)
-        if (profile == null || profile.goodCidrs.isEmpty()) {
+        val pool = ProviderRangeStore.getScanPoolCidrs(context, CdnType.CLOUDFLARE)
+        val combinedRanges = ((profile?.goodCidrs ?: emptyList()) + pool).distinct()
+        if (combinedRanges.isEmpty()) {
             // هنوز discovery نشده — fallback به اسکن معمولی
             scan(context, guid, emptyList(), concurrency, callback)
             return
@@ -250,7 +272,7 @@ object CloudflareScanner {
         scanScope = CoroutineScope(scanJob + Dispatchers.IO)
         scanScope.launch {
             val candidates = mutableListOf<String>()
-            val shuffled = profile.goodCidrs.shuffled()
+            val shuffled = combinedRanges.shuffled()
             for (cidr in shuffled) {
                 if (candidates.size >= MAX_CANDIDATES) break
                 try {
@@ -259,7 +281,7 @@ object CloudflareScanner {
                     candidates.addAll(randomIpsFromCidr(parts[0], parts[1].toInt(), IPS_PER_CIDR))
                 } catch (_: Exception) {}
             }
-            LogUtil.i(TAG, "ISP=$ispName targeted scan: ${candidates.size} candidates from ${profile.goodCidrs.size} ranges")
+            LogUtil.i(TAG, "ISP=$ispName targeted scan: ${candidates.size} candidates from ${combinedRanges.size} ranges")
             runScan(context, guid, candidates.take(MAX_CANDIDATES), concurrency, callback)
         }
     }
@@ -276,6 +298,7 @@ object CloudflareScanner {
             LogUtil.e(TAG, "applyBestIp: not found guid=$guid")
             return false
         }
+        OriginDomainStore.rememberIfDomain(guid, profile)
         profile.server = bestIp
         profile.fingerPrint = "unsafe"
         if (profile.finalMask.isNullOrBlank()) profile.finalMask = PRODUCTION_FINALMASK
@@ -321,6 +344,13 @@ object CloudflareScanner {
             callback.onFinish(null)
         }
     }
+
+    internal suspend fun probeCandidateWithCore(
+        context: Context,
+        baseGuid: String,
+        base: ProfileItem,
+        ip: String,
+    ): CandidateResult = testCandidate(context, baseGuid, base, ip)
 
     private suspend fun testCandidate(
         context: Context,
