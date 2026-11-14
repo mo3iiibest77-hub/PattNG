@@ -100,7 +100,15 @@ jobs:
         cd ${{ github.workspace }}/V2rayNG
         echo "sdk.dir=${ANDROID_HOME}" > local.properties
         chmod 755 gradlew
-        ./gradlew testPlaystoreDebugUnitTest --no-daemon
+        set +e
+        ./gradlew testPlaystoreDebugUnitTest --no-daemon > unit-test.log 2>&1
+        status=$?
+        tail -n 80 unit-test.log
+        if [ $status -ne 0 ]; then
+          while IFS= read -r line; do echo "::error::$line"; done < <(grep -E "^e: |FAILED|not mocked|Execution failed|error:|Caused by|AssertionError" unit-test.log | head -n 30)
+          while IFS= read -r line; do echo "::error::$line"; done < <(grep -ho 'message="[^"]*"' app/build/test-results/testPlaystoreDebugUnitTest/*.xml 2>/dev/null | head -n 20)
+          exit $status
+        fi
 
     - name: Build APK
       run: |
