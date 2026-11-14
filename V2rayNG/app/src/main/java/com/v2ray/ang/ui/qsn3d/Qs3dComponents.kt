@@ -275,8 +275,10 @@ fun Cosmic3dBackdrop(
         if (flagActive) {
             WindscribeCountryFlagBackdrop(
                 countryCode = connectedCountryCode,
-                isConnected = isConnected,
-                modifier = Modifier.fillMaxSize()
+                motionActive = motionActive,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .alpha(if (isConnected) 0.72f else 0.26f)
             )
         }
 
