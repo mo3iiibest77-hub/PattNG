@@ -1,6 +1,7 @@
 package com.v2ray.ang.ui.qsn.domain
 
 import com.v2ray.ang.dto.entities.ProfileItem
+import com.v2ray.ang.enums.EConfigType
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -40,7 +41,7 @@ class AutoOptimizationPolicyTest {
 
     @Test
     fun edgeRollbackRestoresPriorEdgeWithoutCorruptingTransportFields() {
-        val profile = ProfileItem().apply {
+        val profile = ProfileItem.create(EConfigType.VLESS).apply {
             server = "cdn.example.com"
             serverPort = "443"
             sni = "cdn.example.com"

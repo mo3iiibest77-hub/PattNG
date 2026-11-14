@@ -31,9 +31,8 @@ class SeedRangesTest {
         val discovered = (1..120).map { i ->
             QualifiedRange(
                 cidr = "104.${i % 256}.0.0/24",
-                latencyMs = 80L + i,
                 uploadKBps = 400L + i,
-                downloadKBps = 900L + i,
+                latencyMs = 80L + i,
                 validatedAt = 1000L + i,
             )
         }
