@@ -49,8 +49,11 @@ object CloudflareConfigEnricher {
         profile: ProfileItem?,
         originDomain: String? = null,
         cloudFrontCidrs: Collection<String> = emptyList(),
+        cachedCdnType: CdnType? = null,
     ): Boolean {
         if (profile == null) return false
+        if (cachedCdnType == CdnType.CLOUDFRONT) return true
+        if (cachedCdnType == CdnType.CLOUDFLARE) return false
 
         val hosts = listOfNotNull(
             profile.sni,
@@ -89,9 +92,12 @@ object CloudflareConfigEnricher {
         originDomain: String? = null,
         cloudflareCidrs: Collection<String> = OFFICIAL_AND_SEED_CF_CIDRS,
         cloudFrontCidrs: Collection<String> = emptyList(),
+        cachedCdnType: CdnType? = null,
     ): Boolean {
         if (profile == null || !AutoConfigFilter.isCdnScanEligible(profile)) return false
-        if (isAmazonOrCloudFront(profile, originDomain, cloudFrontCidrs)) return false
+        if (cachedCdnType == CdnType.CLOUDFRONT) return false
+        if (isAmazonOrCloudFront(profile, originDomain, cloudFrontCidrs, cachedCdnType)) return false
+        if (cachedCdnType == CdnType.CLOUDFLARE) return true
 
         val serverTrimmed = profile.server?.trim().orEmpty()
         if (CloudflareSeedRanges.ipv4ToLong(serverTrimmed) != null &&
@@ -113,8 +119,9 @@ object CloudflareConfigEnricher {
         originDomain: String? = null,
         cloudflareCidrs: Collection<String> = OFFICIAL_AND_SEED_CF_CIDRS,
         cloudFrontCidrs: Collection<String> = emptyList(),
+        cachedCdnType: CdnType? = null,
     ): Boolean {
-        if (!isCloudflareConfig(profile, originDomain, cloudflareCidrs, cloudFrontCidrs)) {
+        if (!isCloudflareConfig(profile, originDomain, cloudflareCidrs, cloudFrontCidrs, cachedCdnType)) {
             return false
         }
 
@@ -163,8 +170,15 @@ object CloudflareConfigEnricher {
         cloudFrontCidrs: Collection<String> = emptyList(),
     ): ProfileItem? {
         OriginDomainStore.rememberIfDomain(guid, profile)
-        if (isCloudflareConfig(profile, OriginDomainStore.getOriginDomain(guid, profile), cloudFrontCidrs = cloudFrontCidrs)) {
-            applyCloudflareHardeningIfEligible(profile, cloudFrontCidrs = cloudFrontCidrs)
+        val cachedCdn = CdnPingClassifier.CdnDetectionStore.getSavedCdnType(guid)
+        if (isCloudflareConfig(
+                profile,
+                OriginDomainStore.getOriginDomain(guid, profile),
+                cloudFrontCidrs = cloudFrontCidrs,
+                cachedCdnType = cachedCdn,
+            )
+        ) {
+            applyCloudflareHardeningIfEligible(profile, cloudFrontCidrs = cloudFrontCidrs, cachedCdnType = cachedCdn)
         }
         val tlsSni = extractTlsSniForInitialConnect(profile)
         if (tlsSni != null) {
@@ -192,13 +206,14 @@ object CloudflareConfigEnricher {
             val profile = MmkvManager.decodeServerConfig(guid) ?: continue
             OriginDomainStore.rememberIfDomain(guid, profile)
             val origin = OriginDomainStore.getOriginDomain(guid, profile)
-            if (!isCloudflareConfig(profile, origin, cfCidrs, frontCidrs)) {
+            val cachedCdn = CdnPingClassifier.CdnDetectionStore.getSavedCdnType(guid)
+            if (!isCloudflareConfig(profile, origin, cfCidrs, frontCidrs, cachedCdnType = cachedCdn)) {
                 continue
             }
             val beforeSuites = profile.cipherSuites
             val beforeMask = profile.finalMask
             val beforeFp = profile.fingerPrint
-            applyCloudflareHardeningIfEligible(profile, origin, cfCidrs, frontCidrs)
+            applyCloudflareHardeningIfEligible(profile, origin, cfCidrs, frontCidrs, cachedCdnType = cachedCdn)
             val changed = beforeSuites != profile.cipherSuites ||
                 beforeMask != profile.finalMask ||
                 beforeFp != profile.fingerPrint

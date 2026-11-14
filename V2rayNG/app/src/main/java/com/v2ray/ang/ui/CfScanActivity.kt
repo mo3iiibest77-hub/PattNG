@@ -364,7 +364,7 @@ private fun TopBar(
 ) {
     val bg     = if (isDiscovery) D_Card else Color(0xFF0F0F17)
     val accent = if (isDiscovery) D_Bright else S_Gold
-    val title  = if (isDiscovery) "[ RANGE DISCOVERY ]" else "⚡ QuietStorm Scanner"
+    val title  = if (isDiscovery) "[ RANGE DISCOVERY ]" else "⚡ NovaPulse Scanner"
     val sub    = when (phase) {
         ScanPhase.DISCOVERY -> ">> mapping cloudflare ranges for $ispName"
         ScanPhase.SCANNING  -> "🔍 targeted scan — $ispName"

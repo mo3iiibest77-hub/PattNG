@@ -65,14 +65,21 @@ fun Qs3dLicenseGateScreen(
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         item {
-            Spacer(Modifier.height(6.dp))
-            SectionHeroBanner(
-                imageRes = R.drawable.np_hero_license,
-                title = stringResource(R.string.app_name),
-                subtitle = stringResource(R.string.novapulse_license_gate_subtitle),
-                accent = QsColors.ElectricCyan,
-                height = 176.dp,
-            )
+            Spacer(Modifier.height(12.dp))
+            Glass3dCard(glowColor = QsColors.ElectricCyan.copy(alpha = 0.42f)) {
+                Text(
+                    text = stringResource(R.string.app_name),
+                    color = QsColors.TextPrimary,
+                    fontWeight = FontWeight.ExtraBold,
+                    fontSize = 20.sp
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    text = stringResource(R.string.novapulse_license_gate_subtitle),
+                    color = QsColors.TextSecondary,
+                    fontSize = 12.sp
+                )
+            }
         }
 
         item {

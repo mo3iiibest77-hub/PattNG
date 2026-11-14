@@ -160,4 +160,41 @@ class CloudflareConfigEnricherTest {
             assertNotNull("Invalid seed CIDR: $cidr", CloudflareSeedRanges.normalizeIpv4Cidr(cidr))
         }
     }
+
+    @Test
+    fun cdnCandidateOrder_prioritizesWsHostAndTlsSniBeforeServerIp_andMatchesPingIpToCdn() {
+        val customCloudFront = ProfileItem.create(EConfigType.VLESS).apply {
+            remarks = "Sweden Edge"
+            server = "104.16.12.5"
+            sni = "sni-edge.custom.org"
+            host = "ws-origin.custom.org"
+            network = "ws"
+            security = "tls"
+            serverPort = "443"
+        }
+
+        val ordered = CdnPingClassifier.extractOrderedHostCandidates(customCloudFront, "saved.custom.org")
+        assertEquals(
+            listOf("ws-origin.custom.org", "sni-edge.custom.org", "saved.custom.org", "104.16.12.5"),
+            ordered
+        )
+
+        val frontPingStdout = "PING ws-origin.custom.org (13.32.99.45): 56 data bytes\n64 bytes from 13.32.99.45: icmp_seq=0 ttl=244 time=58.2 ms"
+        val (pingIp, pingRtt) = CdnPingClassifier.parsePingOutput(frontPingStdout)
+        assertEquals("13.32.99.45", pingIp)
+        assertEquals(58L, pingRtt)
+
+        val verdict = CdnPingClassifier.classifyResolvedIp(
+            domain = "ws-origin.custom.org",
+            resolvedIp = pingIp,
+            pingRttMs = pingRtt,
+            cloudFrontCidrs = listOf("13.32.0.0/15", "99.84.0.0/16")
+        )
+        assertEquals(CdnType.CLOUDFRONT, verdict.cdnType)
+
+        // Cached CloudFront verdict prevents CF hardening even if remark lacks "amazon"
+        assertTrue(CloudflareConfigEnricher.isAmazonOrCloudFront(customCloudFront, cachedCdnType = verdict.cdnType))
+        assertFalse(CloudflareConfigEnricher.isCloudflareConfig(customCloudFront, cachedCdnType = verdict.cdnType))
+        assertFalse(CdnPingClassifier.isPublicRoutableIpv4("10.10.34.35"))
+    }
 }

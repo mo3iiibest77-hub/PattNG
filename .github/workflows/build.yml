@@ -124,7 +124,7 @@ jobs:
         set -euo pipefail
         cd ${{ github.workspace }}/V2rayNG
         BUILD_TOOLS=$(ls -d "${ANDROID_HOME}"/build-tools/* | sort -V | tail -n 1)
-        APK="app/build/outputs/apk/playstore/release/QuietStormNG_2.4.0_arm64-v8a.apk"
+        APK="app/build/outputs/apk/playstore/release/NovaPulse_2.4.0_arm64-v8a.apk"
         test -f "${APK}"
         badging=$("${BUILD_TOOLS}/aapt2" dump badging "${APK}")
         line=$(printf '%s\n' "${badging}" | awk 'NR==1')

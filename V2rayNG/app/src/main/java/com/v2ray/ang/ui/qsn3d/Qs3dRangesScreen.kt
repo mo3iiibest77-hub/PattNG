@@ -72,24 +72,13 @@ fun Qs3dRangesScreen(
         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        // 0. Illustrated Clean IP Radar Banner
-        item {
-            SectionHeroBanner(
-                imageRes = R.drawable.np_hero_ranges_radar,
-                title = stringResource(R.string.novapulse_hero_ranges_title),
-                subtitle = stringResource(R.string.novapulse_hero_ranges_sub),
-                accent = if (provider == CdnType.CLOUDFLARE) QsColors.CloudflareOrange else QsColors.CloudFrontSky,
-                height = 116.dp,
-            )
-        }
-
         // 1. Independent Provider Switcher
         item {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(16.dp))
-                    .background(QsColors.GlassSurface)
+                    .background(Color(0x320B132B))
                     .padding(4.dp),
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {

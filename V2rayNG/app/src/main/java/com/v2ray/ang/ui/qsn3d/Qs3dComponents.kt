@@ -4,6 +4,7 @@ import android.animation.ValueAnimator
 import android.os.Build
 import android.provider.Settings
 import androidx.annotation.DrawableRes
+import androidx.compose.animation.Crossfade
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
@@ -45,14 +46,20 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -97,98 +104,6 @@ fun rememberMotionActive(): Boolean {
     return inForeground && animatorEnabled
 }
 
-/**
- * Architectural hero banner blending a generated dark-obsidian artwork cleanly into cards.
- */
-@Composable
-fun SectionHeroBanner(
-    @DrawableRes imageRes: Int,
-    title: String,
-    subtitle: String,
-    accent: Color,
-    height: Dp = 108.dp,
-    badgeText: String? = null,
-    modifier: Modifier = Modifier,
-) {
-    Box(
-        modifier = modifier
-            .fillMaxWidth()
-            .height(height)
-            .clip(RoundedCornerShape(20.dp))
-            .background(Color(0xFF070C1B))
-            .border(
-                width = 1.dp,
-                brush = Brush.horizontalGradient(
-                    listOf(accent.copy(alpha = 0.50f), QsColors.GlassBorderTop.copy(alpha = 0.20f))
-                ),
-                shape = RoundedCornerShape(20.dp)
-            )
-    ) {
-        Image(
-            painter = painterResource(imageRes),
-            contentDescription = null,
-            contentScale = ContentScale.Crop,
-            modifier = Modifier
-                .fillMaxSize()
-                .alpha(0.72f)
-        )
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(
-                    Brush.horizontalGradient(
-                        colors = listOf(
-                            Color(0xE6050916),
-                            Color(0xBA070D1E),
-                            Color(0x55081024),
-                        )
-                    )
-                )
-        )
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(horizontal = 16.dp, vertical = 14.dp),
-            verticalArrangement = Arrangement.SpaceBetween
-        ) {
-            if (!badgeText.isNullOrBlank()) {
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(accent.copy(alpha = 0.22f))
-                        .border(0.75.dp, accent.copy(alpha = 0.55f), RoundedCornerShape(10.dp))
-                        .padding(horizontal = 8.dp, vertical = 3.dp)
-                ) {
-                    Text(
-                        text = badgeText,
-                        color = accent,
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-            }
-            Column {
-                Text(
-                    text = title,
-                    color = QsColors.TextPrimary,
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.ExtraBold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                Spacer(Modifier.height(2.dp))
-                Text(
-                    text = subtitle,
-                    color = QsColors.TextSecondary,
-                    fontSize = 12.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-        }
-    }
-}
-
 enum class OrbVisualMode {
     DISCONNECTED,
     PROCESSING,
@@ -231,6 +146,9 @@ private fun projectPoint(
 fun Cosmic3dBackdrop(
     modifier: Modifier = Modifier,
     isConnected: Boolean = false,
+    @DrawableRes backgroundImageRes: Int? = null,
+    connectedCountryCode: String = "",
+    showCountryFlag: Boolean = false,
 ) {
     val motionActive = rememberMotionActive()
     val spin: Float
@@ -242,7 +160,7 @@ fun Cosmic3dBackdrop(
             initialValue = 0f,
             targetValue = (2f * PI).toFloat(),
             animationSpec = infiniteRepeatable(
-                animation = tween(durationMillis = 18000, easing = LinearEasing),
+                animation = tween(durationMillis = 16000, easing = LinearEasing),
                 repeatMode = RepeatMode.Restart
             ),
             label = "poly_spin"
@@ -294,9 +212,28 @@ fun Cosmic3dBackdrop(
             1 to 2, 2 to 3, 3 to 4, 4 to 1
         )
     }
+    val innerCubeVertices = remember {
+        listOf(
+            Vec3(-0.56f, -0.56f, -0.56f),
+            Vec3(0.56f, -0.56f, -0.56f),
+            Vec3(0.56f, 0.56f, -0.56f),
+            Vec3(-0.56f, 0.56f, -0.56f),
+            Vec3(-0.56f, -0.56f, 0.56f),
+            Vec3(0.56f, -0.56f, 0.56f),
+            Vec3(0.56f, 0.56f, 0.56f),
+            Vec3(-0.56f, 0.56f, 0.56f),
+        )
+    }
+    val innerCubeEdges = remember {
+        listOf(
+            0 to 1, 1 to 2, 2 to 3, 3 to 0,
+            4 to 5, 5 to 6, 6 to 7, 7 to 4,
+            0 to 4, 1 to 5, 2 to 6, 3 to 7
+        )
+    }
 
     val particles = remember {
-        List(42) { idx ->
+        List(46) { idx ->
             val fx = ((idx * 67 + 23) % 100) / 100f
             val fy = ((idx * 43 + 11) % 100) / 100f
             val depth = 0.35f + (idx % 5) * 0.18f
@@ -304,113 +241,169 @@ fun Cosmic3dBackdrop(
         }
     }
 
-    Canvas(
+    val flagActive = showCountryFlag && connectedCountryCode.isNotBlank()
+
+    Box(
         modifier = modifier
             .fillMaxSize()
-            .background(
-                Brush.verticalGradient(
-                    colors = listOf(
-                        QsColors.DeepVoid,
-                        Color(0xFF080E23),
-                        Color(0xFF0C1532),
-                        QsColors.DeepVoid
+            .background(QsColors.DeepVoid)
+    ) {
+        if (backgroundImageRes != null) {
+            Crossfade(
+                targetState = backgroundImageRes,
+                animationSpec = tween(520),
+                label = "section_bg_crossfade"
+            ) { resId ->
+                Image(
+                    painter = painterResource(resId),
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .graphicsLayer {
+                            val drift = 1.04f + 0.03f * sin(spin * 0.6f)
+                            scaleX = drift
+                            scaleY = drift
+                            translationX = 10f * sin(spin * 0.5f)
+                            translationY = 8f * cos(spin * 0.4f)
+                        }
+                        .alpha(if (flagActive && isConnected) 0.32f else 0.78f)
+                )
+            }
+        }
+
+        if (flagActive) {
+            WindscribeCountryFlagBackdrop(
+                countryCode = connectedCountryCode,
+                isConnected = isConnected,
+                modifier = Modifier.fillMaxSize()
+            )
+        }
+
+        // Subtle atmospheric contrast vignette so transparent cards stay crisp and legible
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(
+                    Brush.verticalGradient(
+                        colors = listOf(
+                            Color(0x5A040814),
+                            Color(0x28070E22),
+                            Color(0x5E040814),
+                        )
                     )
                 )
+        )
+
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            val w = size.width
+            val h = size.height
+
+            // 1. Volumetric glowing nebula clouds
+            val orb1Center = Offset(w * (0.24f + 0.1f * sin(spin)), h * 0.20f)
+            drawCircle(
+                brush = Brush.radialGradient(
+                    colors = listOf(accentColor.copy(alpha = 0.20f * auroraBreath), Color.Transparent),
+                    center = orb1Center,
+                    radius = w * 0.70f
+                ),
+                radius = w * 0.70f,
+                center = orb1Center
             )
-    ) {
-        val w = size.width
-        val h = size.height
 
-        // 1. Volumetric glowing nebula clouds
-        val orb1Center = Offset(w * (0.24f + 0.1f * sin(spin)), h * 0.20f)
-        drawCircle(
-            brush = Brush.radialGradient(
-                colors = listOf(accentColor.copy(alpha = 0.24f * auroraBreath), Color.Transparent),
-                center = orb1Center,
-                radius = w * 0.72f
-            ),
-            radius = w * 0.72f,
-            center = orb1Center
-        )
+            val orb2Center = Offset(w * 0.80f, h * (0.55f + 0.08f * cos(spin)))
+            drawCircle(
+                brush = Brush.radialGradient(
+                    colors = listOf(QsColors.PlasmaViolet.copy(alpha = 0.18f * auroraBreath), Color.Transparent),
+                    center = orb2Center,
+                    radius = w * 0.74f
+                ),
+                radius = w * 0.74f,
+                center = orb2Center
+            )
 
-        val orb2Center = Offset(w * 0.80f, h * (0.55f + 0.08f * cos(spin)))
-        drawCircle(
-            brush = Brush.radialGradient(
-                colors = listOf(QsColors.PlasmaViolet.copy(alpha = 0.22f * auroraBreath), Color.Transparent),
-                center = orb2Center,
-                radius = w * 0.78f
-            ),
-            radius = w * 0.78f,
-            center = orb2Center
-        )
-
-        // 2. Rotating 3D wireframe polyhedron in upper-center orbital field
-        val polyCx = w * 0.5f
-        val polyCy = h * 0.31f
-        val polyScale = w * 0.42f
-        val projected = octaVertices.map { v ->
-            projectPoint(v, yaw = spin, pitch = 0.42f + 0.22f * sin(spin * 0.5f), polyCx, polyCy, polyScale)
-        }
-        for ((a, b) in octaEdges) {
-            val (p1, d1) = projected[a]
-            val (p2, d2) = projected[b]
-            val depthAlpha = (((d1 + d2) * 0.5f).coerceIn(0.35f, 1.1f)) * 0.26f
-            drawLine(
-                brush = Brush.linearGradient(
-                    listOf(
-                        accentColor.copy(alpha = depthAlpha),
-                        QsColors.PlasmaViolet.copy(alpha = depthAlpha * 0.9f),
+            // 2. Rotating dual 3D wireframe polyhedron + inner counter-rotating cube
+            val polyCx = w * 0.5f
+            val polyCy = h * 0.30f
+            val polyScale = w * 0.40f
+            val projected = octaVertices.map { v ->
+                projectPoint(v, yaw = spin, pitch = 0.42f + 0.22f * sin(spin * 0.5f), polyCx, polyCy, polyScale)
+            }
+            for ((a, b) in octaEdges) {
+                val (p1, d1) = projected[a]
+                val (p2, d2) = projected[b]
+                val depthAlpha = (((d1 + d2) * 0.5f).coerceIn(0.35f, 1.1f)) * 0.24f
+                drawLine(
+                    brush = Brush.linearGradient(
+                        listOf(
+                            accentColor.copy(alpha = depthAlpha),
+                            QsColors.PlasmaViolet.copy(alpha = depthAlpha * 0.9f),
+                        ),
+                        start = p1,
+                        end = p2
                     ),
                     start = p1,
-                    end = p2
-                ),
-                start = p1,
-                end = p2,
-                strokeWidth = 1.6f
-            )
-        }
-        projected.forEach { (pt, d) ->
-            drawCircle(
-                color = accentColor.copy(alpha = (0.45f * d).coerceIn(0.12f, 0.55f)),
-                radius = (2.6f * d).dp.toPx(),
-                center = pt
-            )
-        }
+                    end = p2,
+                    strokeWidth = 1.6f
+                )
+            }
+            val cubeProj = innerCubeVertices.map { v ->
+                projectPoint(v, yaw = -spin * 1.35f, pitch = 0.55f * cos(spin * 0.4f), polyCx, polyCy, polyScale)
+            }
+            for ((a, b) in innerCubeEdges) {
+                val (p1, d1) = cubeProj[a]
+                val (p2, d2) = cubeProj[b]
+                val depthAlpha = (((d1 + d2) * 0.5f).coerceIn(0.30f, 1.0f)) * 0.18f
+                drawLine(
+                    color = QsColors.NeonRose.copy(alpha = depthAlpha),
+                    start = p1,
+                    end = p2,
+                    strokeWidth = 1.2f
+                )
+            }
+            projected.forEach { (pt, d) ->
+                drawCircle(
+                    color = accentColor.copy(alpha = (0.42f * d).coerceIn(0.12f, 0.52f)),
+                    radius = (2.4f * d).dp.toPx(),
+                    center = pt
+                )
+            }
 
-        // 3. Scrolling 3D perspective horizon plane
-        val horizonY = h * 0.64f
-        val rows = 10
-        for (i in 0 until rows) {
-            val t = ((i + gridScroll) / rows.toFloat()).coerceIn(0f, 1f)
-            val curvedY = horizonY + (h - horizonY) * (t * t)
-            drawLine(
-                color = accentColor.copy(alpha = 0.14f * t),
-                start = Offset(0f, curvedY),
-                end = Offset(w, curvedY),
-                strokeWidth = 1.2f
-            )
-        }
-        val vpX = w * 0.5f
-        for (j in -6..6) {
-            val bottomX = vpX + j * (w * 0.23f)
-            drawLine(
-                color = QsColors.PlasmaViolet.copy(alpha = 0.11f),
-                start = Offset(vpX, horizonY),
-                end = Offset(bottomX, h),
-                strokeWidth = 1.1f
-            )
-        }
+            // 3. Scrolling 3D perspective horizon plane
+            val horizonY = h * 0.65f
+            val rows = 10
+            for (i in 0 until rows) {
+                val t = ((i + gridScroll) / rows.toFloat()).coerceIn(0f, 1f)
+                val curvedY = horizonY + (h - horizonY) * (t * t)
+                drawLine(
+                    color = accentColor.copy(alpha = 0.13f * t),
+                    start = Offset(0f, curvedY),
+                    end = Offset(w, curvedY),
+                    strokeWidth = 1.1f
+                )
+            }
+            val vpX = w * 0.5f
+            for (j in -6..6) {
+                val bottomX = vpX + j * (w * 0.23f)
+                drawLine(
+                    color = QsColors.PlasmaViolet.copy(alpha = 0.10f),
+                    start = Offset(vpX, horizonY),
+                    end = Offset(bottomX, h),
+                    strokeWidth = 1.0f
+                )
+            }
 
-        // 4. Parallax starfield
-        particles.forEachIndexed { idx, (fx, fy, depth) ->
-            val yShift = ((fy + gridScroll * 0.18f * depth) % 1f) * h
-            val tw = 0.25f + 0.55f * absSin(spin + idx * 0.7f)
-            drawCircle(
-                color = if (idx % 3 == 0) accentColor.copy(alpha = tw * depth)
-                else Color.White.copy(alpha = tw * 0.7f * depth),
-                radius = (1.1f + depth * 1.4f).dp.toPx(),
-                center = Offset(fx * w, yShift)
-            )
+            // 4. Parallax starfield
+            particles.forEachIndexed { idx, (fx, fy, depth) ->
+                val yShift = ((fy + gridScroll * 0.18f * depth) % 1f) * h
+                val tw = 0.22f + 0.52f * absSin(spin + idx * 0.7f)
+                drawCircle(
+                    color = if (idx % 3 == 0) accentColor.copy(alpha = tw * depth)
+                    else Color.White.copy(alpha = tw * 0.68f * depth),
+                    radius = (1.1f + depth * 1.3f).dp.toPx(),
+                    center = Offset(fx * w, yShift)
+                )
+            }
         }
     }
 }
@@ -421,8 +414,8 @@ private fun absSin(rad: Float): Float {
 }
 
 /**
- * Architectural 3D Obsidian card with specular bevel rim, layered interior depth gradient,
- * and subtle spring tactile press feedback.
+ * Mirror-transparent Liquid Glass card with subtle specular reflection and a slow,
+ * continuous multi-color rotating neon perimeter light halo.
  */
 @Composable
 fun Glass3dCard(
@@ -433,6 +426,21 @@ fun Glass3dCard(
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val density = LocalDensity.current.density
+    val motionActive = rememberMotionActive()
+    val borderAngle = if (motionActive) {
+        rememberInfiniteTransition(label = "card_halo_spin").animateFloat(
+            initialValue = 0f,
+            targetValue = 360f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(durationMillis = 9000, easing = LinearEasing),
+                repeatMode = RepeatMode.Restart
+            ),
+            label = "card_halo_angle"
+        ).value
+    } else {
+        45f
+    }
+
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
     val pressScale by animateFloatAsState(
@@ -454,6 +462,9 @@ fun Glass3dCard(
         )
     } else Modifier
 
+    val leadColor = glowColor.copy(alpha = 0.95f)
+    val shape = RoundedCornerShape(cornerRadius)
+
     Surface(
         modifier = modifier
             .graphicsLayer {
@@ -462,32 +473,86 @@ fun Glass3dCard(
                 rotationX = tiltX
                 cameraDistance = 14f * density
             }
+            .drawWithContent {
+                drawContent()
+                val cr = CornerRadius(cornerRadius.toPx(), cornerRadius.toPx())
+                val haloColors = listOf(
+                    leadColor,
+                    QsColors.PlasmaViolet.copy(alpha = 0.88f),
+                    QsColors.NeonRose.copy(alpha = 0.78f),
+                    QsColors.ElectricCyan.copy(alpha = 0.85f),
+                    QsColors.ConnectedEmerald.copy(alpha = 0.70f),
+                    leadColor,
+                )
+                rotate(degrees = borderAngle, pivot = center) {
+                    val brush = Brush.sweepGradient(colors = haloColors, center = center)
+                    // Soft ambient neon bloom
+                    drawRoundRect(
+                        brush = brush,
+                        cornerRadius = cr,
+                        alpha = 0.28f,
+                        style = Stroke(width = 3.2.dp.toPx(), join = StrokeJoin.Round)
+                    )
+                    // Sharp luminous mirror edge trace
+                    drawRoundRect(
+                        brush = brush,
+                        cornerRadius = cr,
+                        alpha = 0.88f,
+                        style = Stroke(width = 1.35.dp.toPx(), join = StrokeJoin.Round)
+                    )
+                }
+            }
             .then(clickMod),
-        shape = RoundedCornerShape(cornerRadius),
+        shape = shape,
         color = Color.Transparent,
-        shadowElevation = 16.dp,
+        shadowElevation = 6.dp,
         border = BorderStroke(
-            width = 1.1.dp,
+            width = 0.65.dp,
             brush = Brush.verticalGradient(
-                colors = listOf(glowColor, QsColors.GlassBorderTop.copy(alpha = 0.16f), QsColors.GlassBorderBottom)
+                colors = listOf(
+                    Color.White.copy(alpha = 0.34f),
+                    Color.White.copy(alpha = 0.08f),
+                    leadColor.copy(alpha = 0.28f),
+                )
             )
         )
     ) {
-        Column(
+        Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .background(
                     Brush.verticalGradient(
                         colors = listOf(
-                            QsColors.GlassSurfaceElevated,
-                            QsColors.GlassSurface,
-                            Color(0xCC0A1128),
+                            Color(0x36122042),
+                            Color(0x220B132B),
+                            Color(0x30080F24),
                         )
                     )
                 )
-                .padding(16.dp),
-            content = content
-        )
+        ) {
+            // Mirror top-left specular sheen so the surface feels like reflective frosted crystal
+            Box(
+                modifier = Modifier
+                    .matchParentSize()
+                    .background(
+                        Brush.linearGradient(
+                            colors = listOf(
+                                Color.White.copy(alpha = 0.13f),
+                                Color.Transparent,
+                                leadColor.copy(alpha = 0.07f),
+                            ),
+                            start = Offset.Zero,
+                            end = Offset(720f, 720f)
+                        )
+                    )
+            )
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                content = content
+            )
+        }
     }
 }
 
@@ -501,6 +566,7 @@ fun ConnectionOrb3d(
     progressFraction: Float?,
     primaryText: String,
     secondaryText: String,
+    connectedCountryCode: String = "",
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -704,6 +770,14 @@ fun ConnectionOrb3d(
             horizontalAlignment = Alignment.CenterHorizontally,
             modifier = Modifier.padding(horizontal = 30.dp)
         ) {
+            if (mode == OrbVisualMode.CONNECTED && connectedCountryCode.length == 2) {
+                CountryFlagMedallion(
+                    countryCode = connectedCountryCode,
+                    size = 30.dp,
+                    borderColor = QsColors.ConnectedEmerald,
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+            }
             Text(
                 text = primaryText,
                 color = QsColors.TextPrimary,
@@ -864,7 +938,8 @@ fun Animated3dQuotaChart(
 }
 
 /**
- * Animated real-time Download/Upload throughput capsule designed exclusively for NovaPulse.
+ * Animated real-time Download/Upload data-packet & live waveform telemetry HUD for NovaPulse.
+ * Replaces audio equalizer bars with directional fiber packet conduits + live throughput trace.
  */
 @Composable
 fun LiveSpeedHudRow(
@@ -873,21 +948,39 @@ fun LiveSpeedHudRow(
     downloadLabel: String,
     uploadLabel: String,
     active: Boolean,
+    downloadBps: Long = 0L,
+    uploadBps: Long = 0L,
     modifier: Modifier = Modifier,
 ) {
     val motionActive = rememberMotionActive()
-    val phase = if (motionActive && active) {
-        val transition = rememberInfiniteTransition(label = "speed_bars")
-        transition.animateFloat(
+    val packetFlow = if (motionActive && active) {
+        rememberInfiniteTransition(label = "data_packet_stream").animateFloat(
             initialValue = 0f,
-            targetValue = (2f * PI).toFloat(),
+            targetValue = 1f,
             animationSpec = infiniteRepeatable(
-                animation = tween(1600, easing = LinearEasing),
+                animation = tween(1350, easing = LinearEasing),
                 repeatMode = RepeatMode.Restart
             ),
-            label = "bar_phase"
+            label = "packet_t"
         ).value
     } else 0f
+
+    val dlHistory = remember { mutableStateListOf(0.08f, 0.1f, 0.08f, 0.12f, 0.1f, 0.08f, 0.1f, 0.12f, 0.09f, 0.11f) }
+    val ulHistory = remember { mutableStateListOf(0.08f, 0.1f, 0.08f, 0.12f, 0.1f, 0.08f, 0.1f, 0.12f, 0.09f, 0.11f) }
+    LaunchedEffect(downloadBps, uploadBps, active) {
+        val dlNorm = if (!active) 0.05f else {
+            val scaled = kotlin.math.ln(1.0 + downloadBps.coerceAtLeast(0L).toDouble()) / kotlin.math.ln(1.0 + 10_000_000.0)
+            scaled.toFloat().coerceIn(0.12f, 1.0f)
+        }
+        val ulNorm = if (!active) 0.05f else {
+            val scaled = kotlin.math.ln(1.0 + uploadBps.coerceAtLeast(0L).toDouble()) / kotlin.math.ln(1.0 + 4_000_000.0)
+            scaled.toFloat().coerceIn(0.12f, 1.0f)
+        }
+        dlHistory.removeAt(0)
+        dlHistory.add(dlNorm)
+        ulHistory.removeAt(0)
+        ulHistory.add(ulNorm)
+    }
 
     Row(
         modifier = modifier.fillMaxWidth(),
@@ -897,7 +990,9 @@ fun LiveSpeedHudRow(
             label = downloadLabel,
             value = downloadSpeedText,
             accent = QsColors.AuroraMint,
-            phase = phase,
+            secondaryAccent = QsColors.ElectricCyan,
+            flowProgress = packetFlow,
+            history = dlHistory,
             active = active,
             isDownload = true,
             modifier = Modifier.weight(1f)
@@ -906,7 +1001,9 @@ fun LiveSpeedHudRow(
             label = uploadLabel,
             value = uploadSpeedText,
             accent = QsColors.ElectricCyan,
-            phase = phase + 1.4f,
+            secondaryAccent = QsColors.PlasmaViolet,
+            flowProgress = packetFlow,
+            history = ulHistory,
             active = active,
             isDownload = false,
             modifier = Modifier.weight(1f)
@@ -919,7 +1016,9 @@ private fun SpeedMeterTile(
     label: String,
     value: String,
     accent: Color,
-    phase: Float,
+    secondaryAccent: Color,
+    flowProgress: Float,
+    history: List<Float>,
     active: Boolean,
     isDownload: Boolean,
     modifier: Modifier = Modifier,
@@ -927,14 +1026,14 @@ private fun SpeedMeterTile(
     Glass3dCard(
         modifier = modifier,
         cornerRadius = 18.dp,
-        glowColor = accent.copy(alpha = if (active) 0.45f else 0.18f),
+        glowColor = accent.copy(alpha = if (active) 0.55f else 0.25f),
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Column {
+            Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = if (isDownload) "↓ $label" else "↑ $label",
                     color = QsColors.TextSecondary,
@@ -949,21 +1048,88 @@ private fun SpeedMeterTile(
                     fontWeight = FontWeight.Bold,
                     style = TextStyle(fontFeatureSettings = "tnum")
                 )
+                Spacer(Modifier.height(6.dp))
+                // Real-time directional telemetry waveform trace
+                Canvas(modifier = Modifier.fillMaxWidth().height(16.dp).padding(end = 6.dp)) {
+                    val count = history.size.coerceAtLeast(2)
+                    val stepX = size.width / (count - 1).toFloat()
+                    val tracePath = Path()
+                    val fillPath = Path()
+                    for (i in 0 until count) {
+                        val x = i * stepX
+                        val y = size.height * (1f - history[i].coerceIn(0.05f, 0.96f))
+                        if (i == 0) {
+                            tracePath.moveTo(x, y)
+                            fillPath.moveTo(x, size.height)
+                            fillPath.lineTo(x, y)
+                        } else {
+                            val prevX = (i - 1) * stepX
+                            val prevY = size.height * (1f - history[i - 1].coerceIn(0.05f, 0.96f))
+                            val midX = (prevX + x) * 0.5f
+                            tracePath.cubicTo(midX, prevY, midX, y, x, y)
+                            fillPath.cubicTo(midX, prevY, midX, y, x, y)
+                        }
+                    }
+                    fillPath.lineTo(size.width, size.height)
+                    fillPath.close()
+                    drawPath(
+                        path = fillPath,
+                        brush = Brush.verticalGradient(
+                            colors = listOf(accent.copy(alpha = if (active) 0.34f else 0.10f), Color.Transparent)
+                        )
+                    )
+                    drawPath(
+                        path = tracePath,
+                        brush = Brush.horizontalGradient(listOf(secondaryAccent.copy(alpha = 0.7f), accent)),
+                        style = Stroke(
+                            width = 1.6.dp.toPx(),
+                            cap = StrokeCap.Round,
+                            join = StrokeJoin.Round
+                        )
+                    )
+                }
             }
-            Canvas(modifier = Modifier.size(width = 34.dp, height = 22.dp)) {
-                val barCount = 5
-                val barW = size.width / (barCount * 2f)
-                for (i in 0 until barCount) {
-                    val hFrac = if (active) {
-                        0.30f + 0.65f * absSin(phase + i * 0.85f)
-                    } else 0.22f
-                    val bh = size.height * hFrac
-                    val x = i * barW * 2f
+
+            // Directional Fiber Data-Packet Conduit (packets travel DOWN for Download, UP for Upload)
+            Canvas(modifier = Modifier.size(width = 24.dp, height = 42.dp)) {
+                val laneX1 = size.width * 0.30f
+                val laneX2 = size.width * 0.70f
+                drawLine(
+                    color = accent.copy(alpha = if (active) 0.25f else 0.12f),
+                    start = Offset(laneX1, 2.dp.toPx()),
+                    end = Offset(laneX1, size.height - 2.dp.toPx()),
+                    strokeWidth = 1.4.dp.toPx(),
+                    cap = StrokeCap.Round
+                )
+                drawLine(
+                    color = secondaryAccent.copy(alpha = if (active) 0.25f else 0.12f),
+                    start = Offset(laneX2, 2.dp.toPx()),
+                    end = Offset(laneX2, size.height - 2.dp.toPx()),
+                    strokeWidth = 1.4.dp.toPx(),
+                    cap = StrokeCap.Round
+                )
+
+                val packetCount = 3
+                for (i in 0 until packetCount) {
+                    val phase = (flowProgress + i / packetCount.toFloat()) % 1f
+                    val yFrac1 = if (isDownload) phase else (1f - phase)
+                    val yFrac2 = if (isDownload) ((phase + 0.45f) % 1f) else (1f - ((phase + 0.45f) % 1f))
+                    val py1 = yFrac1 * size.height
+                    val py2 = yFrac2 * size.height
+                    val alpha1 = if (active) (1f - kotlin.math.abs(yFrac1 - 0.5f) * 1.4f).coerceIn(0.25f, 1f) else 0.22f
+                    val alpha2 = if (active) (1f - kotlin.math.abs(yFrac2 - 0.5f) * 1.4f).coerceIn(0.20f, 0.9f) else 0.18f
+
                     drawRoundRect(
-                        color = accent.copy(alpha = if (active) 0.85f else 0.25f),
-                        topLeft = Offset(x, size.height - bh),
-                        size = Size(barW, bh),
-                        cornerRadius = androidx.compose.ui.geometry.CornerRadius(3f, 3f)
+                        color = accent.copy(alpha = alpha1),
+                        topLeft = Offset(laneX1 - 2.2.dp.toPx(), (py1 - 3.5.dp.toPx()).coerceIn(0f, size.height - 7.dp.toPx())),
+                        size = Size(4.4.dp.toPx(), 7.dp.toPx()),
+                        cornerRadius = CornerRadius(2.2.dp.toPx(), 2.2.dp.toPx())
+                    )
+                    drawRoundRect(
+                        color = secondaryAccent.copy(alpha = alpha2),
+                        topLeft = Offset(laneX2 - 1.8.dp.toPx(), (py2 - 2.8.dp.toPx()).coerceIn(0f, size.height - 5.5.dp.toPx())),
+                        size = Size(3.6.dp.toPx(), 5.5.dp.toPx()),
+                        cornerRadius = CornerRadius(1.8.dp.toPx(), 1.8.dp.toPx())
                     )
                 }
             }
@@ -999,8 +1165,8 @@ fun MetricPill(
     Column(
         modifier = modifier
             .clip(RoundedCornerShape(14.dp))
-            .background(Color(0x660B1228))
-            .border(0.75.dp, accent.copy(alpha = 0.30f), RoundedCornerShape(14.dp))
+            .background(Color(0x340B1228))
+            .border(0.75.dp, accent.copy(alpha = 0.34f), RoundedCornerShape(14.dp))
             .padding(horizontal = 11.dp, vertical = 8.dp)
     ) {
         Text(text = label, color = QsColors.TextSecondary, fontSize = 10.sp)

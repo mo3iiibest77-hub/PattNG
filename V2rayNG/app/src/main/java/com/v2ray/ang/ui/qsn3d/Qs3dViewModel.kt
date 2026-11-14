@@ -131,6 +131,11 @@ class Qs3dViewModel(
         private const val PREF_OPTIMIZE_CONSENT_ASKED = "np_2h_optimize_consent_asked"
     }
 
+    @Volatile
+    private var backgroundClassifyLaunched = false
+    @Volatile
+    private var autoCountryProbeDoneForSession = false
+
     init {
         viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
             dataSource.initAssets()
@@ -147,6 +152,7 @@ class Qs3dViewModel(
                     MainServiceEvent.StateRunning -> {
                         _uiState.update { it.copy(coreRunning = true) }
                         SmartConnectCoordinator.notifyVpnConnected(getApplication(), MmkvManager.getSelectServer())
+                        scheduleAutoCountryPing()
                     }
 
                     MainServiceEvent.StateStartSuccess -> {
@@ -159,10 +165,12 @@ class Qs3dViewModel(
                         }
                         SmartConnectCoordinator.notifyVpnConnected(getApplication(), MmkvManager.getSelectServer())
                         loadConfigsAndSubs()
+                        scheduleAutoCountryPing()
                     }
 
                     MainServiceEvent.StateNotRunning,
                     MainServiceEvent.StateStopSuccess -> {
+                        autoCountryProbeDoneForSession = false
                         _uiState.update {
                             it.copy(
                                 coreRunning = false,
@@ -340,10 +348,13 @@ class Qs3dViewModel(
                 subCounts[profile.subscriptionId] = (subCounts[profile.subscriptionId] ?: 0) + 1
                 val aff = MmkvManager.decodeServerAffiliationInfo(guid)
                 val originDomain = OriginDomainStore.getOriginDomain(guid, profile) ?: profile.server.orEmpty()
-                val cdnHint = if (com.v2ray.ang.senpai.CloudflareConfigEnricher.isAmazonOrCloudFront(profile, originDomain, frontCidrs)) {
+                val cachedCdn = CdnPingClassifier.CdnDetectionStore.getSavedCdnType(guid)
+                val cdnHint = cachedCdn ?: if (
+                    com.v2ray.ang.senpai.CloudflareConfigEnricher.isAmazonOrCloudFront(profile, originDomain, frontCidrs, cachedCdn)
+                ) {
                     CdnType.CLOUDFRONT
                 } else {
-                    CdnPingClassifier.inferQuickCdnType(profile, originDomain, frontCidrs, cfCidrs)
+                    CdnPingClassifier.inferQuickCdnType(profile, originDomain, frontCidrs, cfCidrs, cachedCdn)
                 }
                 ConfigUiRow(
                     guid = guid,
@@ -357,12 +368,14 @@ class Qs3dViewModel(
 
             val savedKey = LicenseBackendClient.getSavedLicenseKey()
             val licensed = savedKey.isNotEmpty() || rawConfigs.isNotEmpty() || subs.isNotEmpty()
+            val cachedCdnMap = CdnPingClassifier.CdnDetectionStore.getAllSaved(allGuids)
 
             val effectiveSelected = AutoConfigFilter.pickBestConnectGuid(
                 selectedGuid = selected,
                 profilesInOrder = pairs,
                 honorExplicitSelection = SmartConnectCoordinator.isExplicitServerSelected(),
                 cloudFrontCidrs = frontCidrs,
+                cachedCdns = cachedCdnMap,
             )?.also { chosen ->
                 if (chosen != selected) {
                     MmkvManager.setSelectServer(chosen)
@@ -391,6 +404,26 @@ class Qs3dViewModel(
                     subscriptions = subRows,
                     configs = sortedPinned,
                 )
+            }
+
+            if (rawConfigs.any { it.cdnHint == CdnType.UNKNOWN } && !backgroundClassifyLaunched) {
+                backgroundClassifyLaunched = true
+                val updated = CdnPingClassifier.classifyAllProfilesIfNeeded(ctx, forceRefresh = false)
+                if (updated > 0) {
+                    com.v2ray.ang.senpai.CloudflareConfigEnricher.enrichAllStoredCloudflareProfiles(ctx)
+                    loadConfigsAndSubs()
+                }
+            }
+        }
+    }
+
+    private fun scheduleAutoCountryPing() {
+        if (autoCountryProbeDoneForSession) return
+        autoCountryProbeDoneForSession = true
+        viewModelScope.launch {
+            kotlinx.coroutines.delay(1400L)
+            if (_uiState.value.coreRunning && _uiState.value.connectedCountry.isBlank()) {
+                dataSource.testCurrentServerRealPing()
             }
         }
     }

@@ -71,17 +71,6 @@ fun Qs3dSettingsScreen(
         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        // 0. Illustrated Core & License Banner
-        item {
-            SectionHeroBanner(
-                imageRes = R.drawable.np_hero_settings_core,
-                title = stringResource(R.string.novapulse_hero_settings_title),
-                subtitle = stringResource(R.string.novapulse_hero_settings_sub),
-                accent = QsColors.PlasmaViolet,
-                height = 116.dp,
-            )
-        }
-
         // 1. Account & License Management Card
         item {
             Glass3dCard(glowColor = QsColors.PlasmaViolet.copy(alpha = 0.40f)) {

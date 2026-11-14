@@ -168,7 +168,7 @@ object SmartConnectCoordinator {
                 CloudflareConfigEnricher.enrichAllStoredCloudflareProfiles(appContext)
                 _state.value = _state.value.copy(busy = true, step = SmartStep.SelectingProfile, errorMessage = null)
                 val honorExplicit = !explicitGuid.isNullOrBlank() || isExplicitServerSelected()
-                val targetGuid = resolveTargetGuid(explicitGuid, honorExplicit)
+                val targetGuid = resolveTargetGuid(appContext, explicitGuid, honorExplicit)
                     ?: error("هیچ کانفیگ CDN معتبری یافت نشد.")
                 var profile = MmkvManager.decodeServerConfig(targetGuid)
                     ?: error("اطلاعات کانفیگ انتخاب‌شده یافت نشد.")
@@ -180,12 +180,14 @@ object SmartConnectCoordinator {
                     .map { it.cidr }
                     .ifEmpty { ProviderRangeStore.loadBundledCloudFrontCidrs(appContext) }
                 val originDomain = OriginDomainStore.getOriginDomain(targetGuid, profile).orEmpty()
+                val cachedCdn = CdnPingClassifier.CdnDetectionStore.getSavedCdnType(targetGuid)
 
                 val quickCdn = forcedCdn?.takeIf { it != CdnType.UNKNOWN }
-                    ?: if (CloudflareConfigEnricher.isAmazonOrCloudFront(profile, originDomain, frontCidrs)) {
+                    ?: cachedCdn
+                    ?: if (CloudflareConfigEnricher.isAmazonOrCloudFront(profile, originDomain, frontCidrs, cachedCdn)) {
                         CdnType.CLOUDFRONT
                     } else {
-                        CdnPingClassifier.inferQuickCdnType(profile, originDomain, frontCidrs, cfCidrs)
+                        CdnPingClassifier.inferQuickCdnType(profile, originDomain, frontCidrs, cfCidrs, cachedCdn)
                             .let { if (it == CdnType.UNKNOWN) CdnType.CLOUDFLARE else it }
                     }
 
@@ -457,15 +459,16 @@ object SmartConnectCoordinator {
             )
         }
         purgeNonCdnConfigs()
+        CdnPingClassifier.classifyAllProfilesIfNeeded(context.applicationContext, forceRefresh = false)
         CloudflareConfigEnricher.enrichAllStoredCloudflareProfiles(context.applicationContext)
-        ensureCloudflarePrioritySelection()
+        ensureCloudflarePrioritySelection(context.applicationContext)
         return totalConfigs
     }
 
-    private fun ensureCloudflarePrioritySelection() {
+    private fun ensureCloudflarePrioritySelection(context: Context) {
         val selected = MmkvManager.getSelectServer()
         val honorExplicit = isExplicitServerSelected()
-        val bestGuid = resolveTargetGuid(selected, honorExplicitSelection = honorExplicit)
+        val bestGuid = resolveTargetGuid(context, selected, honorExplicitSelection = honorExplicit)
         if (!bestGuid.isNullOrBlank() && bestGuid != selected) {
             MmkvManager.setSelectServer(bestGuid)
         }
@@ -517,11 +520,13 @@ object SmartConnectCoordinator {
                 val cache = SubscriptionCache(subId, item)
                 val updateRes = AngConfigManager.updateConfigViaSub(cache)
                 purgeNonCdnConfigs()
-                CloudflareConfigEnricher.enrichAllStoredCloudflareProfiles(context.applicationContext)
+                val appCtx = context.applicationContext
+                CdnPingClassifier.classifyAllProfilesIfNeeded(appCtx, forceRefresh = !isStatusRefresh)
+                CloudflareConfigEnricher.enrichAllStoredCloudflareProfiles(appCtx)
                 if (!isStatusRefresh) {
                     markExplicitServerSelected(false)
                 }
-                ensureCloudflarePrioritySelection()
+                ensureCloudflarePrioritySelection(appCtx)
                 if (redeemed.quota != null) {
                     SubscriptionQuotaStore.save(subId, redeemed.quota)
                 } else {
@@ -537,13 +542,24 @@ object SmartConnectCoordinator {
     }
 
     private fun resolveTargetGuid(
+        context: Context,
         explicitGuid: String?,
         honorExplicitSelection: Boolean = false,
     ): String? {
         val selected = explicitGuid ?: MmkvManager.getSelectServer()
         val allGuids = MmkvManager.decodeAllServerList()
         val pairs: List<Pair<String, ProfileItem?>> = allGuids.map { it to MmkvManager.decodeServerConfig(it) }
-        return AutoConfigFilter.pickBestConnectGuid(selected, pairs, honorExplicitSelection = honorExplicitSelection)
+        val frontCidrs = ProviderRangeStore.getEntries(context, CdnType.CLOUDFRONT)
+            .map { it.cidr }
+            .ifEmpty { ProviderRangeStore.loadBundledCloudFrontCidrs(context) }
+        val cachedCdns = CdnPingClassifier.CdnDetectionStore.getAllSaved(allGuids)
+        return AutoConfigFilter.pickBestConnectGuid(
+            selectedGuid = selected,
+            profilesInOrder = pairs,
+            honorExplicitSelection = honorExplicitSelection,
+            cloudFrontCidrs = frontCidrs,
+            cachedCdns = cachedCdns,
+        )
     }
 
     private suspend fun awaitCloudflareScan(

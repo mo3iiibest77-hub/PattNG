@@ -71,17 +71,6 @@ fun Qs3dConfigsScreen(
         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        // 0. Illustrated Cloud Nodes Banner
-        item {
-            SectionHeroBanner(
-                imageRes = R.drawable.np_hero_configs_nodes,
-                title = stringResource(R.string.novapulse_hero_configs_title),
-                subtitle = stringResource(R.string.novapulse_hero_configs_sub),
-                accent = QsColors.ElectricCyan,
-                height = 116.dp,
-            )
-        }
-
         // 1. Search Bar & Action Strip (Test All, Sort by Ping, Bulk Select)
         item {
             Glass3dCard(glowColor = QsColors.ElectricCyan.copy(alpha = 0.30f)) {

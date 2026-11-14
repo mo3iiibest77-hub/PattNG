@@ -40,24 +40,26 @@ object AutoConfigFilter {
         profilesInOrder: List<Pair<String, ProfileItem?>>,
         honorExplicitSelection: Boolean = false,
         cloudFrontCidrs: Collection<String> = emptyList(),
+        cachedCdns: Map<String, CdnType> = emptyMap(),
     ): String? {
         val map = profilesInOrder.toMap()
         if (honorExplicitSelection && !selectedGuid.isNullOrBlank() && isCdnScanEligible(map[selectedGuid])) {
             return selectedGuid
         }
 
-        val isCf: (ProfileItem?) -> Boolean = { p ->
+        val isCf: (String, ProfileItem?) -> Boolean = { guid, p ->
             CloudflareConfigEnricher.isCloudflareConfig(
                 profile = p,
                 originDomain = null,
                 cloudFrontCidrs = cloudFrontCidrs,
+                cachedCdnType = cachedCdns[guid],
             )
         }
 
-        if (!selectedGuid.isNullOrBlank() && isCf(map[selectedGuid])) {
+        if (!selectedGuid.isNullOrBlank() && isCf(selectedGuid, map[selectedGuid])) {
             return selectedGuid
         }
-        val firstCloudflare = profilesInOrder.firstOrNull { isCf(it.second) }?.first
+        val firstCloudflare = profilesInOrder.firstOrNull { isCf(it.first, it.second) }?.first
         if (firstCloudflare != null) return firstCloudflare
 
         if (!selectedGuid.isNullOrBlank() && isCdnScanEligible(map[selectedGuid])) {

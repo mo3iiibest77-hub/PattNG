@@ -23,23 +23,26 @@ object OriginDomainStore {
         }
     }
 
-    fun getOriginDomain(guid: String, profile: ProfileItem? = null): String? {
+    fun getSavedOriginDomain(guid: String): String? {
         val saved = MmkvManager.decodeSettingsString(KEY_PREFIX + guid)
-        if (!saved.isNullOrBlank() && !Utils.isPureIpAddress(saved)) {
-            return saved
-        }
+        return saved?.trim()?.takeIf { it.isNotEmpty() && !Utils.isPureIpAddress(it) }
+    }
+
+    fun getOriginDomain(guid: String, profile: ProfileItem? = null): String? {
+        val saved = getSavedOriginDomain(guid)
+        if (saved != null) return saved
         profile ?: return null
         return resolveDomainFromProfile(profile)
     }
 
     fun resolveDomainFromProfile(profile: ProfileItem): String? {
-        val server = normalizeHost(profile.server)
-        if (server != null && !Utils.isPureIpAddress(server)) return server
-        val sni = normalizeHost(profile.sni)
-        if (sni != null && !Utils.isPureIpAddress(sni)) return sni
         val host = normalizeHost(profile.host)
         if (host != null && !Utils.isPureIpAddress(host)) return host
-        return server ?: sni ?: host
+        val sni = normalizeHost(profile.sni)
+        if (sni != null && !Utils.isPureIpAddress(sni)) return sni
+        val server = normalizeHost(profile.server)
+        if (server != null && !Utils.isPureIpAddress(server)) return server
+        return host ?: sni ?: server
     }
 
     private fun normalizeHost(raw: String?): String? {

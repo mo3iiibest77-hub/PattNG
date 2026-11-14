@@ -146,7 +146,24 @@ class QuietStormActivity : BaseComponentActivity() {
             }
 
             Box(modifier = Modifier.fillMaxSize()) {
-                Cosmic3dBackdrop(isConnected = state.coreRunning)
+                val activeConfigRemarks = state.configs.firstOrNull { it.guid == state.selectedGuid }?.remarks.orEmpty()
+                val flagIso = normalizeCountryCode(state.connectedCountry, activeConfigRemarks)
+                val activeBgRes = when {
+                    !state.hasActiveLicense -> R.drawable.np_hero_license
+                    state.activeTab == Qs3dTab.Connect -> R.drawable.np_hero_connect_globe
+                    state.activeTab == Qs3dTab.Configs -> R.drawable.np_hero_configs_nodes
+                    state.activeTab == Qs3dTab.Ranges -> R.drawable.np_hero_ranges_radar
+                    else -> R.drawable.np_hero_settings_core
+                }
+                Cosmic3dBackdrop(
+                    isConnected = state.coreRunning,
+                    backgroundImageRes = activeBgRes,
+                    connectedCountryCode = flagIso,
+                    showCountryFlag = state.hasActiveLicense &&
+                        !state.showSubscriptionDetails &&
+                        !state.showRangeExplorer &&
+                        state.activeTab == Qs3dTab.Connect
+                )
 
                 if (!state.hasActiveLicense) {
                     Scaffold(
@@ -380,7 +397,7 @@ private fun NovaPulseBottomNavBar(
     activeTab: Qs3dTab,
     onSelectTab: (Qs3dTab) -> Unit,
 ) {
-    NavigationBar(containerColor = Color(0xD9080E21)) {
+    NavigationBar(containerColor = Color(0x52060D20)) {
         val items = listOf(
             Triple(Qs3dTab.Connect, R.string.qsn3d_tab_connect, R.drawable.ic_flash_on_24dp),
             Triple(Qs3dTab.Configs, R.string.qsn3d_tab_configs, R.drawable.ic_subscriptions_24dp),

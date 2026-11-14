@@ -71,8 +71,13 @@ fun Qs3dConnectScreen(
         else -> stringResource(R.string.qsn3d_orb_smart_connect)
     }
 
+    val countryCode = normalizeCountryCode(state.connectedCountry, activeConfig?.remarks.orEmpty())
+    val isPersian = state.currentLanguageCode.startsWith("fa")
+    val countryLabel = countryDisplayLabel(countryCode, isPersian)
+
     val orbSubtitle = when {
-        state.coreRunning -> state.connectedCountry.takeIf { it.isNotBlank() }
+        state.coreRunning -> countryLabel.takeIf { it.isNotBlank() }
+            ?: state.connectedCountry.takeIf { it.isNotBlank() }
             ?: activeConfig?.remarks
             ?: stringResource(R.string.qsn3d_tap_disconnect)
         flow.busy && flow.bestIp != null -> "${flow.bestUploadKBps} KB/s"
@@ -91,22 +96,6 @@ fun Qs3dConnectScreen(
         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        // 0. Illustrated Identity Hero Banner
-        item {
-            SectionHeroBanner(
-                imageRes = R.drawable.np_hero_connect_globe,
-                title = stringResource(R.string.novapulse_hero_connect_title),
-                subtitle = stringResource(R.string.novapulse_hero_connect_sub),
-                accent = when (orbMode) {
-                    OrbVisualMode.CONNECTED -> QsColors.ConnectedEmerald
-                    OrbVisualMode.PROCESSING -> QsColors.PlasmaViolet
-                    OrbVisualMode.ERROR -> QsColors.DangerCrimson
-                    OrbVisualMode.DISCONNECTED -> QsColors.ElectricCyan
-                },
-                height = 108.dp,
-            )
-        }
-
         // 1. Hero 3D Orbital Sphere Card + Fresh IP Optimization Action
         item {
             Glass3dCard(
@@ -149,6 +138,7 @@ fun Qs3dConnectScreen(
                         progressFraction = progress,
                         primaryText = orbTitle,
                         secondaryText = orbSubtitle,
+                        connectedCountryCode = countryCode,
                         onClick = {
                             if (flow.busy) onCancelFlow() else onConnectOrDisconnect()
                         }
@@ -239,12 +229,14 @@ fun Qs3dConnectScreen(
                     uploadSpeedText = if (state.coreRunning) state.liveUploadFormatted else "0 B/s",
                     downloadLabel = stringResource(R.string.novapulse_download_speed),
                     uploadLabel = stringResource(R.string.novapulse_upload_speed),
-                    active = state.coreRunning
+                    active = state.coreRunning,
+                    downloadBps = if (state.coreRunning) state.liveDownloadBps else 0L,
+                    uploadBps = if (state.coreRunning) state.liveUploadBps else 0L,
                 )
             }
         }
 
-        // 3. Connected Node Location, Server Name & Ping Telemetry Strip
+        // 3. Connected Node Location, Windscribe-Style Flag Medallion & Ping Telemetry Strip
         item {
             Glass3dCard(
                 glowColor = QsColors.AuroraMint.copy(alpha = 0.28f),
@@ -252,18 +244,35 @@ fun Qs3dConnectScreen(
             ) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        text = activeConfig?.remarks ?: stringResource(R.string.novapulse_default_server_name),
-                        color = QsColors.TextPrimary,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 14.sp,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f)
-                    )
+                    if (countryCode.isNotBlank()) {
+                        CountryFlagMedallion(
+                            countryCode = countryCode,
+                            size = 40.dp
+                        )
+                    }
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = activeConfig?.remarks ?: stringResource(R.string.novapulse_default_server_name),
+                            color = QsColors.TextPrimary,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 14.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        if (countryLabel.isNotBlank()) {
+                            Spacer(Modifier.height(2.dp))
+                            Text(
+                                text = "${stringResource(R.string.novapulse_location_label)}: $countryLabel",
+                                color = QsColors.TextSecondary,
+                                fontSize = 12.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    }
                     Text(
                         text = state.connectedLatencyMs?.let { "$it ms" }
                             ?: activeConfig?.delayMillis?.takeIf { it > 0L }?.let { "$it ms" }
@@ -271,14 +280,6 @@ fun Qs3dConnectScreen(
                         color = QsColors.ConnectedEmerald,
                         fontWeight = FontWeight.Bold,
                         fontSize = 13.sp
-                    )
-                }
-                if (state.connectedCountry.isNotBlank()) {
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        text = "${stringResource(R.string.novapulse_location_label)}: ${state.connectedCountry}",
-                        color = QsColors.TextSecondary,
-                        fontSize = 12.sp
                     )
                 }
             }
