@@ -24,19 +24,10 @@ object ReferenceCandidateSelector {
     fun selectBest(results: List<CandidateResult>): CandidateResult? =
         eligible(results).maxWithOrNull(
             compareBy<CandidateResult> { it.uploadKBps }
-                .thenByDescending { -it.latencyMs } // prefer smaller latency on identical upload
-                .thenByDescending { it.downloadKBps }
-                .thenBy { "" },
-        )?.let { top ->
-            // Deterministic exact tie-breaker with explicit IP ordering if multiple share upload+latency+down.
-            eligible(results)
-                .filter {
-                    it.uploadKBps == top.uploadKBps &&
-                        it.latencyMs == top.latencyMs &&
-                        it.downloadKBps == top.downloadKBps
-                }
-                .minByOrNull { it.ip }
-        }
+                .thenByDescending { if (it.latencyMs >= 0L) it.latencyMs else Long.MAX_VALUE }
+                .thenBy { it.downloadKBps }
+                .thenByDescending { it.ip },
+        )
 
     /**
      * Stamps deterministic 0..100 UI display scores aligned monotonically with the
