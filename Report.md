@@ -2481,3 +2481,35 @@ limitation in 22.10.
   and does not abort the measurement.
 * Nothing here is verified on a device: the behaviour above follows documented Android semantics
   and the code paths are pinned by tests, but no task-removal, kill or reboot experiment was run.
+
+---
+
+## 23. September 8 Reference Scanner & Smart VPN Architecture (`feat/smart-vpn-ref-engine`) — 2026-11-14
+
+### 23.1 Summary of changes
+
+* **Restored September 8 (`c489a5aa`) scanner & Xray edge behavior** inside `feature/minimal-cloudflare-vpn` UI without disrupting any screen or navigation flow:
+  * `CloudflareScanner.kt` & `ReferenceCandidateSelector.kt`: single outbound delay check (`LATENCY_SAMPLES = 1`) paired with mandatory `RealTrafficSpeedTest`; candidates without verified traffic (`!hasTraffic`) are rejected (`isSuccess == false`); winner selected strictly by highest upload throughput (`uploadKBps`) with deterministic tie-breakers (lowest latency, highest download, IP address).
+  * `ConnectionOrchestrator.kt`: 1-tap `quickConnect` path scans immediately from saved valid / 46 Seed ranges without blocking on full ISP discovery, preserves existing Xray transport settings (`SNI`, `Host`, `TLS`, `Path`, `UUID`, `Port`, `unsafe` fingerprint, `PRODUCTION_CIPHERSUITES`, `PRODUCTION_FINALMASK`), captures an `EdgeRollbackSnapshot` before applying edge updates, rolls back on tunnel failure, and arms both background `DiscoveryScheduler` and `AutoOptimizeScheduler` upon connection.
+* **46 permanent Cloudflare Seed CIDRs & unified non-truncated range store**:
+  * `SeedRanges.kt`, `EdgeProvider.kt`, `ProviderRangeStore.kt`, `CloudflareRangeProvider.kt`: stores all 46 Cloudflare Seed CIDRs permanently alongside Discovered (`RangeSet.MAX_RANGES` raised to `4096`) and Manual ranges in separate buckets, prevents discovery from overwriting seeds or manual entries, tracks explicit user removals, and supports restoration (`Restore 46 Seeds`), search, per-range copy/toggle/delete, and bulk Copy All in `QsRangesScreen.kt`.
+* **Independent Amazon CloudFront provider**:
+  * `CloudFrontIpRangesParser.kt`, `CloudFrontRangeProvider.kt`, `CloudFrontScanner.kt`: parses `https://ip-ranges.amazonaws.com/ip-ranges.json` strictly for IPv4 `service == "CLOUDFRONT"` prefixes (including `/14`–`/15` allocations), fetches via `UnderlyingNetworkProvider`, scans/discovers using `CloudflareScanner.probeCandidate` + `ReferenceCandidateSelector`, and stores results separately under `EdgeProvider.CLOUDFRONT`.
+* **Physical network bypass & periodic WorkManager auto-optimization**:
+  * `UnderlyingNetworkProvider.kt` + `CoreVpnService.kt` self-exclusion allow discovery and CloudFront fetches over the physical uplink (`NET_CAPABILITY_NOT_VPN`).
+  * `AutoOptimizationPolicy.kt`, `AutoOptimizeScheduler.kt`, `AutoOptimizeWorker.kt`, `CoreDaemonProbe.kt`: periodic background optimization configurable between `2h` and `3h` (default `2h`), evaluating current edge health and candidate throughput with hysteresis and automatic `EdgeRollbackSnapshot` rollback if daemon restart fails.
+* **Clean future-backend interfaces & bilingual UI**:
+  * `LicenseProvider.kt` (`LocalDefaultLicenseProvider`) and `SubscriptionProvider.kt` (`DirectUrlSubscriptionProvider`) without fake backend calls or hardcoded subscriptions.
+  * Updated `QsContract.kt`, `QsViewModel.kt`, `QsConnectScreen.kt`, `QsRangesScreen.kt`, `QsDiscoveryScreen.kt`, `QuietStormActivity.kt`, and EN/FA strings (`values/strings.xml`, `values-fa/strings.xml`, 317 `qs_*` keys verified in parity).
+
+### 23.2 Verification & build of record
+
+| Item | Value |
+|---|---|
+| Branch | `feat/smart-vpn-ref-engine` (branched from `origin/feature/minimal-cloudflare-vpn` @ `c7e7b542`) |
+| Verified code commit | `ff3e2690` (`versionName = "2.3.5"`, `versionCode = 746` -> `4000746` for Playstore APKs) |
+| CI run | [`43598803692`](https://github.com/mo3iiibest77-hub/PattNG/actions/runs/43598803692) (`push` workflow `Build APK`) |
+| Result | **completed / success** (all steps: `Run unit tests`, `Build APK`, `Verify APK identity, signature and features`, `Upload arm64-v8a APK`, `Upload armeabi-v7a APK`, `Upload universal APK`) |
+| Unit tests (CI) | **498 executed, 0 failures, 0 errors, 0 skipped** (including new tests `SeedRangesTest`, `CloudFrontIpRangesParserTest`, `ReferenceCandidateSelectorTest`, `AutoOptimizationPolicyTest`, `BackendInterfacesTest`) |
+| Artifacts | `arm64-v8a` (`34,803,493` bytes, id `14115556633`), `armeabi-v7a` (`35,158,203` bytes, id `14115476912`), `universal-apk` (`74,240,323` bytes, id `14115936012`) |
+| Local build / device test | **NOT RUN** (no local JDK/Android SDK on VPS; runtime on device not tested) |
