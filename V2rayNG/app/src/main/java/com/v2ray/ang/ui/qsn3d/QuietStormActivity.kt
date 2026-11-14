@@ -273,9 +273,9 @@ class QuietStormActivity : BaseComponentActivity() {
                                             perAppViewModel.setPerAppProxyEnabled(it)
                                             if (it && apps.isEmpty()) perAppViewModel.loadApps(this@QuietStormActivity)
                                         },
-                                        onPerAppBypassChange = perAppViewModel::setBypassApps,
-                                        onToggleApp = perAppViewModel::toggleApp,
-                                        onSearchApps = perAppViewModel::search,
+                                        onPerAppBypassChange = perAppViewModel::setBypassAppsEnabled,
+                                        onToggleApp = perAppViewModel::toggle,
+                                        onSearchApps = perAppViewModel::filterApps,
                                         onAutoDiscoveryChange = viewModel::setAutoPostConnectDiscovery,
                                         onAuto2hOptimizeChange = viewModel::setAuto2hOptimize,
                                         onSpeedDisplayChange = viewModel::setSpeedDisplayEnabled,
@@ -382,7 +382,7 @@ private fun NovaPulseBottomNavBar(
 ) {
     NavigationBar(containerColor = Color(0xD9080E21)) {
         val items = listOf(
-            Triple(Qs3dTab.Connect, R.string.qsn3d_tab_connect, R.drawable.ic_vpn_key_24dp),
+            Triple(Qs3dTab.Connect, R.string.qsn3d_tab_connect, R.drawable.ic_flash_on_24dp),
             Triple(Qs3dTab.Configs, R.string.qsn3d_tab_configs, R.drawable.ic_subscriptions_24dp),
             Triple(Qs3dTab.Ranges, R.string.qsn3d_tab_ranges, R.drawable.ic_routing_24dp),
             Triple(Qs3dTab.Apps, R.string.qsn3d_tab_settings, R.drawable.ic_settings_24dp),
