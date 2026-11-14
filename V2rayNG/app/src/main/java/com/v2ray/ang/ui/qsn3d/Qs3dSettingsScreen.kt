@@ -77,7 +77,7 @@ fun Qs3dSettingsScreen(
                 imageRes = R.drawable.np_hero_settings_core,
                 title = stringResource(R.string.novapulse_hero_settings_title),
                 subtitle = stringResource(R.string.novapulse_hero_settings_sub),
-                accentColor = QsColors.PlasmaViolet,
+                accent = QsColors.PlasmaViolet,
                 height = 116.dp,
             )
         }

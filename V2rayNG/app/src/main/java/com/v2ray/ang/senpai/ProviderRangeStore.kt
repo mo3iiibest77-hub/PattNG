@@ -266,6 +266,11 @@ object ProviderRangeStore {
         return repo.getScanPoolCidrs(provider)
     }
 
+    fun getDiscoveryBaseCidrs(context: Context, provider: CdnType): List<String> {
+        init(context)
+        return repo.getDiscoveryBaseCidrs(provider)
+    }
+
     fun appendDiscoveredCidrs(context: Context, provider: CdnType, newCidrs: List<String>): List<String> {
         init(context)
         return repo.appendDiscoveredCidrs(provider, newCidrs)

@@ -106,13 +106,14 @@ fun SectionHeroBanner(
     title: String,
     subtitle: String,
     accent: Color,
+    height: Dp = 108.dp,
     badgeText: String? = null,
     modifier: Modifier = Modifier,
 ) {
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .height(108.dp)
+            .height(height)
             .clip(RoundedCornerShape(20.dp))
             .background(Color(0xFF070C1B))
             .border(

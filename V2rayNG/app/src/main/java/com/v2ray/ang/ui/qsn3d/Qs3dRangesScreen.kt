@@ -78,7 +78,7 @@ fun Qs3dRangesScreen(
                 imageRes = R.drawable.np_hero_ranges_radar,
                 title = stringResource(R.string.novapulse_hero_ranges_title),
                 subtitle = stringResource(R.string.novapulse_hero_ranges_sub),
-                accentColor = if (provider == CdnType.CLOUDFLARE) QsColors.CloudflareOrange else QsColors.CloudFrontSky,
+                accent = if (provider == CdnType.CLOUDFLARE) QsColors.CloudflareOrange else QsColors.CloudFrontSky,
                 height = 116.dp,
             )
         }

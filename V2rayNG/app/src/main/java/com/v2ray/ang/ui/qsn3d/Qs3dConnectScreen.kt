@@ -97,7 +97,7 @@ fun Qs3dConnectScreen(
                 imageRes = R.drawable.np_hero_connect_globe,
                 title = stringResource(R.string.novapulse_hero_connect_title),
                 subtitle = stringResource(R.string.novapulse_hero_connect_sub),
-                accentColor = when (orbMode) {
+                accent = when (orbMode) {
                     OrbVisualMode.CONNECTED -> QsColors.ConnectedEmerald
                     OrbVisualMode.PROCESSING -> QsColors.PlasmaViolet
                     OrbVisualMode.ERROR -> QsColors.DangerCrimson

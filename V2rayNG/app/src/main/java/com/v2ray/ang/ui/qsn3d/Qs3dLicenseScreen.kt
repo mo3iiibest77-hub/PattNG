@@ -70,7 +70,7 @@ fun Qs3dLicenseGateScreen(
                 imageRes = R.drawable.np_hero_license,
                 title = stringResource(R.string.app_name),
                 subtitle = stringResource(R.string.novapulse_license_gate_subtitle),
-                accentColor = QsColors.ElectricCyan,
+                accent = QsColors.ElectricCyan,
                 height = 176.dp,
             )
         }
