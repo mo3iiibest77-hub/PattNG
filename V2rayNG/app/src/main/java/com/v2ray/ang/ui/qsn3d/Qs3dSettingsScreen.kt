@@ -315,7 +315,7 @@ fun Qs3dSettingsScreen(
                     AppListItem(
                         appName = app.appName,
                         packageName = app.packageName,
-                        icon = app.appIcon,
+                        icon = null,
                         checked = app.packageName in selectedApps,
                         onCheckedChange = { onToggleApp(app.packageName) }
                     )

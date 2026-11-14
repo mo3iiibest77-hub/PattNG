@@ -1,6 +1,7 @@
 package com.v2ray.ang.senpai
 
 import android.content.Context
+import android.telephony.TelephonyManager
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -85,6 +86,14 @@ object IspManager {
 
     fun getProfile(ctx: Context, name: String): IspProfile? =
         loadAll(ctx).find { it.name.equals(name, ignoreCase = true) }
+
+    fun detectIspName(ctx: Context): String {
+        val tm = runCatching {
+            ctx.getSystemService(Context.TELEPHONY_SERVICE) as? TelephonyManager
+        }.getOrNull()
+        val carrier = tm?.networkOperatorName?.trim().orEmpty()
+        return carrier.ifBlank { "default" }
+    }
 
     fun deleteProfile(ctx: Context, name: String) {
         val all = loadAll(ctx).filter { !it.name.equals(name, ignoreCase = true) }

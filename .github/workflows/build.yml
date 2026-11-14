@@ -109,6 +109,16 @@ jobs:
           while IFS= read -r line; do echo "::error::$line"; done < <(grep -ho 'message="[^"]*"' app/build/test-results/testPlaystoreDebugUnitTest/*.xml 2>/dev/null | head -n 20)
           exit $status
         fi
+        python3 - <<'PY'
+import glob, xml.etree.ElementTree as ET
+total = failed = skipped = 0
+for f in glob.glob("app/build/test-results/testPlaystoreDebugUnitTest/*.xml"):
+    r = ET.parse(f).getroot()
+    total += int(r.attrib.get("tests", 0))
+    failed += int(r.attrib.get("failures", 0)) + int(r.attrib.get("errors", 0))
+    skipped += int(r.attrib.get("skipped", 0))
+print(f"::notice::Unit tests summary: total={total}, passed={total-failed-skipped}, failed={failed}, skipped={skipped}")
+PY
 
     - name: Build APK
       run: |
@@ -135,7 +145,8 @@ jobs:
         cert_sha256=$(printf '%s\n' "${certs}" | sed -n 's/.*SHA-256 digest: *//p' | tr -d ' \r' | awk 'NR==1')
         echo "Cert SHA-256: ${cert_sha256}"
         test "${cert_sha256}" = "a016c9bf4d8e7341efd565f7fc1959235fcdf74c63feb1e31dbaee86a9c22ae1"
-        sha256sum "${APK}"
+        apk_sha256=$(sha256sum "${APK}" | awk '{print $1}')
+        echo "::notice::Verified APK=${APK} sha256=${apk_sha256} cert=${cert_sha256} ${line}"
     
     - name: Upload arm64-v8a APK
       uses: actions/upload-artifact@v7
