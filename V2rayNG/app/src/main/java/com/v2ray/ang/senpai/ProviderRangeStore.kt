@@ -320,7 +320,13 @@ object ProviderRangeStore {
      */
     fun syncCloudFrontFromAws(context: Context): Result<List<String>> {
         init(context)
-        return CloudFrontIpRangesParser.fetchLatestCloudFrontCidrs().map { cidrs ->
+        val client = PhysicalNetworkGuard.createPhysicalOkHttpClient(
+            context,
+            connectTimeoutSec = 6L,
+            readTimeoutSec = 8L,
+            requirePhysical = true,
+        ) ?: return Result.failure(IllegalStateException("No physical non-VPN internet available"))
+        return CloudFrontIpRangesParser.fetchLatestCloudFrontCidrs(client = client).map { cidrs ->
             repo.updateFetchedCidrs(CdnType.CLOUDFRONT, cidrs)
             cidrs
         }

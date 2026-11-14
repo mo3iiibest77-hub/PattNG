@@ -108,7 +108,7 @@ class MainViewModel(
                 updateRunningState(true)
             }
 
-            MainServiceEvent.StateStartFailure -> {
+            is MainServiceEvent.StateStartFailure -> {
                 toastError(R.string.toast_services_failure)
                 updateRunningState(false)
             }

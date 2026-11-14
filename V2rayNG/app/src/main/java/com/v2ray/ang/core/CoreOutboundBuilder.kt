@@ -552,12 +552,24 @@ object CoreOutboundBuilder {
 
         streamSettings.security = streamSecurity.nullIfBlank()
         if (streamSettings.security == null) return
+        val isAmazonOrFront = com.v2ray.ang.senpai.CloudflareConfigEnricher.isAmazonOrCloudFront(profileItem)
+        val effectiveFingerprint = if (isAmazonOrFront) {
+            profileItem.fingerPrint.nullIfBlank() ?: "chrome"
+        } else {
+            profileItem.fingerPrint.nullIfBlank() ?: "unsafe"
+        }
+        val effectiveCipherSuites = if (isAmazonOrFront) {
+            profileItem.cipherSuites.nullIfBlank()
+        } else {
+            profileItem.cipherSuites.nullIfBlank()
+                ?: com.v2ray.ang.senpai.CloudflareScanner.PRODUCTION_CIPHERSUITES
+        }
         val tlsSetting = OutboundBean.StreamSettingsBean.TlsSettingsBean(
             allowInsecure = allowInsecure,
             serverName = sni.nullIfBlank(),
-            fingerprint = "unsafe", // QuietStormNG: always force unsafe fingerprint for CF configs
+            fingerprint = effectiveFingerprint,
             alpn = profileItem.alpn?.split(",")?.map { it.trim() }?.filter { it.isNotEmpty() }.takeIf { !it.isNullOrEmpty() },
-            cipherSuites = profileItem.cipherSuites.nullIfBlank() ?: "TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256:TLS_AES_128_GCM_SHA256:TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384:TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384:TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256:TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256:TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256:TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256:TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA:TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA:TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA256:TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256",
+            cipherSuites = effectiveCipherSuites,
             echConfigList = profileItem.echConfigList.nullIfBlank(),
             verifyPeerCertByName = profileItem.verifyPeerCertByName.nullIfBlank(),
             pinnedPeerCertSha256 = profileItem.pinnedCA256.nullIfBlank(),
@@ -574,7 +586,7 @@ object CoreOutboundBuilder {
             streamSettings.realitySettings = tlsSetting
         }
 
-        if (profileItem.finalMask.isNullOrEmpty()) {
+        if (profileItem.finalMask.isNullOrEmpty() && !isAmazonOrFront) {
             val defaultFinalMask = """{"tcp":[{"type":"fragment","settings":{"packets":"tlshello","lengths":["5","94","1"],"delays":["0"],"maxSplit":"0"}},{"type":"fragment","settings":{"packets":"1-1","lengths":["109","1"],"delays":["1"],"maxSplit":"355"}}]}"""
             val parsedDefault = JsonUtil.parseString(defaultFinalMask)
             if (parsedDefault != null) {

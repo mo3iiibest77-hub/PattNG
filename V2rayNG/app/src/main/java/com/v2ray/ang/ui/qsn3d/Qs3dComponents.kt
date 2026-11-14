@@ -1,5 +1,9 @@
 package com.v2ray.ang.ui.qsn3d
 
+import android.animation.ValueAnimator
+import android.os.Build
+import android.provider.Settings
+import androidx.annotation.DrawableRes
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
@@ -12,6 +16,7 @@ import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -38,6 +43,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -47,16 +53,140 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.compose.currentStateAsState
 import com.v2ray.ang.senpai.CdnType
 import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.sin
+
+/**
+ * Returns true only when the screen is active in the foreground (`Lifecycle.State.STARTED`)
+ * and OS Reduce Motion / Animator Scale allows visual motion.
+ */
+@Composable
+fun rememberMotionActive(): Boolean {
+    val context = LocalContext.current
+    val lifecycleState by LocalLifecycleOwner.current.lifecycle.currentStateAsState()
+    val inForeground = lifecycleState.isAtLeast(Lifecycle.State.STARTED)
+    val animatorEnabled = remember(context) {
+        runCatching {
+            val scale = Settings.Global.getFloat(
+                context.contentResolver,
+                Settings.Global.ANIMATOR_DURATION_SCALE,
+                1f
+            )
+            val osEnabled = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                ValueAnimator.areAnimatorsEnabled()
+            } else true
+            osEnabled && scale > 0f
+        }.getOrDefault(true)
+    }
+    return inForeground && animatorEnabled
+}
+
+/**
+ * Architectural hero banner blending a generated dark-obsidian artwork cleanly into cards.
+ */
+@Composable
+fun SectionHeroBanner(
+    @DrawableRes imageRes: Int,
+    title: String,
+    subtitle: String,
+    accent: Color,
+    badgeText: String? = null,
+    modifier: Modifier = Modifier,
+) {
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(108.dp)
+            .clip(RoundedCornerShape(20.dp))
+            .background(Color(0xFF070C1B))
+            .border(
+                width = 1.dp,
+                brush = Brush.horizontalGradient(
+                    listOf(accent.copy(alpha = 0.50f), QsColors.GlassBorderTop.copy(alpha = 0.20f))
+                ),
+                shape = RoundedCornerShape(20.dp)
+            )
+    ) {
+        Image(
+            painter = painterResource(imageRes),
+            contentDescription = null,
+            contentScale = ContentScale.Crop,
+            modifier = Modifier
+                .fillMaxSize()
+                .alpha(0.72f)
+        )
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(
+                    Brush.horizontalGradient(
+                        colors = listOf(
+                            Color(0xE6050916),
+                            Color(0xBA070D1E),
+                            Color(0x55081024),
+                        )
+                    )
+                )
+        )
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 16.dp, vertical = 14.dp),
+            verticalArrangement = Arrangement.SpaceBetween
+        ) {
+            if (!badgeText.isNullOrBlank()) {
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(accent.copy(alpha = 0.22f))
+                        .border(0.75.dp, accent.copy(alpha = 0.55f), RoundedCornerShape(10.dp))
+                        .padding(horizontal = 8.dp, vertical = 3.dp)
+                ) {
+                    Text(
+                        text = badgeText,
+                        color = accent,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+            Column {
+                Text(
+                    text = title,
+                    color = QsColors.TextPrimary,
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    text = subtitle,
+                    color = QsColors.TextSecondary,
+                    fontSize = 12.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+    }
+}
 
 enum class OrbVisualMode {
     DISCONNECTED,
@@ -101,34 +231,44 @@ fun Cosmic3dBackdrop(
     modifier: Modifier = Modifier,
     isConnected: Boolean = false,
 ) {
-    val transition = rememberInfiniteTransition(label = "cosmic_3d_bg")
-    val spin by transition.animateFloat(
-        initialValue = 0f,
-        targetValue = (2f * PI).toFloat(),
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 18000, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart
-        ),
-        label = "poly_spin"
-    )
-    val gridScroll by transition.animateFloat(
-        initialValue = 0f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 3600, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart
-        ),
-        label = "grid_scroll"
-    )
-    val auroraBreath by transition.animateFloat(
-        initialValue = 0.72f,
-        targetValue = 1.0f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 4800, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "aurora_breath"
-    )
+    val motionActive = rememberMotionActive()
+    val spin: Float
+    val gridScroll: Float
+    val auroraBreath: Float
+    if (motionActive) {
+        val transition = rememberInfiniteTransition(label = "cosmic_3d_bg")
+        spin = transition.animateFloat(
+            initialValue = 0f,
+            targetValue = (2f * PI).toFloat(),
+            animationSpec = infiniteRepeatable(
+                animation = tween(durationMillis = 18000, easing = LinearEasing),
+                repeatMode = RepeatMode.Restart
+            ),
+            label = "poly_spin"
+        ).value
+        gridScroll = transition.animateFloat(
+            initialValue = 0f,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(durationMillis = 3600, easing = LinearEasing),
+                repeatMode = RepeatMode.Restart
+            ),
+            label = "grid_scroll"
+        ).value
+        auroraBreath = transition.animateFloat(
+            initialValue = 0.72f,
+            targetValue = 1.0f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(durationMillis = 4800, easing = FastOutSlowInEasing),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "aurora_breath"
+        ).value
+    } else {
+        spin = 0.55f
+        gridScroll = 0.25f
+        auroraBreath = 0.85f
+    }
 
     val accentColor by animateColorAsState(
         targetValue = if (isConnected) QsColors.ConnectedEmerald else QsColors.ElectricCyan,
@@ -363,37 +503,47 @@ fun ConnectionOrb3d(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val transition = rememberInfiniteTransition(label = "orb_anim")
-    val ringRotation by transition.animateFloat(
-        initialValue = 0f,
-        targetValue = 360f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(
-                durationMillis = if (mode == OrbVisualMode.PROCESSING) 2600 else 10000,
-                easing = LinearEasing
+    val motionActive = rememberMotionActive()
+    val ringRotation: Float
+    val breath: Float
+    val shockwave: Float
+    if (motionActive) {
+        val transition = rememberInfiniteTransition(label = "orb_anim")
+        ringRotation = transition.animateFloat(
+            initialValue = 0f,
+            targetValue = 360f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(
+                    durationMillis = if (mode == OrbVisualMode.PROCESSING) 2600 else 10000,
+                    easing = LinearEasing
+                ),
+                repeatMode = RepeatMode.Restart
             ),
-            repeatMode = RepeatMode.Restart
-        ),
-        label = "ring_rot"
-    )
-    val breath by transition.animateFloat(
-        initialValue = 0.94f,
-        targetValue = 1.04f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(2200, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "orb_breath"
-    )
-    val shockwave by transition.animateFloat(
-        initialValue = 0f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(2400, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart
-        ),
-        label = "orb_shockwave"
-    )
+            label = "ring_rot"
+        ).value
+        breath = transition.animateFloat(
+            initialValue = 0.94f,
+            targetValue = 1.04f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(2200, easing = FastOutSlowInEasing),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "orb_breath"
+        ).value
+        shockwave = transition.animateFloat(
+            initialValue = 0f,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(2400, easing = LinearEasing),
+                repeatMode = RepeatMode.Restart
+            ),
+            label = "orb_shockwave"
+        ).value
+    } else {
+        ringRotation = 24f
+        breath = 1.0f
+        shockwave = 0f
+    }
 
     val primaryColor by animateColorAsState(
         targetValue = when (mode) {
@@ -584,21 +734,24 @@ fun Animated3dQuotaChart(
     centerSecondary: String,
     modifier: Modifier = Modifier,
 ) {
+    val motionActive = rememberMotionActive()
     val animatedSweep by animateFloatAsState(
         targetValue = remainingFraction.coerceIn(0f, 1f),
-        animationSpec = tween(durationMillis = 1200, easing = FastOutSlowInEasing),
+        animationSpec = tween(durationMillis = if (motionActive) 1200 else 0, easing = FastOutSlowInEasing),
         label = "quota_sweep"
     )
-    val transition = rememberInfiniteTransition(label = "quota_orbit")
-    val highlightDeg by transition.animateFloat(
-        initialValue = 0f,
-        targetValue = 360f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 6000, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart
-        ),
-        label = "quota_glow_deg"
-    )
+    val highlightDeg = if (motionActive) {
+        val transition = rememberInfiniteTransition(label = "quota_orbit")
+        transition.animateFloat(
+            initialValue = 0f,
+            targetValue = 360f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(durationMillis = 6000, easing = LinearEasing),
+                repeatMode = RepeatMode.Restart
+            ),
+            label = "quota_glow_deg"
+        ).value
+    } else 45f
 
     Box(
         modifier = modifier.size(210.dp),
@@ -721,16 +874,19 @@ fun LiveSpeedHudRow(
     active: Boolean,
     modifier: Modifier = Modifier,
 ) {
-    val transition = rememberInfiniteTransition(label = "speed_bars")
-    val phase by transition.animateFloat(
-        initialValue = 0f,
-        targetValue = (2f * PI).toFloat(),
-        animationSpec = infiniteRepeatable(
-            animation = tween(1600, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart
-        ),
-        label = "bar_phase"
-    )
+    val motionActive = rememberMotionActive()
+    val phase = if (motionActive && active) {
+        val transition = rememberInfiniteTransition(label = "speed_bars")
+        transition.animateFloat(
+            initialValue = 0f,
+            targetValue = (2f * PI).toFloat(),
+            animationSpec = infiniteRepeatable(
+                animation = tween(1600, easing = LinearEasing),
+                repeatMode = RepeatMode.Restart
+            ),
+            label = "bar_phase"
+        ).value
+    } else 0f
 
     Row(
         modifier = modifier.fillMaxWidth(),
@@ -789,7 +945,8 @@ private fun SpeedMeterTile(
                     text = value,
                     color = if (active) QsColors.TextPrimary else QsColors.TextMuted,
                     fontSize = 15.sp,
-                    fontWeight = FontWeight.Bold
+                    fontWeight = FontWeight.Bold,
+                    style = TextStyle(fontFeatureSettings = "tnum")
                 )
             }
             Canvas(modifier = Modifier.size(width = 34.dp, height = 22.dp)) {
@@ -847,7 +1004,13 @@ fun MetricPill(
     ) {
         Text(text = label, color = QsColors.TextSecondary, fontSize = 10.sp)
         Spacer(modifier = Modifier.height(2.dp))
-        Text(text = value, color = QsColors.TextPrimary, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+        Text(
+            text = value,
+            color = QsColors.TextPrimary,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Bold,
+            style = TextStyle(fontFeatureSettings = "tnum")
+        )
     }
 }
 

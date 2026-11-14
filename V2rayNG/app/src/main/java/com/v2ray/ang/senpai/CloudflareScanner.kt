@@ -41,14 +41,14 @@ object CloudflareScanner {
     private const val IPS_PER_CIDR = 2
     private const val MAX_CANDIDATES = 30
 
-    private val PRODUCTION_FINALMASK = buildString {
+    internal val PRODUCTION_FINALMASK = buildString {
         append("""{"tcp":[""")
         append("""{"type":"fragment","settings":{"packets":"tlshello","lengths":["5","94","1"],"delays":["0"],"maxSplit":"0"}},""")
         append("""{"type":"fragment","settings":{"packets":"1-1","lengths":["109","1"],"delays":["1"],"maxSplit":"355"}}""")
         append("""]}""")
     }
 
-    private const val PRODUCTION_CIPHERSUITES =
+    internal const val PRODUCTION_CIPHERSUITES =
         "TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256:TLS_AES_128_GCM_SHA256:" +
         "TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384:TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384:" +
         "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256:TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256:" +
@@ -66,11 +66,7 @@ object CloudflareScanner {
             val lines = if (poolCidrs.isNotEmpty()) {
                 poolCidrs.shuffled()
             } else {
-                context.assets.open("cf_ranges_v4.txt")
-                    .bufferedReader()
-                    .readLines()
-                    .filter { it.isNotBlank() && !it.startsWith("#") }
-                    .shuffled()
+                CloudflareSeedRanges.SEED_CIDRS.shuffled()
             }
 
             for (cidr in lines) {
@@ -137,9 +133,12 @@ object CloudflareScanner {
         scanJob = SupervisorJob()
         scanScope = CoroutineScope(scanJob + Dispatchers.IO)
         scanScope.launch {
-            val actual = if (candidates.isEmpty()) generateCandidates(context) else candidates
+            val appCtx = context.applicationContext
+            com.v2ray.ang.handler.SettingsManager.initAssets(appCtx, appCtx.assets)
+            CoreNativeManager.initCoreEnv(appCtx)
+            val actual = if (candidates.isEmpty()) generateCandidates(appCtx) else candidates
             LogUtil.i(TAG, "Scan started: ${actual.size} candidates")
-            runScan(context, guid, actual, concurrency, callback)
+            runScan(appCtx, guid, actual, concurrency, callback)
         }
     }
 
@@ -159,19 +158,29 @@ object CloudflareScanner {
         scanJob = SupervisorJob()
         scanScope = CoroutineScope(scanJob + Dispatchers.IO)
         scanScope.launch {
+            val appCtx = context.applicationContext
+            if (!PhysicalNetworkGuard.hasPhysicalInternet(appCtx)) {
+                LogUtil.w(TAG, "Cloudflare discovery skipped: no physical non-VPN internet available")
+                withContext(Dispatchers.Main) { onFinish(emptyList()) }
+                return@launch
+            }
+            com.v2ray.ang.handler.SettingsManager.initAssets(appCtx, appCtx.assets)
+            CoreNativeManager.initCoreEnv(appCtx)
+            val watcher = PhysicalNetworkGuard.Watcher(appCtx) { cancel() }
+            watcher.start()
+
+            val officialCfCidrs = CdnPingClassifier.getAllCloudflareCidrs(appCtx)
             val allLines = try {
-                context.assets.open("cf_ranges_discovery_v4.txt")
+                appCtx.assets.open("cf_ranges_discovery_v4.txt")
                     .bufferedReader().readLines()
-                    .filter { it.isNotBlank() && !it.startsWith("#") }
+                    .mapNotNull { CloudflareSeedRanges.normalizeIpv4Cidr(it) }
+                    .distinct()
             } catch (_: Exception) {
-                try {
-                    context.assets.open("cf_ranges_v4.txt")
-                        .bufferedReader().readLines()
-                        .filter { it.isNotBlank() && !it.startsWith("#") }
-                } catch (_: Exception) { emptyList() }
+                ProviderRangeStore.getDiscoveryBaseCidrs(appCtx, CdnType.CLOUDFLARE)
+                    .ifEmpty { CloudflareSeedRanges.SEED_CIDRS }
             }
 
-            val existing     = IspManager.getProfile(context, ispName)
+            val existing     = IspManager.getProfile(appCtx, ispName)
             val startFrom    = existing?.lastScannedIndex ?: 0
             val alreadyFound = existing?.goodCidrs?.toMutableList() ?: mutableListOf()
             val lines = if (startFrom > 0 && startFrom < allLines.size) {
@@ -180,6 +189,7 @@ object CloudflareScanner {
             } else allLines
 
             val baseProfile = MmkvManager.decodeServerConfig(guid) ?: run {
+                watcher.stop()
                 withContext(Dispatchers.Main) { onFinish(emptyList()) }
                 return@launch
             }
@@ -193,14 +203,20 @@ object CloudflareScanner {
             val jobs = lines.map { cidr ->
                 scanScope.launch {
                     semaphore.withPermit {
-                        val parts = cidr.trim().split("/")
+                        if (!PhysicalNetworkGuard.hasPhysicalInternet(appCtx)) {
+                            cancel()
+                            return@withPermit
+                        }
+                        val normalizedCidr = CloudflareSeedRanges.normalizeIpv4Cidr(cidr)
+                        val parts = normalizedCidr?.split("/") ?: emptyList()
                         var bestUpload = 0L
                         var hasGoodIp  = false
-                        if (parts.size == 2) {
+                        if (parts.size == 2 && (officialCfCidrs.isEmpty() || normalizedCidr in officialCfCidrs)) {
                             try {
                                 val ips = randomIpsFromCidr(parts[0], parts[1].toInt(), 2)
                                 for (ip in ips) {
-                                    val r = testCandidate(context, guid, baseProfile, ip)
+                                    if (!CloudflareSeedRanges.matchesAnyCidr(ip, officialCfCidrs)) continue
+                                    val r = testCandidate(appCtx, guid, baseProfile, ip)
                                     if (r.isSuccess && r.uploadKBps >= 20L) {
                                         hasGoodIp = true
                                         if (r.uploadKBps > bestUpload) bestUpload = r.uploadKBps
@@ -212,10 +228,12 @@ object CloudflareScanner {
                         }
                         synchronized(lock) {
                             done++
-                            if (hasGoodIp) newGoodCidrs.add(cidr.trim() to bestUpload)
+                            if (hasGoodIp && normalizedCidr != null) {
+                                newGoodCidrs.add(normalizedCidr to bestUpload)
+                            }
                             if (done % 20 == 0) {
                                 val partial = (alreadyFound + newGoodCidrs.map { it.first }).distinct()
-                                IspManager.savePartialProgress(context, ispName, partial, done)
+                                IspManager.savePartialProgress(appCtx, ispName, partial, done)
                             }
                         }
                         withContext(Dispatchers.Main) {
@@ -230,7 +248,7 @@ object CloudflareScanner {
                     (alreadyFound + newGoodCidrs.sortedByDescending { it.second }.map { it.first }).distinct()
                 }
                 IspManager.saveProfile(
-                    context,
+                    appCtx,
                     IspProfile(
                         name = ispName,
                         goodCidrs = allGood,
@@ -239,15 +257,17 @@ object CloudflareScanner {
                         createdAt = existing?.createdAt ?: System.currentTimeMillis(),
                     )
                 )
-                ProviderRangeStore.appendDiscoveredCidrs(context, CdnType.CLOUDFLARE, allGood)
+                ProviderRangeStore.appendDiscoveredCidrs(appCtx, CdnType.CLOUDFLARE, allGood)
                 withContext(Dispatchers.Main) { onFinish(allGood) }
             } catch (_: CancellationException) {
                 val partial = synchronized(lock) {
                     (alreadyFound + newGoodCidrs.map { it.first }).distinct()
                 }
-                IspManager.savePartialProgress(context, ispName, partial, done)
-                ProviderRangeStore.appendDiscoveredCidrs(context, CdnType.CLOUDFLARE, partial)
+                IspManager.savePartialProgress(appCtx, ispName, partial, done)
+                ProviderRangeStore.appendDiscoveredCidrs(appCtx, CdnType.CLOUDFLARE, partial)
                 withContext(Dispatchers.Main) { onFinish(partial) }
+            } finally {
+                watcher.stop()
             }
         }
     }
@@ -300,11 +320,11 @@ object CloudflareScanner {
         }
         OriginDomainStore.rememberIfDomain(guid, profile)
         profile.server = bestIp
-        profile.fingerPrint = "unsafe"
-        if (profile.finalMask.isNullOrBlank()) profile.finalMask = PRODUCTION_FINALMASK
-        if (profile.cipherSuites.isNullOrBlank()) profile.cipherSuites = PRODUCTION_CIPHERSUITES
-        MmkvManager.encodeServerConfig(guid, profile)
-        LogUtil.i(TAG, "applyBestIp: $guid -> $bestIp")
+        if (!CloudflareConfigEnricher.isAmazonOrCloudFront(profile, OriginDomainStore.getOriginDomain(guid, profile))) {
+            CloudflareConfigEnricher.applyCloudflareHardeningIfEligible(profile)
+        }
+        val persisted = CloudflareConfigEnricher.validateAndPersistProfile(guid, profile) ?: return false
+        LogUtil.i(TAG, "applyBestIp: $guid -> ${persisted.server}")
         return true
     }
 
@@ -334,7 +354,8 @@ object CloudflareScanner {
         }
         try {
             joinAll(*jobs.toTypedArray())
-            val best = results.filter { it.isSuccess }.maxByOrNull { it.uploadKBps }
+            val best = results.filter { it.isSuccess }
+                .maxWithOrNull(compareBy<CandidateResult>({ it.uploadKBps }, { it.downloadKBps }, { -it.latencyMs }))
             LogUtil.i(TAG, "Done. Best: ${best?.ip} @ ${best?.latencyMs}ms up=${best?.uploadKBps}KB/s")
             callback.onFinish(best)
         } catch (_: CancellationException) {
@@ -362,10 +383,11 @@ object CloudflareScanner {
         return@withContext try {
             // Keep scanner validation identical to the configuration that
             // applyBestIp() writes to the real production profile.
+            val isAmazonOrFront = CloudflareConfigEnricher.isAmazonOrCloudFront(base)
             val temp = base.copy(server = ip).apply {
-                fingerPrint = "unsafe"
-                if (finalMask.isNullOrBlank()) finalMask = PRODUCTION_FINALMASK
-                if (cipherSuites.isNullOrBlank()) cipherSuites = PRODUCTION_CIPHERSUITES
+                if (!isAmazonOrFront) {
+                    CloudflareConfigEnricher.applyCloudflareHardeningIfEligible(this)
+                }
             }
             MmkvManager.encodeTemporarySpeedtestConfig(tempGuid, temp)
             val cfg = CoreConfigManager.getV2rayConfig4Speedtest(context, tempGuid)

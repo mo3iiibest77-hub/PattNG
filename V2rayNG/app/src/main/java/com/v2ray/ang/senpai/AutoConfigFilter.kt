@@ -4,7 +4,7 @@ import com.v2ray.ang.dto.entities.ProfileItem
 import com.v2ray.ang.enums.EConfigType
 
 /**
- * Enforces NovaPulse CDN-only configuration policy:
+ * Enforces NovaPulse CDN-only configuration policy and deterministic Cloudflare-first priority:
  * Allows ONLY VLESS + TLS + supported CDN transports (`xhttp`, `ws`, `splithttp`) over HTTPS/CDN
  * ports, filtering out Reality, plaintext, Shadowsocks, VMess, Trojan, and non-CDN configs.
  */
@@ -25,22 +25,47 @@ object AutoConfigFilter {
     }
 
     /**
-     * Picks the preferred configuration GUID from candidate profiles:
-     * 1) Currently selected GUID if it is CDN-eligible
-     * 2) First CDN-eligible GUID in the active subscription/list
-     * 3) Currently selected GUID (fallback if still present)
-     * 4) First available GUID
+     * Picks the preferred configuration GUID from candidate profiles in subscription order:
+     * - When [honorExplicitSelection] is true and [selectedGuid] is CDN-eligible, uses it directly
+     *   (e.g. user manually picked a specific server row in Configs tab).
+     * - Otherwise prioritizes **Cloudflare** over Amazon/CloudFront:
+     *   1) [selectedGuid] if it is Cloudflare + CDN-eligible
+     *   2) First Cloudflare CDN-eligible GUID in subscription order (first-to-last)
+     *   3) [selectedGuid] if CDN-eligible (only when no Cloudflare config exists)
+     *   4) First CDN-eligible GUID
+     *   5) Fallback to [selectedGuid] or first available
      */
     fun pickBestConnectGuid(
         selectedGuid: String?,
         profilesInOrder: List<Pair<String, ProfileItem?>>,
+        honorExplicitSelection: Boolean = false,
+        cloudFrontCidrs: Collection<String> = emptyList(),
     ): String? {
         val map = profilesInOrder.toMap()
+        if (honorExplicitSelection && !selectedGuid.isNullOrBlank() && isCdnScanEligible(map[selectedGuid])) {
+            return selectedGuid
+        }
+
+        val isCf: (ProfileItem?) -> Boolean = { p ->
+            CloudflareConfigEnricher.isCloudflareConfig(
+                profile = p,
+                originDomain = null,
+                cloudFrontCidrs = cloudFrontCidrs,
+            )
+        }
+
+        if (!selectedGuid.isNullOrBlank() && isCf(map[selectedGuid])) {
+            return selectedGuid
+        }
+        val firstCloudflare = profilesInOrder.firstOrNull { isCf(it.second) }?.first
+        if (firstCloudflare != null) return firstCloudflare
+
         if (!selectedGuid.isNullOrBlank() && isCdnScanEligible(map[selectedGuid])) {
             return selectedGuid
         }
         val firstEligible = profilesInOrder.firstOrNull { isCdnScanEligible(it.second) }?.first
         if (firstEligible != null) return firstEligible
+
         if (!selectedGuid.isNullOrBlank() && map.containsKey(selectedGuid)) return selectedGuid
         return profilesInOrder.firstOrNull()?.first
     }

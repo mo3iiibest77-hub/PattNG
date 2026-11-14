@@ -370,9 +370,14 @@ object MmkvManager {
                 mutableListOf()
             }
             val indexedServers = serverList.toHashSet()
-            profiles.keys.forEach { guid ->
-                if (indexedServers.add(guid)) {
-                    serverList.add(0, guid)
+            if (append) {
+                val toPrepend = profiles.keys.filter { indexedServers.add(it) }
+                serverList.addAll(0, toPrepend)
+            } else {
+                profiles.keys.forEach { guid ->
+                    if (indexedServers.add(guid)) {
+                        serverList.add(guid)
+                    }
                 }
             }
             requireStorageWrite(

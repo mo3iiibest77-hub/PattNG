@@ -31,8 +31,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -62,38 +65,13 @@ fun Qs3dLicenseGateScreen(
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         item {
-            Spacer(Modifier.height(12.dp))
-            Box(
-                modifier = Modifier
-                    .size(92.dp)
-                    .clip(CircleShape)
-                    .background(
-                        Brush.radialGradient(
-                            colors = listOf(QsColors.ElectricCyan.copy(alpha = 0.25f), Color(0xFF0A1024))
-                        )
-                    )
-                    .border(1.5.dp, QsColors.ElectricCyan.copy(alpha = 0.55f), CircleShape),
-                contentAlignment = Alignment.Center
-            ) {
-                Image(
-                    painter = painterResource(R.drawable.ic_stat_name),
-                    contentDescription = null,
-                    modifier = Modifier.size(48.dp)
-                )
-            }
-            Spacer(Modifier.height(14.dp))
-            Text(
-                text = stringResource(R.string.app_name),
-                color = QsColors.TextPrimary,
-                fontSize = 26.sp,
-                fontWeight = FontWeight.ExtraBold
-            )
             Spacer(Modifier.height(6.dp))
-            Text(
-                text = stringResource(R.string.novapulse_license_gate_subtitle),
-                color = QsColors.TextSecondary,
-                fontSize = 13.sp,
-                textAlign = TextAlign.Center
+            SectionHeroBanner(
+                imageRes = R.drawable.np_hero_license,
+                title = stringResource(R.string.app_name),
+                subtitle = stringResource(R.string.novapulse_license_gate_subtitle),
+                accentColor = QsColors.ElectricCyan,
+                height = 176.dp,
             )
         }
 
@@ -116,7 +94,19 @@ fun Qs3dLicenseGateScreen(
                 OutlinedTextField(
                     value = activationInput,
                     onValueChange = onInputChange,
-                    placeholder = { Text("NP-XXXX-XXXX-XXXX") },
+                    placeholder = {
+                        Text(
+                            text = "NP-XXXX-XXXX-XXXX",
+                            style = TextStyle(fontFamily = FontFamily.Monospace)
+                        )
+                    },
+                    textStyle = TextStyle(
+                        fontFamily = FontFamily.Monospace,
+                        fontFeatureSettings = "tnum",
+                        letterSpacing = 1.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = QsColors.TextPrimary
+                    ),
                     singleLine = true,
                     enabled = !isRedeeming,
                     modifier = Modifier.fillMaxWidth()

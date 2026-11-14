@@ -1075,8 +1075,15 @@ object CoreConfigManager {
                 continue
             }
 
-            val resolvedIps = HttpUtil.resolveHostToIP(domain, preferIpv6)
-            if (resolvedIps.isNullOrEmpty()) {
+            val rawResolved = HttpUtil.resolveHostToIP(domain, preferIpv6).orEmpty()
+            val cleanResolved = rawResolved.filter { ip ->
+                val isV4 = com.v2ray.ang.senpai.CloudflareSeedRanges.ipv4ToLong(ip) != null
+                !isV4 || com.v2ray.ang.senpai.CdnPingClassifier.isPublicRoutableIpv4(ip)
+            }
+            val resolvedIps = cleanResolved.ifEmpty {
+                com.v2ray.ang.senpai.CdnPingClassifier.resolveViaDoh(domain)
+            }
+            if (resolvedIps.isEmpty()) {
                 continue
             }
 

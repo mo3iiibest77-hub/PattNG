@@ -45,6 +45,7 @@ class AngApplication : Application() {
         // Ensure critical preference defaults are present in MMKV early
         SettingsManager.initApp(this)
         com.v2ray.ang.senpai.ProviderRangeStore.init(this)
+        SettingsManager.initAssets(this, assets)
 
         // Initialize theme state from MMKV
         ThemeManager.refresh()

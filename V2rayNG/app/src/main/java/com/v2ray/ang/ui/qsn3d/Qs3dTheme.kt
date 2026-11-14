@@ -10,12 +10,12 @@ import androidx.compose.ui.text.font.FontFamily
 
 object QsColors {
     val DeepVoid = Color(0xFF040712)
-    val MidnightNavy = Color(0xFF0B1124)
-    val NebulaSurface = Color(0xD9111A35)
-    val GlassSurface = Color(0xCC131E3C)
-    val GlassSurfaceElevated = Color(0xE618264A)
-    val GlassBorderTop = Color(0x668BB8FF)
-    val GlassBorderBottom = Color(0x2238BDF8)
+    val MidnightNavy = Color(0xFF0A1020)
+    val NebulaSurface = Color(0xDE101830)
+    val GlassSurface = Color(0xD8111B36)
+    val GlassSurfaceElevated = Color(0xEB162344)
+    val GlassBorderTop = Color(0x558BB8FF)
+    val GlassBorderBottom = Color(0x1F38BDF8)
 
     val ElectricCyan = Color(0xFF38BDF8)
     val AuroraMint = Color(0xFF2DD4BF)
@@ -27,7 +27,7 @@ object QsColors {
     val DangerCrimson = Color(0xFFEF4444)
 
     val TextPrimary = Color(0xFFF8FAFC)
-    val TextSecondary = Color(0xFFA5B4FC).copy(alpha = 0.85f)
+    val TextSecondary = Color(0xFFB4C6FC).copy(alpha = 0.86f)
     val TextMuted = Color(0xFF64748B)
 }
 

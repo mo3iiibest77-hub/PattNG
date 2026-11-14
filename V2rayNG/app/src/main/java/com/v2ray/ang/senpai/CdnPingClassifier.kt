@@ -212,10 +212,11 @@ object CdnPingClassifier {
             return classifyResolvedIp(targetHost, targetHost, null, frontCidrs, cfCidrs)
         }
 
-        val dohIps = resolveViaDoh(targetHost)
+        val dohIps = resolveViaDoh(targetHost, context)
         val (pingIpRaw, pingRtt) = runBoundedPing(targetHost)
         val pingIp = pingIpRaw?.takeIf { isPublicRoutableIpv4(it) }
-        val localDnsIps = resolveAllIpv4(targetHost).filter { isPublicRoutableIpv4(it) }
+        val physicalNetwork = PhysicalNetworkGuard.findActivePhysicalNetwork(context)
+        val localDnsIps = resolveAllIpv4(targetHost, physicalNetwork).filter { isPublicRoutableIpv4(it) }
 
         val candidateIps = buildList {
             addAll(dohIps)
@@ -230,7 +231,7 @@ object CdnPingClassifier {
             }
         }
 
-        val headerCdn = probeHttpHeadersForCdn(targetHost)
+        val headerCdn = probeHttpHeadersForCdn(targetHost, context)
         if (headerCdn != CdnType.UNKNOWN) {
             return CdnDetectionResult(
                 domain = targetHost,
@@ -260,13 +261,15 @@ object CdnPingClassifier {
         )
     }
 
-    private fun resolveViaDoh(domain: String): List<String> {
+    fun resolveViaDoh(domain: String, context: Context? = null): List<String> {
         if (!domain.matches(Regex("""^[A-Za-z0-9.\-]+$"""))) return emptyList()
         val encoded = URLEncoder.encode(domain, "UTF-8")
-        val client = OkHttpClient.Builder()
+        val client = (context?.let {
+            PhysicalNetworkGuard.createPhysicalOkHttpClient(it, connectTimeoutSec = 3L, readTimeoutSec = 3L)
+        } ?: OkHttpClient.Builder()
             .connectTimeout(3, TimeUnit.SECONDS)
             .readTimeout(3, TimeUnit.SECONDS)
-            .build()
+            .build())
         val endpoints = listOf(
             "https://dns.google/resolve?name=$encoded&type=A",
             "https://cloudflare-dns.com/dns-query?name=$encoded&type=A",
@@ -304,16 +307,24 @@ object CdnPingClassifier {
         }.getOrDefault(null to null)
     }
 
-    private fun resolveAllIpv4(domain: String): List<String> = runCatching {
-        InetAddress.getAllByName(domain)
-            .filterIsInstance<Inet4Address>()
+    private fun resolveAllIpv4(domain: String, physicalNetwork: android.net.Network? = null): List<String> = runCatching {
+        val addrs = if (physicalNetwork != null) {
+            physicalNetwork.getAllByName(domain)
+        } else {
+            InetAddress.getAllByName(domain)
+        }
+        addrs.filterIsInstance<Inet4Address>()
             .mapNotNull { it.hostAddress }
     }.getOrDefault(emptyList())
 
-    private fun probeHttpHeadersForCdn(domain: String): CdnType {
-        val client = OkHttpClient.Builder()
+    private fun probeHttpHeadersForCdn(domain: String, context: Context? = null): CdnType {
+        val baseClient = context?.let {
+            PhysicalNetworkGuard.createPhysicalOkHttpClient(it, connectTimeoutSec = 4L, readTimeoutSec = 4L)
+        } ?: OkHttpClient.Builder()
             .connectTimeout(4, TimeUnit.SECONDS)
             .readTimeout(4, TimeUnit.SECONDS)
+            .build()
+        val client = baseClient.newBuilder()
             .followRedirects(false)
             .build()
         return runCatching {

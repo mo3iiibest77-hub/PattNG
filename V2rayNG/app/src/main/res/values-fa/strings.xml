@@ -724,5 +724,15 @@
     <string name="novapulse_optimize_consent_body">آیا اجازه می‌دهید نواپالس هر ۲ ساعت در پس‌زمینه IP سریع‌تر را پیدا کند و در صورت بهبود محسوس، اتصال VPN را به‌صورت خودکار با IP جدید برقرار سازد؟</string>
     <string name="novapulse_consent_allow">بله، خودکار بهینه کن</string>
     <string name="novapulse_consent_decline">فعلاً خیر</string>
+    <string name="novapulse_bg_opt_scanning_fmt">متصل • در حال یافتن بهترین IP در پس‌زمینه (%1$d/%2$d)</string>
+    <string name="novapulse_bg_opt_switching">در حال اعمال IP سریع‌تر و راستی‌آزمایی اتصال…</string>
+    <string name="novapulse_hero_connect_title">هسته تونل هوشمند</string>
+    <string name="novapulse_hero_connect_sub">اتصال فوری با TLS-SNI و بهینه‌سازی خودکار روی شبکه اصلی</string>
+    <string name="novapulse_hero_configs_title">سرورهای اختصاصی</string>
+    <string name="novapulse_hero_configs_sub">اولویت خودکار کلادفلر با حفظ ترتیب دقیق سرورهای اشتراک</string>
+    <string name="novapulse_hero_ranges_title">رادار رنج‌های سالم</string>
+    <string name="novapulse_hero_ranges_sub">کشـف رنج‌های تمیز متناسب با اپراتور شما روی شبکه مستقیم</string>
+    <string name="novapulse_hero_settings_title">تنظیمات هسته و لایسنس</string>
+    <string name="novapulse_hero_settings_sub">مدیریت لایسنس، نمایش سرعت لحظه‌ای و تفکیک برنامه‌ها</string>
 
 </resources>

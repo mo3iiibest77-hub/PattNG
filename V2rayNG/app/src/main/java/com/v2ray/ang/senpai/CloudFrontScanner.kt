@@ -131,14 +131,24 @@ object CloudFrontScanner {
         scanJob = SupervisorJob()
         scanScope = CoroutineScope(scanJob + Dispatchers.IO)
         scanScope.launch {
-            CoreNativeManager.initCoreEnv(context.applicationContext)
-            ProviderRangeStore.syncCloudFrontFromAws(context)
-            val allCidrs = ProviderRangeStore.getEntries(context, CdnType.CLOUDFRONT)
+            val appCtx = context.applicationContext
+            if (!PhysicalNetworkGuard.hasPhysicalInternet(appCtx)) {
+                LogUtil.w(TAG, "CloudFront discovery skipped: no physical non-VPN internet available")
+                withContext(Dispatchers.Main) { onFinish(emptyList()) }
+                return@launch
+            }
+            com.v2ray.ang.handler.SettingsManager.initAssets(appCtx, appCtx.assets)
+            CoreNativeManager.initCoreEnv(appCtx)
+            val watcher = PhysicalNetworkGuard.Watcher(appCtx) { cancel() }
+            watcher.start()
+            ProviderRangeStore.syncCloudFrontFromAws(appCtx)
+            val allCidrs = ProviderRangeStore.getEntries(appCtx, CdnType.CLOUDFRONT)
                 .map { it.cidr }
                 .distinct()
-                .ifEmpty { ProviderRangeStore.loadBundledCloudFrontCidrs(context) }
+                .ifEmpty { ProviderRangeStore.loadBundledCloudFrontCidrs(appCtx) }
 
             val baseProfile = MmkvManager.decodeServerConfig(guid) ?: run {
+                watcher.stop()
                 withContext(Dispatchers.Main) { onFinish(emptyList()) }
                 return@launch
             }
@@ -197,6 +207,8 @@ object CloudFrontScanner {
                     ProviderRangeStore.appendDiscoveredCidrs(context, CdnType.CLOUDFRONT, partial)
                 }
                 withContext(Dispatchers.Main) { onFinish(partial) }
+            } finally {
+                watcher.stop()
             }
         }
     }

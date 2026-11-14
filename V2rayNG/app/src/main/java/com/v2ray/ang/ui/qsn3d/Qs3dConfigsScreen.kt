@@ -37,11 +37,13 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.v2ray.ang.R
+import com.v2ray.ang.senpai.CdnType
 
 /**
  * Simplified, commercial-grade NovaPulse Server List:
@@ -69,6 +71,17 @@ fun Qs3dConfigsScreen(
         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
+        // 0. Illustrated Cloud Nodes Banner
+        item {
+            SectionHeroBanner(
+                imageRes = R.drawable.np_hero_configs_nodes,
+                title = stringResource(R.string.novapulse_hero_configs_title),
+                subtitle = stringResource(R.string.novapulse_hero_configs_sub),
+                accentColor = QsColors.ElectricCyan,
+                height = 116.dp,
+            )
+        }
+
         // 1. Search Bar & Action Strip (Test All, Sort by Ping, Bulk Select)
         item {
             Glass3dCard(glowColor = QsColors.ElectricCyan.copy(alpha = 0.30f)) {
@@ -157,21 +170,31 @@ fun Qs3dConfigsScreen(
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
-                        if (isConnectedHere) {
-                            Spacer(Modifier.height(2.dp))
-                            Text(
-                                text = stringResource(R.string.novapulse_connected_badge),
-                                color = QsColors.ConnectedEmerald,
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.SemiBold
-                            )
-                        } else if (isSelected) {
-                            Spacer(Modifier.height(2.dp))
-                            Text(
-                                text = stringResource(R.string.novapulse_selected_badge),
-                                color = QsColors.ElectricCyan,
-                                fontSize = 11.sp
-                            )
+                        if (isConnectedHere || isSelected || row.cdnHint != CdnType.UNKNOWN) {
+                            Spacer(Modifier.height(4.dp))
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                if (isConnectedHere) {
+                                    Text(
+                                        text = stringResource(R.string.novapulse_connected_badge),
+                                        color = QsColors.ConnectedEmerald,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                } else if (isSelected) {
+                                    Text(
+                                        text = stringResource(R.string.novapulse_selected_badge),
+                                        color = QsColors.ElectricCyan,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                }
+                                if (row.cdnHint != CdnType.UNKNOWN) {
+                                    CdnProviderBadge(cdnType = row.cdnHint)
+                                }
+                            }
                         }
                     }
                     Spacer(Modifier.width(8.dp))
@@ -196,7 +219,8 @@ fun Qs3dConfigsScreen(
                             text = delayLabel,
                             color = delayColor,
                             fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold
+                            fontWeight = FontWeight.Bold,
+                            style = TextStyle(fontFeatureSettings = "tnum")
                         )
                     }
                 }

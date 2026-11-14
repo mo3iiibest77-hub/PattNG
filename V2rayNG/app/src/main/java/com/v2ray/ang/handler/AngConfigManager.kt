@@ -247,11 +247,10 @@ object AngConfigManager {
             }
             val subItem = MmkvManager.decodeSubscription(subid)
 
-            // Parse all configs first (no I/O during parsing)
+            // Parse all configs first in exact subscription order (first-to-last; Cloudflare priority preserved)
             val configs = mutableListOf<ProfileItem>()
             servers.lines()
                 .distinct()
-                .reversed()
                 .forEach {
                     val config = parseConfig(it, subid, subItem)
                     if (config != null && com.v2ray.ang.senpai.AutoConfigFilter.isCdnScanEligible(config)) {
@@ -426,11 +425,12 @@ object AngConfigManager {
                 config.policyGroupSubscriptionId = subid
             }
 
-            // QSN: inject finalMask for xHTTP+TLS and WS+TLS
-            if (config.finalMask.isNullOrBlank() &&
-                (config.network == "xhttp" || config.network == "ws") &&
-                config.security == "tls") {
-                config.finalMask = """{"tcp":[{"settings":{"delays":["0"],"lengths":["5","94","1"],"maxSplit":"0","packets":"tlshello"},"type":"fragment"},{"settings":{"delays":["1"],"lengths":["109","1"],"maxSplit":"355","packets":"1-1"},"type":"fragment"}]}"""
+            // Apply hardcoded Cloudflare TCB finalMask + CipherSuites immediately upon config import,
+            // leaving Amazon / CloudFront configurations untouched.
+            if (com.v2ray.ang.senpai.AutoConfigFilter.isCdnScanEligible(config) &&
+                com.v2ray.ang.senpai.CloudflareConfigEnricher.isCloudflareConfig(config)
+            ) {
+                com.v2ray.ang.senpai.CloudflareConfigEnricher.applyCloudflareHardeningIfEligible(config)
             }
             return config
         } catch (e: Exception) {

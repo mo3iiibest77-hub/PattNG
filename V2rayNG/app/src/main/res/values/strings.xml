@@ -724,5 +724,15 @@
     <string name="novapulse_optimize_consent_body">Allow NovaPulse to automatically test for a faster CDN IP every 2 hours and smoothly reconnect your VPN when a faster IP is found?</string>
     <string name="novapulse_consent_allow">Allow Auto-Optimize</string>
     <string name="novapulse_consent_decline">Not Now</string>
+    <string name="novapulse_bg_opt_scanning_fmt">Connected • Optimizing CDN IP in background (%1$d/%2$d)</string>
+    <string name="novapulse_bg_opt_switching">Switching to faster IP &amp; verifying…</string>
+    <string name="novapulse_hero_connect_title">Smart Tunnel Core</string>
+    <string name="novapulse_hero_connect_sub">Instant TLS-SNI entry with automated physical-network optimization</string>
+    <string name="novapulse_hero_configs_title">Cloud Nodes</string>
+    <string name="novapulse_hero_configs_sub">Cloudflare-prioritized servers sorted in live panel order</string>
+    <string name="novapulse_hero_ranges_title">Clean IP Radar</string>
+    <string name="novapulse_hero_ranges_sub">Operator-tailored CIDR pools discovered over direct physical network</string>
+    <string name="novapulse_hero_settings_title">Core &amp; License Control</string>
+    <string name="novapulse_hero_settings_sub">Per-app routing, live telemetry, and subscription security</string>
 
 </resources>

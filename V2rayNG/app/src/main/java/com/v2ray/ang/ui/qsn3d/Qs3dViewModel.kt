@@ -132,6 +132,9 @@ class Qs3dViewModel(
     }
 
     init {
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            dataSource.initAssets()
+        }
         collectServiceEvents()
         collectCoordinatorFlows()
         refreshAllData(fetchRemoteQuota = true)
@@ -172,13 +175,17 @@ class Qs3dViewModel(
                         }
                     }
 
-                    MainServiceEvent.StateStartFailure -> {
+                    is MainServiceEvent.StateStartFailure -> {
+                        SmartConnectCoordinator.notifyVpnStartFailed(event.errorMessage)
+                        val baseFail = getApplication<Application>().getString(R.string.novapulse_vpn_start_failed)
+                        val detail = event.errorMessage?.trim().orEmpty()
+                        val fullMsg = if (detail.isNotEmpty() && detail != baseFail) "$baseFail: $detail" else baseFail
                         _uiState.update {
                             it.copy(
                                 coreRunning = false,
                                 liveDownloadBps = 0L,
                                 liveUploadBps = 0L,
-                                toastMessage = getApplication<Application>().getString(R.string.novapulse_vpn_start_failed)
+                                toastMessage = fullMsg
                             )
                         }
                     }
@@ -232,7 +239,15 @@ class Qs3dViewModel(
         }
         viewModelScope.launch {
             PostConnectDiscoveryRunner.state.collect { discState ->
-                _uiState.update { it.copy(discoveryState = discState) }
+                _uiState.update {
+                    it.copy(
+                        discoveryState = discState,
+                        isManualDiscoveryRunning = if (discState.running) it.isManualDiscoveryRunning else false,
+                        manualDiscoveryDone = if (discState.running) discState.currentDone else it.manualDiscoveryDone,
+                        manualDiscoveryTotal = if (discState.running) discState.currentTotal else it.manualDiscoveryTotal,
+                        manualDiscoveryCidr = if (discState.running) discState.currentCidr else it.manualDiscoveryCidr,
+                    )
+                }
                 if (!discState.running) {
                     loadRanges(_uiState.value.activeRangeProvider)
                 }
@@ -316,14 +331,20 @@ class Qs3dViewModel(
                 .ifEmpty { ProviderRangeStore.loadBundledCloudFrontCidrs(ctx) }
 
             val subCounts = mutableMapOf<String, Int>()
+            val pairs = mutableListOf<Pair<String, ProfileItem?>>()
             val rawConfigs = allGuids.mapNotNull { guid ->
                 val profile = MmkvManager.decodeServerConfig(guid) ?: return@mapNotNull null
                 if (!AutoConfigFilter.isCdnScanEligible(profile)) return@mapNotNull null
+                pairs.add(guid to profile)
                 OriginDomainStore.rememberIfDomain(guid, profile)
                 subCounts[profile.subscriptionId] = (subCounts[profile.subscriptionId] ?: 0) + 1
                 val aff = MmkvManager.decodeServerAffiliationInfo(guid)
                 val originDomain = OriginDomainStore.getOriginDomain(guid, profile) ?: profile.server.orEmpty()
-                val cdnHint = CdnPingClassifier.inferQuickCdnType(profile, originDomain, frontCidrs, cfCidrs)
+                val cdnHint = if (com.v2ray.ang.senpai.CloudflareConfigEnricher.isAmazonOrCloudFront(profile, originDomain, frontCidrs)) {
+                    CdnType.CLOUDFRONT
+                } else {
+                    CdnPingClassifier.inferQuickCdnType(profile, originDomain, frontCidrs, cfCidrs)
+                }
                 ConfigUiRow(
                     guid = guid,
                     subscriptionId = profile.subscriptionId,
@@ -334,8 +355,21 @@ class Qs3dViewModel(
                 )
             }
 
-            // Pin selected / active connected server cleanly at the top
-            val sortedPinned = rawConfigs.sortedByDescending { it.guid == selected }
+            val savedKey = LicenseBackendClient.getSavedLicenseKey()
+            val licensed = savedKey.isNotEmpty() || rawConfigs.isNotEmpty() || subs.isNotEmpty()
+
+            val effectiveSelected = AutoConfigFilter.pickBestConnectGuid(
+                selectedGuid = selected,
+                profiles = pairs,
+                honorExplicitSelection = SmartConnectCoordinator.isExplicitServerSelected(),
+            )?.also { chosen ->
+                if (chosen != selected) {
+                    MmkvManager.setSelectServer(chosen)
+                }
+            }
+
+            // Pin active selected server cleanly at the top while preserving original order
+            val sortedPinned = rawConfigs.sortedByDescending { it.guid == effectiveSelected }
 
             val subRows = subs.map { cache ->
                 SubscriptionUiRow(
@@ -346,15 +380,6 @@ class Qs3dViewModel(
                     configCount = subCounts[cache.guid] ?: 0,
                     quota = com.v2ray.ang.senpai.SubscriptionQuotaStore.get(cache.guid),
                 )
-            }
-
-            val savedKey = LicenseBackendClient.getSavedLicenseKey()
-            val licensed = savedKey.isNotEmpty() || rawConfigs.isNotEmpty() || subRows.isNotEmpty()
-
-            val effectiveSelected = if (selected != null && rawConfigs.any { it.guid == selected }) {
-                selected
-            } else {
-                rawConfigs.firstOrNull()?.guid?.also { MmkvManager.setSelectServer(it) }
             }
 
             _uiState.update {
@@ -436,6 +461,7 @@ class Qs3dViewModel(
     // ---------- Config Management (Privacy-Hardened) ----------
 
     fun selectConfig(guid: String) {
+        SmartConnectCoordinator.markExplicitServerSelected(true)
         MmkvManager.setSelectServer(guid)
         _uiState.update { st ->
             val repinned = st.configs.sortedByDescending { it.guid == guid }
@@ -598,7 +624,6 @@ class Qs3dViewModel(
             providers = listOf(provider),
             force = true
         )
-        _uiState.update { it.copy(isManualDiscoveryRunning = false) }
     }
 
     fun stopManualDiscovery() {

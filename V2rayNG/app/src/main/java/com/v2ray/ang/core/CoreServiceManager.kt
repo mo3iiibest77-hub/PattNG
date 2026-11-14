@@ -115,6 +115,8 @@ object CoreServiceManager {
         ContextCompat.registerReceiver(service, mMsgReceive, mFilter, Utils.receiverFlags())
 
         currentVpnInterface = vpnInterface
+        SettingsManager.initAssets(service, service.assets)
+        CoreNativeManager.initCoreEnv(service)
         launchCore(service, vpnInterface)
         startNetworkMonitor(service)
     }

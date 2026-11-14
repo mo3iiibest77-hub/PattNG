@@ -91,6 +91,22 @@ fun Qs3dConnectScreen(
         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
+        // 0. Illustrated Identity Hero Banner
+        item {
+            SectionHeroBanner(
+                imageRes = R.drawable.np_hero_connect_globe,
+                title = stringResource(R.string.novapulse_hero_connect_title),
+                subtitle = stringResource(R.string.novapulse_hero_connect_sub),
+                accentColor = when (orbMode) {
+                    OrbVisualMode.CONNECTED -> QsColors.ConnectedEmerald
+                    OrbVisualMode.PROCESSING -> QsColors.PlasmaViolet
+                    OrbVisualMode.ERROR -> QsColors.DangerCrimson
+                    OrbVisualMode.DISCONNECTED -> QsColors.ElectricCyan
+                },
+                height = 108.dp,
+            )
+        }
+
         // 1. Hero 3D Orbital Sphere Card + Fresh IP Optimization Action
         item {
             Glass3dCard(
@@ -137,6 +153,39 @@ fun Qs3dConnectScreen(
                             if (flow.busy) onCancelFlow() else onConnectOrDisconnect()
                         }
                     )
+                }
+
+                if (state.coreRunning && flow.busy &&
+                    (flow.step == SmartStep.ScanningBestIp || flow.step == SmartStep.ApplyingBestIp || flow.step == SmartStep.StartingVpn)
+                ) {
+                    Spacer(Modifier.height(8.dp))
+                    val isScanning = flow.step == SmartStep.ScanningBestIp && flow.scanTotal > 0
+                    val optLabel = if (isScanning) {
+                        stringResource(R.string.novapulse_bg_opt_scanning_fmt, flow.scanDone, flow.scanTotal)
+                    } else {
+                        stringResource(R.string.novapulse_bg_opt_switching)
+                    }
+                    Text(
+                        text = optLabel,
+                        color = QsColors.ElectricCyan,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    if (isScanning) {
+                        LinearProgressIndicator(
+                            progress = { (flow.scanDone.toFloat() / flow.scanTotal.toFloat()).coerceIn(0f, 1f) },
+                            modifier = Modifier.fillMaxWidth().height(4.dp).clip(RoundedCornerShape(4.dp)),
+                            color = QsColors.ElectricCyan,
+                            trackColor = QsColors.GlassStroke,
+                        )
+                    } else {
+                        LinearProgressIndicator(
+                            modifier = Modifier.fillMaxWidth().height(4.dp).clip(RoundedCornerShape(4.dp)),
+                            color = QsColors.PlasmaViolet,
+                            trackColor = QsColors.GlassStroke,
+                        )
+                    }
                 }
 
                 if (flow.step == SmartStep.Error && !flow.errorMessage.isNullOrBlank()) {

@@ -119,7 +119,7 @@ class QuietStormActivity : BaseComponentActivity() {
         SmartConnectCoordinator.runPrepareAndScan(
             context = this,
             rawActivationInput = null,
-            explicitGuid = explicitGuid ?: state.selectedGuid,
+            explicitGuid = explicitGuid,
             forcedCdn = state.forcedCdn,
             forceRescan = forceRescan,
             onReadyToStartVpn = { guid, _ ->

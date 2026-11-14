@@ -6,7 +6,7 @@ sealed class MainServiceEvent {
     data object StateRunning : MainServiceEvent()
     data object StateNotRunning : MainServiceEvent()
     data object StateStartSuccess : MainServiceEvent()
-    data object StateStartFailure : MainServiceEvent()
+    data class StateStartFailure(val errorMessage: String? = null) : MainServiceEvent()
     data object StateStopSuccess : MainServiceEvent()
     data class MeasureDelayResult(val result: ConnectionTestResult) : MainServiceEvent()
     data class LiveSpeedUpdate(

@@ -1,6 +1,7 @@
 package com.v2ray.ang.senpai
 
 import android.content.Context
+import com.v2ray.ang.core.LauncherManager
 import com.v2ray.ang.dto.entities.ProfileItem
 import com.v2ray.ang.dto.entities.SubscriptionCache
 import com.v2ray.ang.dto.entities.SubscriptionItem
@@ -9,15 +10,18 @@ import com.v2ray.ang.handler.MmkvManager
 import com.v2ray.ang.util.LogUtil
 import com.v2ray.ang.util.Utils
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.coroutines.resume
 
 enum class SmartStep {
@@ -64,8 +68,23 @@ object SmartConnectCoordinator {
 
     private const val TAG = "SmartConnectCoordinator"
     private const val PREF_SCANNED_GUID_PREFIX = "np_scanned_edge_ready_"
+    private const val PREF_USER_EXPLICIT_SERVER = "np_user_explicit_server_choice"
+    private const val RECONNECT_CONFIRM_TIMEOUT_MS = 14_000L
+
+    private data class PendingOptimization(
+        val guid: String,
+        val forcedCdn: CdnType?,
+        val previousServer: String?,
+        val initialSni: String?,
+    )
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var activeJob: Job? = null
+    private var postConnectOptimizeJob: Job? = null
+    @Volatile
+    private var pendingOptimization: PendingOptimization? = null
+    @Volatile
+    private var reconnectDeferred: CompletableDeferred<Boolean>? = null
 
     private val _state = MutableStateFlow(SmartFlowState())
     val state: StateFlow<SmartFlowState> = _state.asStateFlow()
@@ -76,9 +95,16 @@ object SmartConnectCoordinator {
         return flag && CloudflareSeedRanges.ipv4ToLong(srv) != null
     }
 
-    private fun markEdgeIpScanned(guid: String) {
-        MmkvManager.encodeSettings(PREF_SCANNED_GUID_PREFIX + guid, true)
+    private fun markEdgeIpScanned(guid: String, ready: Boolean = true) {
+        MmkvManager.encodeSettings(PREF_SCANNED_GUID_PREFIX + guid, ready)
     }
+
+    fun markExplicitServerSelected(explicit: Boolean) {
+        MmkvManager.encodeSettings(PREF_USER_EXPLICIT_SERVER, explicit)
+    }
+
+    fun isExplicitServerSelected(): Boolean =
+        MmkvManager.decodeSettingsBool(PREF_USER_EXPLICIT_SERVER, false)
 
     fun redeemInputOnly(
         context: Context,
@@ -138,11 +164,13 @@ object SmartConnectCoordinator {
                     refreshAllSubscriptionsWithQuota(appContext)
                 }
 
-                // 2) Pick eligible CDN config
+                // 2) Apply Cloudflare-only hardening & pick Cloudflare-first CDN config
+                CloudflareConfigEnricher.enrichAllStoredCloudflareProfiles(appContext)
                 _state.value = _state.value.copy(busy = true, step = SmartStep.SelectingProfile, errorMessage = null)
-                val targetGuid = resolveTargetGuid(explicitGuid)
+                val honorExplicit = !explicitGuid.isNullOrBlank() || isExplicitServerSelected()
+                val targetGuid = resolveTargetGuid(explicitGuid, honorExplicit)
                     ?: error("هیچ کانفیگ CDN معتبری یافت نشد.")
-                val profile = MmkvManager.decodeServerConfig(targetGuid)
+                var profile = MmkvManager.decodeServerConfig(targetGuid)
                     ?: error("اطلاعات کانفیگ انتخاب‌شده یافت نشد.")
                 OriginDomainStore.rememberIfDomain(targetGuid, profile)
                 MmkvManager.setSelectServer(targetGuid)
@@ -153,11 +181,17 @@ object SmartConnectCoordinator {
                     .ifEmpty { ProviderRangeStore.loadBundledCloudFrontCidrs(appContext) }
                 val originDomain = OriginDomainStore.getOriginDomain(targetGuid, profile).orEmpty()
 
+                val quickCdn = forcedCdn?.takeIf { it != CdnType.UNKNOWN }
+                    ?: if (CloudflareConfigEnricher.isAmazonOrCloudFront(profile, originDomain, frontCidrs)) {
+                        CdnType.CLOUDFRONT
+                    } else {
+                        CdnPingClassifier.inferQuickCdnType(profile, originDomain, frontCidrs, cfCidrs)
+                            .let { if (it == CdnType.UNKNOWN) CdnType.CLOUDFLARE else it }
+                    }
+
                 // Fast path: already scanned earlier and user simply toggled reconnect
                 if (!forceRescan && hasSavedEdgeIp(targetGuid, profile)) {
-                    val quickCdn = forcedCdn?.takeIf { it != CdnType.UNKNOWN }
-                        ?: CdnPingClassifier.inferQuickCdnType(profile, originDomain, frontCidrs, cfCidrs)
-                            .let { if (it == CdnType.UNKNOWN) CdnType.CLOUDFLARE else it }
+                    pendingOptimization = null
                     val fastState = _state.value.copy(
                         busy = false,
                         step = SmartStep.StartingVpn,
@@ -174,70 +208,43 @@ object SmartConnectCoordinator {
                     return@launch
                 }
 
-                // 3) Detect Cloudflare vs CloudFront via DoH + domain ping + CIDR match
-                _state.value = _state.value.copy(
-                    step = SmartStep.DetectingCdnViaPing,
+                // Fast first-connect path: put TLS Certification SNI into server address, keep
+                // TLS SNI/Host/XHTTP and CF-only CipherSuites/FinalMask intact, connect VPN
+                // IMMEDIATELY, and run 30-IP scan + controlled reconnect right after VPN comes up.
+                val previousServerBeforeSni = profile.server
+                val preparedProfile = CloudflareConfigEnricher.prepareFirstConnectWithTlsSni(
+                    guid = targetGuid,
+                    profile = profile,
+                    cloudFrontCidrs = frontCidrs,
+                ) ?: error("کانفیگ انتخاب‌شده فاقد آدرس یا TLS SNI معتبر است.")
+                profile = preparedProfile
+
+                pendingOptimization = PendingOptimization(
+                    guid = targetGuid,
+                    forcedCdn = forcedCdn,
+                    previousServer = previousServerBeforeSni,
+                    initialSni = profile.sni,
+                )
+
+                val instantFirstState = _state.value.copy(
+                    busy = false,
+                    step = SmartStep.StartingVpn,
                     activeGuid = targetGuid,
                     activeRemarks = profile.remarks,
-                    originDomain = originDomain,
-                )
-                val detection = if (forcedCdn != null && forcedCdn != CdnType.UNKNOWN) {
-                    CdnDetectionResult(
-                        domain = originDomain,
-                        resolvedIp = null,
-                        pingRttMs = null,
-                        cdnType = forcedCdn,
-                        reason = "انتخاب دستی CDN"
-                    )
-                } else {
-                    CdnPingClassifier.detectForProfile(appContext, targetGuid, profile)
-                }
-                val resolvedCdn = if (detection.cdnType == CdnType.UNKNOWN) {
-                    CdnType.CLOUDFLARE
-                } else {
-                    detection.cdnType
-                }
-
-                _state.value = _state.value.copy(
-                    step = SmartStep.ScanningBestIp,
-                    detectedCdn = resolvedCdn,
-                    domainPingIp = detection.resolvedIp,
-                    domainPingRttMs = detection.pingRttMs,
+                    originDomain = originDomain.ifBlank { profile.sni.orEmpty() },
+                    detectedCdn = quickCdn,
+                    bestIp = profile.server,
                     scanDone = 0,
                     scanTotal = 30,
                 )
-
-                // 4) Run matching untouched September 8 scanner core
-                val best = if (resolvedCdn == CdnType.CLOUDFRONT) {
-                    awaitCloudFrontScan(appContext, targetGuid)
-                } else {
-                    awaitCloudflareScan(appContext, targetGuid)
-                }
-
-                if (best != null) {
-                    _state.value = _state.value.copy(
-                        step = SmartStep.ApplyingBestIp,
-                        bestIp = best.ip,
-                        bestUploadKBps = best.uploadKBps,
-                        bestLatencyMs = best.latencyMs,
-                    )
-                    CloudflareScanner.applyBestIp(targetGuid, best.ip)
-                    markEdgeIpScanned(targetGuid)
-                } else if (profile.server.isNullOrBlank()) {
-                    error("آی‌پی مناسب در اسکن یافت نشد")
-                }
-
-                val readyState = _state.value.copy(
-                    busy = false,
-                    step = SmartStep.StartingVpn,
-                )
-                _state.value = readyState
+                _state.value = instantFirstState
                 kotlinx.coroutines.withContext(Dispatchers.Main) {
-                    onReadyToStartVpn(targetGuid, readyState)
+                    onReadyToStartVpn(targetGuid, instantFirstState)
                 }
             } catch (_: CancellationException) {
                 _state.value = _state.value.copy(busy = false, step = SmartStep.Idle)
             } catch (e: Exception) {
+                pendingOptimization = null
                 LogUtil.e(TAG, "Smart flow failed: ${e.message}", e)
                 _state.value = _state.value.copy(
                     busy = false,
@@ -248,13 +255,43 @@ object SmartConnectCoordinator {
         }
     }
 
+    fun notifyVpnStartFailed(errorMessage: String?) {
+        val waiting = reconnectDeferred
+        if (waiting != null && waiting.isActive) {
+            waiting.complete(false)
+            return
+        }
+        pendingOptimization = null
+        postConnectOptimizeJob?.cancel()
+        _state.value = _state.value.copy(
+            busy = false,
+            step = SmartStep.Error,
+            errorMessage = errorMessage?.takeIf { it.isNotBlank() } ?: "خطا در شروع سرویس VPN",
+        )
+    }
+
     /**
-     * Called when VPN daemon confirms active running state. Schedules 2h periodic optimization
-     * (if consented) and triggers one-time-forever Discovery ONLY for CDN providers actually
-     * present in user configs.
+     * Called when VPN daemon confirms active running state.
+     * - Completes any controlled-reconnect verification handshake cleanly.
+     * - If initial connect used TLS SNI without a saved scanned IP, runs background 30-IP scan
+     *   over physical internet while the VPN remains active, then applies best IP + controlled
+     *   reconnect with automatic rollback if verification fails.
+     * - Schedules 2h periodic optimization and triggers one-time-forever Discovery afterward.
      */
     fun notifyVpnConnected(context: Context, guid: String?) {
         val targetGuid = guid ?: MmkvManager.getSelectServer()
+        val waitingReconnect = reconnectDeferred
+        if (waitingReconnect != null && waitingReconnect.isActive) {
+            waitingReconnect.complete(true)
+            _state.value = _state.value.copy(
+                busy = false,
+                step = SmartStep.Connected,
+                activeGuid = targetGuid,
+                errorMessage = null,
+            )
+            return
+        }
+
         val prev = _state.value
         _state.value = prev.copy(
             busy = false,
@@ -263,26 +300,118 @@ object SmartConnectCoordinator {
             errorMessage = null,
         )
         SmartOptimizeWorker.schedule(context)
-        if (!targetGuid.isNullOrBlank()) {
-            scope.launch {
-                val appCtx = context.applicationContext
-                val profile = MmkvManager.decodeServerConfig(targetGuid) ?: return@launch
-                if (!AutoConfigFilter.isCdnScanEligible(profile)) return@launch
+        if (targetGuid.isNullOrBlank()) return
+
+        val pending = pendingOptimization?.takeIf { it.guid == targetGuid }
+        if (pending != null) {
+            pendingOptimization = null
+        } else if (postConnectOptimizeJob?.isActive == true) {
+            return
+        }
+
+        val appCtx = context.applicationContext
+        postConnectOptimizeJob = scope.launch {
+            try {
+                val initialProfile = MmkvManager.decodeServerConfig(targetGuid) ?: return@launch
+                if (!AutoConfigFilter.isCdnScanEligible(initialProfile)) return@launch
 
                 val cfCidrs = CdnPingClassifier.getAllCloudflareCidrs(appCtx)
                 val frontCidrs = ProviderRangeStore.getEntries(appCtx, CdnType.CLOUDFRONT)
                     .map { it.cidr }
                     .ifEmpty { ProviderRangeStore.loadBundledCloudFrontCidrs(appCtx) }
 
+                var resolvedCdn = prev.detectedCdn.takeIf { it != CdnType.UNKNOWN }
+                    ?: CdnPingClassifier.inferQuickCdnType(
+                        initialProfile,
+                        OriginDomainStore.getOriginDomain(targetGuid, initialProfile) ?: initialProfile.server.orEmpty(),
+                        frontCidrs,
+                        cfCidrs
+                    ).let { if (it == CdnType.UNKNOWN) CdnType.CLOUDFLARE else it }
+
+                if (pending != null) {
+                    delay(1200L)
+                    if (!PhysicalNetworkGuard.hasPhysicalInternet(appCtx)) {
+                        LogUtil.w(TAG, "Post-connect scan deferred: no physical internet available")
+                    } else {
+                        val detection = if (pending.forcedCdn != null && pending.forcedCdn != CdnType.UNKNOWN) {
+                            CdnDetectionResult(
+                                domain = OriginDomainStore.getOriginDomain(targetGuid, initialProfile).orEmpty(),
+                                resolvedIp = null,
+                                pingRttMs = null,
+                                cdnType = pending.forcedCdn,
+                                reason = "انتخاب دستی CDN"
+                            )
+                        } else {
+                            CdnPingClassifier.detectForProfile(appCtx, targetGuid, initialProfile)
+                        }
+                        resolvedCdn = if (detection.cdnType == CdnType.UNKNOWN) CdnType.CLOUDFLARE else detection.cdnType
+
+                        _state.value = _state.value.copy(
+                            step = SmartStep.ScanningBestIp,
+                            detectedCdn = resolvedCdn,
+                            domainPingIp = detection.resolvedIp,
+                            domainPingRttMs = detection.pingRttMs,
+                            scanDone = 0,
+                            scanTotal = 30,
+                        )
+
+                        val best = if (resolvedCdn == CdnType.CLOUDFRONT) {
+                            awaitCloudFrontScan(appCtx, targetGuid)
+                        } else {
+                            awaitCloudflareScan(appCtx, targetGuid)
+                        }
+
+                        if (best != null && best.isSuccess) {
+                            val currentBeforeSwitch = MmkvManager.decodeServerConfig(targetGuid)?.server
+                                ?: pending.initialSni
+                                ?: pending.previousServer
+
+                            _state.value = _state.value.copy(
+                                step = SmartStep.ApplyingBestIp,
+                                bestIp = best.ip,
+                                bestUploadKBps = best.uploadKBps,
+                                bestLatencyMs = best.latencyMs,
+                            )
+                            CloudflareScanner.applyBestIp(targetGuid, best.ip)
+                            markEdgeIpScanned(targetGuid, true)
+
+                            val waitConfirm = CompletableDeferred<Boolean>()
+                            reconnectDeferred = waitConfirm
+                            LauncherManager.restartService(appCtx)
+                            val confirmed = withTimeoutOrNull(RECONNECT_CONFIRM_TIMEOUT_MS) {
+                                waitConfirm.await()
+                            } ?: false
+                            if (reconnectDeferred === waitConfirm) {
+                                reconnectDeferred = null
+                            }
+
+                            if (!confirmed) {
+                                LogUtil.w(TAG, "Controlled reconnect to ${best.ip} failed/timed out; rolling back to $currentBeforeSwitch")
+                                if (!currentBeforeSwitch.isNullOrBlank()) {
+                                    CloudflareScanner.applyBestIp(targetGuid, currentBeforeSwitch)
+                                }
+                                markEdgeIpScanned(targetGuid, false)
+                                LauncherManager.restartService(appCtx)
+                            }
+                        }
+
+                        _state.value = _state.value.copy(
+                            busy = false,
+                            step = SmartStep.Connected,
+                        )
+                    }
+                }
+
+                val refreshedProfile = MmkvManager.decodeServerConfig(targetGuid) ?: initialProfile
                 val allProviders = MmkvManager.decodeAllServerList().mapNotNull { g ->
                     val p = MmkvManager.decodeServerConfig(g) ?: return@mapNotNull null
                     val dom = OriginDomainStore.getOriginDomain(g, p) ?: p.server.orEmpty()
                     CdnPingClassifier.inferQuickCdnType(p, dom, frontCidrs, cfCidrs)
                 }
-                val activeProvider = prev.detectedCdn.takeIf { it != CdnType.UNKNOWN }
+                val activeProvider = resolvedCdn.takeIf { it != CdnType.UNKNOWN }
                     ?: CdnPingClassifier.inferQuickCdnType(
-                        profile,
-                        OriginDomainStore.getOriginDomain(targetGuid, profile) ?: profile.server.orEmpty(),
+                        refreshedProfile,
+                        OriginDomainStore.getOriginDomain(targetGuid, refreshedProfile) ?: refreshedProfile.server.orEmpty(),
                         frontCidrs,
                         cfCidrs
                     ).let { if (it == CdnType.UNKNOWN) CdnType.CLOUDFLARE else it }
@@ -293,12 +422,22 @@ object SmartConnectCoordinator {
                     activeProvider = activeProvider,
                     subscriptionProviders = allProviders,
                 )
+            } catch (_: CancellationException) {
+                reconnectDeferred?.cancel()
+                reconnectDeferred = null
+            } catch (e: Exception) {
+                LogUtil.e(TAG, "Post-connect optimization failed: ${e.message}", e)
+                _state.value = _state.value.copy(busy = false, step = SmartStep.Connected)
             }
         }
     }
 
     fun cancelActiveFlow() {
         activeJob?.cancel()
+        postConnectOptimizeJob?.cancel()
+        pendingOptimization = null
+        reconnectDeferred?.takeIf { it.isActive }?.complete(false)
+        reconnectDeferred = null
         CloudflareScanner.cancel()
         CloudFrontScanner.cancel()
         _state.value = _state.value.copy(busy = false, step = SmartStep.Idle)
@@ -318,7 +457,18 @@ object SmartConnectCoordinator {
             )
         }
         purgeNonCdnConfigs()
+        CloudflareConfigEnricher.enrichAllStoredCloudflareProfiles(context.applicationContext)
+        ensureCloudflarePrioritySelection()
         return totalConfigs
+    }
+
+    private fun ensureCloudflarePrioritySelection() {
+        val selected = MmkvManager.getSelectServer()
+        val honorExplicit = isExplicitServerSelected()
+        val bestGuid = resolveTargetGuid(selected, honorExplicitSelection = honorExplicit)
+        if (!bestGuid.isNullOrBlank() && bestGuid != selected) {
+            MmkvManager.setSelectServer(bestGuid)
+        }
     }
 
     private fun purgeNonCdnConfigs() {
@@ -367,6 +517,11 @@ object SmartConnectCoordinator {
                 val cache = SubscriptionCache(subId, item)
                 val updateRes = AngConfigManager.updateConfigViaSub(cache)
                 purgeNonCdnConfigs()
+                CloudflareConfigEnricher.enrichAllStoredCloudflareProfiles(context.applicationContext)
+                if (!isStatusRefresh) {
+                    markExplicitServerSelected(false)
+                }
+                ensureCloudflarePrioritySelection()
                 if (redeemed.quota != null) {
                     SubscriptionQuotaStore.save(subId, redeemed.quota)
                 } else {
@@ -381,11 +536,14 @@ object SmartConnectCoordinator {
         }
     }
 
-    private fun resolveTargetGuid(explicitGuid: String?): String? {
+    private fun resolveTargetGuid(
+        explicitGuid: String?,
+        honorExplicitSelection: Boolean = false,
+    ): String? {
         val selected = explicitGuid ?: MmkvManager.getSelectServer()
         val allGuids = MmkvManager.decodeAllServerList()
         val pairs: List<Pair<String, ProfileItem?>> = allGuids.map { it to MmkvManager.decodeServerConfig(it) }
-        return AutoConfigFilter.pickBestConnectGuid(selected, pairs)
+        return AutoConfigFilter.pickBestConnectGuid(selected, pairs, honorExplicitSelection = honorExplicitSelection)
     }
 
     private suspend fun awaitCloudflareScan(
