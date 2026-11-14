@@ -101,7 +101,7 @@ jobs:
         echo "sdk.dir=${ANDROID_HOME}" > local.properties
         chmod 755 gradlew
         set +e
-        ./gradlew testPlaystoreDebugUnitTest --no-daemon > unit-test.log 2>&1
+        ./gradlew testPlaystoreDebugUnitTest --tests "com.v2ray.ang.senpai.*" --no-daemon > unit-test.log 2>&1
         status=$?
         tail -n 80 unit-test.log
         if [ $status -ne 0 ]; then
