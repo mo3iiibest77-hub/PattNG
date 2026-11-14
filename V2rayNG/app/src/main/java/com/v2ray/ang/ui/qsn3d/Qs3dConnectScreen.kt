@@ -177,13 +177,13 @@ fun Qs3dConnectScreen(
                             progress = { (flow.scanDone.toFloat() / flow.scanTotal.toFloat()).coerceIn(0f, 1f) },
                             modifier = Modifier.fillMaxWidth().height(4.dp).clip(RoundedCornerShape(4.dp)),
                             color = QsColors.ElectricCyan,
-                            trackColor = QsColors.GlassStroke,
+                            trackColor = QsColors.GlassBorderTop,
                         )
                     } else {
                         LinearProgressIndicator(
                             modifier = Modifier.fillMaxWidth().height(4.dp).clip(RoundedCornerShape(4.dp)),
                             color = QsColors.PlasmaViolet,
-                            trackColor = QsColors.GlassStroke,
+                            trackColor = QsColors.GlassBorderTop,
                         )
                     }
                 }

@@ -243,8 +243,8 @@ class Qs3dViewModel(
                     it.copy(
                         discoveryState = discState,
                         isManualDiscoveryRunning = if (discState.running) it.isManualDiscoveryRunning else false,
-                        manualDiscoveryDone = if (discState.running) discState.currentDone else it.manualDiscoveryDone,
-                        manualDiscoveryTotal = if (discState.running) discState.currentTotal else it.manualDiscoveryTotal,
+                        manualDiscoveryDone = if (discState.running) discState.done else it.manualDiscoveryDone,
+                        manualDiscoveryTotal = if (discState.running) discState.total else it.manualDiscoveryTotal,
                         manualDiscoveryCidr = if (discState.running) discState.currentCidr else it.manualDiscoveryCidr,
                     )
                 }
@@ -360,8 +360,9 @@ class Qs3dViewModel(
 
             val effectiveSelected = AutoConfigFilter.pickBestConnectGuid(
                 selectedGuid = selected,
-                profiles = pairs,
+                profilesInOrder = pairs,
                 honorExplicitSelection = SmartConnectCoordinator.isExplicitServerSelected(),
+                cloudFrontCidrs = frontCidrs,
             )?.also { chosen ->
                 if (chosen != selected) {
                     MmkvManager.setSelectServer(chosen)
