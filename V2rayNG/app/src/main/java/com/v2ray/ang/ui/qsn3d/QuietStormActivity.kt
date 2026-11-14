@@ -217,14 +217,14 @@ class QuietStormActivity : BaseComponentActivity() {
                                         state = state,
                                         onConnectOrDisconnect = {
                                             if (state.coreRunning) {
-                                                LauncherManager.stopCoreService(this@QuietStormActivity)
+                                                LauncherManager.stopService(this@QuietStormActivity)
                                             } else {
                                                 startSmartConnect(forceRescan = false)
                                             }
                                         },
                                         onRescanIpAndConnect = {
                                             if (state.coreRunning) {
-                                                LauncherManager.stopCoreService(this@QuietStormActivity)
+                                                LauncherManager.stopService(this@QuietStormActivity)
                                             }
                                             startSmartConnect(forceRescan = true)
                                         },

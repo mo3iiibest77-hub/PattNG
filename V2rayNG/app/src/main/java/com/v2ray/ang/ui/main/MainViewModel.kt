@@ -133,6 +133,8 @@ class MainViewModel(
             is MainServiceEvent.MeasureConfigFinish -> {
                 onTestsFinished()
             }
+
+            is MainServiceEvent.LiveSpeedUpdate -> Unit
         }
     }
 

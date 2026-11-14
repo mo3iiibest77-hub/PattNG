@@ -250,9 +250,11 @@ fun Qs3dSettingsScreen(
             } else {
                 items(apps, key = { it.packageName }) { app ->
                     AppListItem(
-                        appInfo = app,
-                        isSelected = selectedApps.contains(app.packageName),
-                        onToggle = { onToggleApp(app.packageName) }
+                        appName = app.appName,
+                        packageName = app.packageName,
+                        icon = null,
+                        checked = selectedApps.contains(app.packageName),
+                        onCheckedChange = { onToggleApp(app.packageName) }
                     )
                 }
             }
