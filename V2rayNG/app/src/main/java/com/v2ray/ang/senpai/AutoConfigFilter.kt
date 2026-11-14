@@ -4,12 +4,14 @@ import com.v2ray.ang.dto.entities.ProfileItem
 import com.v2ray.ang.enums.EConfigType
 
 /**
- * Identifies CDN-tunneled proxy configs suitable for Cloudflare/CloudFront IP optimization
- * while leaving all other configs untouched and viewable in manual mode.
+ * Enforces NovaPulse CDN-only configuration policy:
+ * Allows ONLY VLESS + TLS + supported CDN transports (`xhttp`, `ws`, `splithttp`) over HTTPS/CDN
+ * ports, filtering out Reality, plaintext, Shadowsocks, VMess, Trojan, and non-CDN configs.
  */
 object AutoConfigFilter {
 
     private val SUPPORTED_TRANSPORTS = setOf("xhttp", "ws", "splithttp")
+    private val SUPPORTED_HTTPS_PORTS = setOf(443, 2053, 2083, 2087, 2096, 8443)
 
     fun isCdnScanEligible(profile: ProfileItem?): Boolean {
         if (profile == null) return false
@@ -17,14 +19,16 @@ object AutoConfigFilter {
         val security = profile.security?.trim()?.lowercase()
         if (security != "tls") return false
         val network = profile.network?.trim()?.lowercase() ?: return false
-        return network in SUPPORTED_TRANSPORTS
+        if (network !in SUPPORTED_TRANSPORTS) return false
+        val port = profile.serverPort?.trim()?.toIntOrNull() ?: return false
+        return port in SUPPORTED_HTTPS_PORTS
     }
 
     /**
      * Picks the preferred configuration GUID from candidate profiles:
      * 1) Currently selected GUID if it is CDN-eligible
      * 2) First CDN-eligible GUID in the active subscription/list
-     * 3) Currently selected GUID (fallback for non-CDN configs)
+     * 3) Currently selected GUID (fallback if still present)
      * 4) First available GUID
      */
     fun pickBestConnectGuid(

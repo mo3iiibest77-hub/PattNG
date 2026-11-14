@@ -237,7 +237,7 @@ object MmkvManager {
             allServers.addAll(decodeServerList(guid))
         }
 
-        return allServers
+        return allServers.filterNot { it.startsWith("cfscanner-") }.toMutableList()
     }
 
 
@@ -258,6 +258,24 @@ object MmkvManager {
         return JsonUtil.fromJsonSafe(json, ProfileItem::class.java)
     }
 
+
+    /**
+     * Stores an ephemeral speedtest/discovery profile in [profileFullStorage] ONLY, without touching
+     * any subscription server list or [KEY_SELECTED_SERVER]. Prevents temporary `cfscanner-*` items
+     * from ever appearing in the user's configuration list.
+     */
+    fun encodeTemporarySpeedtestConfig(tempGuid: String, config: ProfileItem) {
+        if (tempGuid.isBlank()) return
+        profileFullStorage.encode(tempGuid, JsonUtil.toJson(config))
+    }
+
+    /**
+     * Removes an ephemeral speedtest profile from [profileFullStorage] ONLY.
+     */
+    fun removeTemporarySpeedtestConfig(tempGuid: String) {
+        if (tempGuid.isBlank()) return
+        profileFullStorage.remove(tempGuid)
+    }
 
     /**
      * Encodes the server configuration.

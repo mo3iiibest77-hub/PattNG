@@ -61,6 +61,10 @@ class MainRepository(
                     .serializable<ConnectionTestResult>("content")
                     ?.let { MainServiceEvent.MeasureDelayResult(it) }
 
+                AppConfig.MSG_LIVE_SPEED_UPDATE -> parseLiveSpeedEvent(
+                    safeIntent.getStringExtra("content").orEmpty()
+                )
+
                 AppConfig.MSG_MEASURE_CONFIG_SUCCESS -> MainServiceEvent.MeasureConfigSuccess
                 AppConfig.MSG_MEASURE_CONFIG_NOTIFY -> MainServiceEvent.MeasureConfigNotify(
                     safeIntent.getStringExtra("content").orEmpty()
@@ -224,5 +228,16 @@ class MainRepository(
 
     override fun initAssets() {
         SettingsManager.initAssets(app, app.assets)
+    }
+
+    private fun parseLiveSpeedEvent(raw: String): MainServiceEvent.LiveSpeedUpdate? {
+        val parts = raw.split('|')
+        if (parts.size < 4) return null
+        return MainServiceEvent.LiveSpeedUpdate(
+            proxyUplinkBps = parts[0].toLongOrNull() ?: 0L,
+            proxyDownlinkBps = parts[1].toLongOrNull() ?: 0L,
+            directUplinkBps = parts[2].toLongOrNull() ?: 0L,
+            directDownlinkBps = parts[3].toLongOrNull() ?: 0L,
+        )
     }
 }

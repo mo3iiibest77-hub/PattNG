@@ -10,24 +10,29 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import java.util.concurrent.TimeUnit
 
 /**
- * Input classification for the onboarding / quick-connect field: either a direct
- * subscription URL or a future panel license key.
+ * Input classification for the onboarding / license activation field.
+ * Direct subscription links and raw config URIs are strictly rejected; ONLY license codes
+ * issued by the panel backend are accepted.
  */
 sealed class ActivationInput {
-    data class DirectSubscriptionUrl(val url: String) : ActivationInput()
     data class LicenseKey(val key: String) : ActivationInput()
+    data class RejectedUrl(val reason: String) : ActivationInput()
     data object Invalid : ActivationInput()
 }
 
 data class LicenseRedeemResponse(
     @SerializedName("subscription_url") val subscriptionUrl: String? = null,
     @SerializedName("url") val url: String? = null,
+    @SerializedName("license_key") val licenseKey: String? = null,
     @SerializedName("remarks") val remarks: String? = null,
     @SerializedName("plan_name") val planName: String? = null,
     @SerializedName("upload_bytes") val uploadBytes: Long = 0L,
     @SerializedName("download_bytes") val downloadBytes: Long = 0L,
     @SerializedName("total_bytes") val totalBytes: Long = 0L,
     @SerializedName("expire_at") val expireAtSeconds: Long = 0L,
+    @SerializedName("created_at") val createdAtSeconds: Long = 0L,
+    @SerializedName("max_devices") val maxDevices: Int = 1,
+    @SerializedName("used_devices") val usedDevices: Int = 1,
     @SerializedName("status") val status: String? = null,
     @SerializedName("message") val message: String? = null,
 ) {
@@ -40,6 +45,7 @@ sealed class LicenseResolutionResult {
     data class ReadySubscription(
         val subscriptionUrl: String,
         val remarks: String,
+        val licenseKey: String,
         val quota: SubscriptionQuotaInfo? = null,
     ) : LicenseResolutionResult()
 
@@ -48,17 +54,24 @@ sealed class LicenseResolutionResult {
 }
 
 /**
- * Backend-agnostic client supporting both direct subscription URLs right now and HTTP JSON
- * license redemption once a panel base URL (e.g. Trixie panel) is configured.
+ * Client for NovaPulse License API (`/api/v1/license/redeem` & `/api/v1/license/status`).
+ * Enforces license-only activation bound to [deviceId]; direct URLs are never accepted.
  */
 object LicenseBackendClient {
 
+    const val DEFAULT_BACKEND_BASE_URL = "https://nova.dontbedumb.ir"
     private const val PREF_BACKEND_BASE_URL = "qsn_backend_base_url"
     private const val PREF_SAVED_LICENSE_KEY = "qsn_saved_license_key"
+    private val FORBIDDEN_URL_SCHEMES = listOf(
+        "https://", "http://", "vless://", "vmess://", "trojan://", "ss://",
+        "hy2://", "hysteria2://", "hysteria://", "tuic://", "socks://", "wireguard://"
+    )
     private val gson = Gson()
 
-    fun getBackendBaseUrl(): String =
-        MmkvManager.decodeSettingsString(PREF_BACKEND_BASE_URL, "").orEmpty().trim()
+    fun getBackendBaseUrl(): String {
+        val saved = MmkvManager.decodeSettingsString(PREF_BACKEND_BASE_URL, "").orEmpty().trim().trimEnd('/')
+        return saved.ifEmpty { DEFAULT_BACKEND_BASE_URL }
+    }
 
     fun setBackendBaseUrl(url: String) {
         MmkvManager.encodeSettings(PREF_BACKEND_BASE_URL, url.trim().trimEnd('/'))
@@ -68,18 +81,24 @@ object LicenseBackendClient {
         MmkvManager.decodeSettingsString(PREF_SAVED_LICENSE_KEY, "").orEmpty().trim()
 
     fun setSavedLicenseKey(key: String) {
-        MmkvManager.encodeSettings(PREF_SAVED_LICENSE_KEY, key.trim())
+        MmkvManager.encodeSettings(PREF_SAVED_LICENSE_KEY, key.trim().uppercase())
+    }
+
+    fun clearSavedLicenseKey() {
+        MmkvManager.encodeSettings(PREF_SAVED_LICENSE_KEY, "")
     }
 
     fun classifyInput(raw: String): ActivationInput {
         val trimmed = raw.trim()
         if (trimmed.isEmpty()) return ActivationInput.Invalid
         val lower = trimmed.lowercase()
-        if (lower.startsWith("https://") || lower.startsWith("http://")) {
-            return ActivationInput.DirectSubscriptionUrl(trimmed)
+        if (FORBIDDEN_URL_SCHEMES.any { lower.startsWith(it) } || "://" in lower) {
+            return ActivationInput.RejectedUrl(
+                "ورود لینک اشتراک مجاز نیست؛ لطفاً فقط کد لایسنس وارد کنید."
+            )
         }
         if (trimmed.length >= 4 && !trimmed.any { it.isWhitespace() }) {
-            return ActivationInput.LicenseKey(trimmed)
+            return ActivationInput.LicenseKey(trimmed.uppercase())
         }
         return ActivationInput.Invalid
     }
@@ -89,25 +108,52 @@ object LicenseBackendClient {
 
     fun redeem(
         rawInput: String,
-        remarksHint: String = "QuietStorm",
+        remarksHint: String = "NovaPulse",
         deviceId: String = "",
         backendBaseUrlOverride: String? = null,
         client: OkHttpClient = defaultClient(),
+    ): LicenseResolutionResult = callLicenseEndpoint(
+        endpointSuffix = "/api/v1/license/redeem",
+        rawInput = rawInput,
+        remarksHint = remarksHint,
+        deviceId = deviceId,
+        backendBaseUrlOverride = backendBaseUrlOverride,
+        client = client,
+    )
+
+    fun refreshStatus(
+        licenseKey: String,
+        deviceId: String,
+        remarksHint: String = "NovaPulse",
+        backendBaseUrlOverride: String? = null,
+        client: OkHttpClient = defaultClient(),
+    ): LicenseResolutionResult = callLicenseEndpoint(
+        endpointSuffix = "/api/v1/license/status",
+        rawInput = licenseKey,
+        remarksHint = remarksHint,
+        deviceId = deviceId,
+        backendBaseUrlOverride = backendBaseUrlOverride,
+        client = client,
+    )
+
+    private fun callLicenseEndpoint(
+        endpointSuffix: String,
+        rawInput: String,
+        remarksHint: String,
+        deviceId: String,
+        backendBaseUrlOverride: String?,
+        client: OkHttpClient,
     ): LicenseResolutionResult {
         return when (val input = classifyInput(rawInput)) {
             is ActivationInput.Invalid ->
-                LicenseResolutionResult.Failure("Empty or invalid input")
+                LicenseResolutionResult.Failure("کد لایسنس وارد شده نامعتبر است.")
 
-            is ActivationInput.DirectSubscriptionUrl ->
-                LicenseResolutionResult.ReadySubscription(
-                    subscriptionUrl = input.url,
-                    remarks = remarksHint.ifBlank { "QuietStorm" }
-                )
+            is ActivationInput.RejectedUrl ->
+                LicenseResolutionResult.Failure(input.reason)
 
             is ActivationInput.LicenseKey -> {
                 val baseUrl = (backendBaseUrlOverride ?: getBackendBaseUrl()).trim().trimEnd('/')
                 if (baseUrl.isEmpty()) {
-                    setSavedLicenseKey(input.key)
                     return LicenseResolutionResult.BackendEndpointRequired(input.key)
                 }
                 val payload = gson.toJson(
@@ -117,7 +163,7 @@ object LicenseBackendClient {
                     )
                 )
                 val req = Request.Builder()
-                    .url("$baseUrl/api/v1/license/redeem")
+                    .url("$baseUrl$endpointSuffix")
                     .post(payload.toRequestBody("application/json; charset=utf-8".toMediaType()))
                     .build()
                 runCatching {
@@ -126,34 +172,40 @@ object LicenseBackendClient {
                         if (!resp.isSuccessful) {
                             val parsedErr = parseRedeemJson(body)?.message
                             return LicenseResolutionResult.Failure(
-                                parsedErr ?: "Backend HTTP ${resp.code}"
+                                parsedErr ?: "خطای سرور لایسنس (${resp.code})"
                             )
                         }
                         val parsed = parseRedeemJson(body)
-                            ?: return LicenseResolutionResult.Failure("Invalid backend JSON")
+                            ?: return LicenseResolutionResult.Failure("پاسخ سرور لایسنس نامعتبر بود")
                         val subUrl = parsed.resolvedSubscriptionUrl()
                             ?: return LicenseResolutionResult.Failure(
-                                parsed.message ?: "Backend did not return subscription_url"
+                                parsed.message ?: "سرویس لایسنس آدرس اشتراک برنگرداند"
                             )
-                        setSavedLicenseKey(input.key)
-                        val quota = if (parsed.totalBytes > 0L || parsed.expireAtSeconds > 0L) {
-                            SubscriptionQuotaInfo(
-                                uploadBytes = parsed.uploadBytes,
-                                downloadBytes = parsed.downloadBytes,
-                                totalBytes = parsed.totalBytes,
-                                expireAtSeconds = parsed.expireAtSeconds,
-                            )
-                        } else null
+                        val resolvedKey = parsed.licenseKey?.takeIf { it.isNotBlank() } ?: input.key
+                        setSavedLicenseKey(resolvedKey)
+                        val resolvedName = parsed.planName?.takeIf { it.isNotBlank() }
+                            ?: parsed.remarks?.takeIf { it.isNotBlank() }
+                            ?: remarksHint
+                        val quota = SubscriptionQuotaInfo(
+                            uploadBytes = parsed.uploadBytes,
+                            downloadBytes = parsed.downloadBytes,
+                            totalBytes = parsed.totalBytes,
+                            expireAtSeconds = parsed.expireAtSeconds,
+                            planName = resolvedName,
+                            createdAtSeconds = parsed.createdAtSeconds,
+                            maxDevices = parsed.maxDevices.coerceAtLeast(1),
+                            usedDevices = parsed.usedDevices.coerceAtLeast(0),
+                            licenseStatus = parsed.status ?: "active",
+                        )
                         LicenseResolutionResult.ReadySubscription(
                             subscriptionUrl = subUrl,
-                            remarks = parsed.planName?.takeIf { it.isNotBlank() }
-                                ?: parsed.remarks?.takeIf { it.isNotBlank() }
-                                ?: remarksHint,
+                            remarks = resolvedName,
+                            licenseKey = resolvedKey,
                             quota = quota,
                         )
                     }
                 }.getOrElse { err ->
-                    LicenseResolutionResult.Failure(err.message ?: "License request failed")
+                    LicenseResolutionResult.Failure(err.message ?: "خطا در ارتباط با سرور لایسنس")
                 }
             }
         }

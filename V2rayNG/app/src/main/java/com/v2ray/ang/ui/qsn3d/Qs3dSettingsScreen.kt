@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
@@ -20,6 +21,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -53,15 +55,15 @@ fun Qs3dSettingsScreen(
     onSearchApps: (String) -> Unit,
     onAutoDiscoveryChange: (Boolean) -> Unit,
     onAuto2hOptimizeChange: (Boolean) -> Unit,
-    onSaveBackendUrl: (String) -> Unit,
+    onSpeedDisplayChange: (Boolean) -> Unit,
     onLanguageSelected: (String) -> Unit,
-    onOpenClassicMode: () -> Unit,
-    onOpenCoreSettings: () -> Unit,
-    onOpenRouting: () -> Unit,
-    onOpenLegacyCfScan: () -> Unit,
-    onOpenLogcat: () -> Unit,
+    onRedeemNewLicense: (String) -> Unit,
+    onScanLicenseQr: () -> Unit,
+    onOpenMySubscription: () -> Unit,
+    onLogoutLicense: () -> Unit,
 ) {
-    var backendDraft by remember(state.backendBaseUrl) { mutableStateOf(state.backendBaseUrl) }
+    var showChangeLicenseDialog by remember { mutableStateOf(false) }
+    var licenseDraft by remember { mutableStateOf("") }
     var appQuery by remember { mutableStateOf("") }
 
     LazyColumn(
@@ -69,7 +71,67 @@ fun Qs3dSettingsScreen(
         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        // 1. Smart Automation Controls
+        // 1. Account & License Management Card
+        item {
+            Glass3dCard(glowColor = QsColors.PlasmaViolet.copy(alpha = 0.40f)) {
+                Text(
+                    text = stringResource(R.string.novapulse_license_section_title),
+                    color = QsColors.TextPrimary,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 15.sp
+                )
+                Spacer(Modifier.height(6.dp))
+                val maskedKey = state.savedLicenseKey.takeIf { it.isNotEmpty() } ?: "—"
+                Text(
+                    text = "${stringResource(R.string.novapulse_current_license_label)}: $maskedKey",
+                    color = QsColors.AuroraMint,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Spacer(Modifier.height(10.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Button(
+                        onClick = onOpenMySubscription,
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Text(stringResource(R.string.novapulse_my_subscription_title))
+                    }
+                    OutlinedButton(
+                        onClick = { showChangeLicenseDialog = true },
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Text(stringResource(R.string.novapulse_change_license_btn))
+                    }
+                }
+                Spacer(Modifier.height(6.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = onScanLicenseQr,
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Text(stringResource(R.string.novapulse_license_scan_qr))
+                    }
+                    OutlinedButton(
+                        onClick = onLogoutLicense,
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Text(stringResource(R.string.novapulse_logout_license_btn), color = QsColors.DangerCrimson)
+                    }
+                }
+            }
+        }
+
+        // 2. Smart Engine & Speed HUD Preferences
         item {
             Glass3dCard(glowColor = QsColors.ElectricCyan.copy(alpha = 0.35f)) {
                 Text(
@@ -80,64 +142,37 @@ fun Qs3dSettingsScreen(
                 )
                 Spacer(Modifier.height(10.dp))
 
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
-                        Text(
-                            text = stringResource(R.string.qsn3d_auto_discovery_label),
-                            color = QsColors.TextPrimary,
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                        Text(
-                            text = stringResource(R.string.qsn3d_auto_discovery_desc),
-                            color = QsColors.TextSecondary,
-                            fontSize = 11.sp
-                        )
-                    }
-                    Switch(
-                        checked = state.autoPostConnectDiscovery,
-                        onCheckedChange = onAutoDiscoveryChange
-                    )
-                }
+                ToggleSettingRow(
+                    title = stringResource(R.string.novapulse_speed_display_label),
+                    description = stringResource(R.string.novapulse_speed_display_desc),
+                    checked = state.speedDisplayEnabled,
+                    onCheckedChange = onSpeedDisplayChange
+                )
 
-                Spacer(Modifier.height(10.dp))
-                HorizontalDivider(color = Color.White.copy(alpha = 0.08f))
-                Spacer(Modifier.height(10.dp))
+                HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp), color = Color.White.copy(alpha = 0.08f))
 
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
-                        Text(
-                            text = stringResource(R.string.qsn3d_auto_2h_optimize_label),
-                            color = QsColors.TextPrimary,
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                        Text(
-                            text = stringResource(R.string.qsn3d_auto_2h_optimize_desc),
-                            color = QsColors.TextSecondary,
-                            fontSize = 11.sp
-                        )
-                    }
-                    Switch(
-                        checked = state.auto2hOptimize,
-                        onCheckedChange = onAuto2hOptimizeChange
-                    )
-                }
+                ToggleSettingRow(
+                    title = stringResource(R.string.qsn3d_auto_discovery_label),
+                    description = stringResource(R.string.qsn3d_auto_discovery_desc),
+                    checked = state.autoPostConnectDiscovery,
+                    onCheckedChange = onAutoDiscoveryChange
+                )
 
-                if (state.lastOptimizeAt > 0L && state.lastOptimizeIp.isNotBlank()) {
-                    Spacer(Modifier.height(8.dp))
-                    val dt = DateFormat.getTimeInstance(DateFormat.SHORT, Locale.getDefault())
+                HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp), color = Color.White.copy(alpha = 0.08f))
+
+                ToggleSettingRow(
+                    title = stringResource(R.string.qsn3d_auto_2h_optimize_label),
+                    description = stringResource(R.string.qsn3d_auto_2h_optimize_desc),
+                    checked = state.auto2hOptimize,
+                    onCheckedChange = onAuto2hOptimizeChange
+                )
+
+                if (state.lastOptimizeAt > 0L) {
+                    val dt = DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT, Locale.getDefault())
                         .format(Date(state.lastOptimizeAt))
+                    Spacer(Modifier.height(6.dp))
                     Text(
-                        text = "${stringResource(R.string.qsn3d_last_optimize)}: ${state.lastOptimizeIp} (${state.lastOptimizeUploadKBps} KB/s @ $dt)",
+                        text = stringResource(R.string.novapulse_last_opt_fmt, dt, "${state.lastOptimizeUploadKBps} KB/s"),
                         color = QsColors.AuroraMint,
                         fontSize = 11.sp
                     )
@@ -145,9 +180,9 @@ fun Qs3dSettingsScreen(
             }
         }
 
-        // 2. Language & Backend Panel API Config
+        // 3. Language Selector Card (Persian Default)
         item {
-            Glass3dCard(glowColor = QsColors.PlasmaViolet.copy(alpha = 0.30f)) {
+            Glass3dCard(glowColor = QsColors.AuroraMint.copy(alpha = 0.25f)) {
                 Text(
                     text = stringResource(R.string.qsn3d_language_title),
                     color = QsColors.TextPrimary,
@@ -157,134 +192,43 @@ fun Qs3dSettingsScreen(
                 Spacer(Modifier.height(8.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     FilterChip(
-                        selected = state.currentLanguageCode == "auto",
-                        onClick = { onLanguageSelected("auto") },
-                        label = { Text(stringResource(R.string.qsn3d_lang_auto)) }
+                        selected = state.currentLanguageCode == "fa" || state.currentLanguageCode == "auto",
+                        onClick = { onLanguageSelected("fa") },
+                        label = { Text("فارسی (پیش‌فرض)") }
                     )
                     FilterChip(
                         selected = state.currentLanguageCode == "en",
                         onClick = { onLanguageSelected("en") },
                         label = { Text("English") }
                     )
-                    FilterChip(
-                        selected = state.currentLanguageCode == "fa",
-                        onClick = { onLanguageSelected("fa") },
-                        label = { Text("فارسی") }
-                    )
-                }
-
-                Spacer(Modifier.height(12.dp))
-                HorizontalDivider(color = Color.White.copy(alpha = 0.08f))
-                Spacer(Modifier.height(12.dp))
-
-                Text(
-                    text = stringResource(R.string.qsn3d_backend_url_title),
-                    color = QsColors.TextPrimary,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 14.sp
-                )
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    text = stringResource(R.string.qsn3d_backend_url_desc),
-                    color = QsColors.TextSecondary,
-                    fontSize = 11.sp
-                )
-                Spacer(Modifier.height(8.dp))
-                OutlinedTextField(
-                    value = backendDraft,
-                    onValueChange = { backendDraft = it },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true,
-                    placeholder = { Text("https://panel.example.com", fontSize = 12.sp) }
-                )
-                Spacer(Modifier.height(8.dp))
-                Button(
-                    onClick = { onSaveBackendUrl(backendDraft) },
-                    shape = RoundedCornerShape(12.dp)
-                ) {
-                    Text(stringResource(R.string.qsn3d_save))
                 }
             }
         }
 
-        // 3. Classic & Advanced System Activities
+        // 4. Per-App Split Tunneling Card
         item {
-            Glass3dCard(glowColor = QsColors.SolarGold.copy(alpha = 0.25f)) {
+            Glass3dCard(glowColor = QsColors.CloudFrontSky.copy(alpha = 0.28f)) {
                 Text(
-                    text = stringResource(R.string.qsn3d_advanced_tools_title),
+                    text = stringResource(R.string.title_pref_per_app_proxy),
                     color = QsColors.TextPrimary,
                     fontWeight = FontWeight.Bold,
-                    fontSize = 14.sp
+                    fontSize = 15.sp
                 )
                 Spacer(Modifier.height(8.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    OutlinedButton(onClick = onOpenClassicMode, modifier = Modifier.weight(1f)) {
-                        Text(stringResource(R.string.qsn3d_classic_ui), fontSize = 11.sp)
-                    }
-                    OutlinedButton(onClick = onOpenCoreSettings, modifier = Modifier.weight(1f)) {
-                        Text(stringResource(R.string.qsn3d_core_settings), fontSize = 11.sp)
-                    }
-                }
-                Spacer(Modifier.height(6.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    OutlinedButton(onClick = onOpenRouting, modifier = Modifier.weight(1f)) {
-                        Text(stringResource(R.string.qsn3d_routing_rules), fontSize = 11.sp)
-                    }
-                    OutlinedButton(onClick = onOpenLegacyCfScan, modifier = Modifier.weight(1f)) {
-                        Text(stringResource(R.string.qsn3d_matrix_scanner), fontSize = 11.sp)
-                    }
-                    OutlinedButton(onClick = onOpenLogcat, modifier = Modifier.weight(1f)) {
-                        Text("Logcat", fontSize = 11.sp)
-                    }
-                }
-            }
-        }
-
-        // 4. Per-App Proxy Header
-        item {
-            Glass3dCard(glowColor = QsColors.AuroraMint.copy(alpha = 0.28f)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = stringResource(R.string.qsn3d_per_app_title),
-                            color = QsColors.TextPrimary,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 15.sp
-                        )
-                        Text(
-                            text = stringResource(R.string.qsn3d_per_app_desc),
-                            color = QsColors.TextSecondary,
-                            fontSize = 11.sp
-                        )
-                    }
-                    Switch(checked = perAppEnabled, onCheckedChange = onPerAppEnabledChange)
-                }
-
+                ToggleSettingRow(
+                    title = stringResource(R.string.per_app_proxy_settings_enable),
+                    description = null,
+                    checked = perAppEnabled,
+                    onCheckedChange = onPerAppEnabledChange
+                )
                 if (perAppEnabled) {
-                    Spacer(Modifier.height(10.dp))
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = stringResource(R.string.qsn3d_per_app_bypass),
-                            color = QsColors.TextPrimary,
-                            fontSize = 13.sp,
-                            modifier = Modifier.weight(1f)
-                        )
-                        Switch(checked = perAppBypass, onCheckedChange = onPerAppBypassChange)
-                    }
+                    Spacer(Modifier.height(6.dp))
+                    ToggleSettingRow(
+                        title = stringResource(R.string.switch_bypass_apps_mode),
+                        description = null,
+                        checked = perAppBypass,
+                        onCheckedChange = onPerAppBypassChange
+                    )
                     Spacer(Modifier.height(8.dp))
                     OutlinedTextField(
                         value = appQuery,
@@ -292,35 +236,87 @@ fun Qs3dSettingsScreen(
                             appQuery = it
                             onSearchApps(it)
                         },
-                        modifier = Modifier.fillMaxWidth(),
+                        placeholder = { Text(stringResource(R.string.qsn3d_search_apps_hint)) },
                         singleLine = true,
-                        placeholder = { Text(stringResource(R.string.qsn3d_search_apps), fontSize = 12.sp) }
+                        modifier = Modifier.fillMaxWidth()
                     )
                 }
             }
         }
 
         if (perAppEnabled) {
-            if (appsLoading && apps.isEmpty()) {
-                item {
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(16.dp),
-                        horizontalArrangement = Arrangement.Center
-                    ) {
-                        CircularProgressIndicator(color = QsColors.ElectricCyan)
-                    }
-                }
+            if (appsLoading) {
+                item { CircularProgressIndicator() }
             } else {
                 items(apps, key = { it.packageName }) { app ->
                     AppListItem(
-                        appName = app.appName,
-                        packageName = app.packageName,
-                        icon = null,
-                        checked = app.packageName in selectedApps,
-                        onCheckedChange = { onToggleApp(app.packageName) }
+                        appInfo = app,
+                        isSelected = selectedApps.contains(app.packageName),
+                        onToggle = { onToggleApp(app.packageName) }
                     )
                 }
             }
         }
+    }
+
+    if (showChangeLicenseDialog) {
+        AlertDialog(
+            onDismissRequest = { showChangeLicenseDialog = false },
+            title = { Text(stringResource(R.string.novapulse_change_license_btn)) },
+            text = {
+                OutlinedTextField(
+                    value = licenseDraft,
+                    onValueChange = { licenseDraft = it },
+                    placeholder = { Text("NP-XXXX-XXXX-XXXX") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            },
+            confirmButton = {
+                Button(onClick = {
+                    val code = licenseDraft.trim()
+                    showChangeLicenseDialog = false
+                    if (code.isNotEmpty()) onRedeemNewLicense(code)
+                }) {
+                    Text(stringResource(R.string.novapulse_license_activate_btn))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showChangeLicenseDialog = false }) {
+                    Text(stringResource(R.string.action_cancel))
+                }
+            }
+        )
+    }
+}
+
+@Composable
+private fun ToggleSettingRow(
+    title: String,
+    description: String?,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+            Text(
+                text = title,
+                color = QsColors.TextPrimary,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold
+            )
+            if (!description.isNullOrBlank()) {
+                Text(
+                    text = description,
+                    color = QsColors.TextSecondary,
+                    fontSize = 11.sp
+                )
+            }
+        }
+        Switch(checked = checked, onCheckedChange = onCheckedChange)
     }
 }

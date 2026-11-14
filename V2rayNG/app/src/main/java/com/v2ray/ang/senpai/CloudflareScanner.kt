@@ -367,7 +367,7 @@ object CloudflareScanner {
                 if (finalMask.isNullOrBlank()) finalMask = PRODUCTION_FINALMASK
                 if (cipherSuites.isNullOrBlank()) cipherSuites = PRODUCTION_CIPHERSUITES
             }
-            MmkvManager.encodeServerConfig(tempGuid, temp)
+            MmkvManager.encodeTemporarySpeedtestConfig(tempGuid, temp)
             val cfg = CoreConfigManager.getV2rayConfig4Speedtest(context, tempGuid)
             if (!cfg.status) return@withContext CandidateResult(ip, -1L)
             val latency = CoreNativeManager.measureOutboundDelay(cfg.content, TEST_URL)
@@ -387,7 +387,7 @@ object CloudflareScanner {
         } catch (e: Exception) {
             CandidateResult(ip, -1L)
         } finally {
-            try { MmkvManager.removeServer(tempGuid) } catch (_: Exception) {}
+            try { MmkvManager.removeTemporarySpeedtestConfig(tempGuid) } catch (_: Exception) {}
         }
     }
 }

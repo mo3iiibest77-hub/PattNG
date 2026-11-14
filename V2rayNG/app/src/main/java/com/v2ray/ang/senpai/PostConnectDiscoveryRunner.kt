@@ -22,20 +22,26 @@ data class PostConnectDiscoveryState(
     val currentCidr: String = "",
     val cloudFrontFound: Int = 0,
     val cloudflareFound: Int = 0,
-    val completedOnce: Boolean = false,
-)
+    val completedCloudflareOnce: Boolean = false,
+    val completedCloudFrontOnce: Boolean = false,
+) {
+    val completedOnce: Boolean get() = completedCloudflareOnce
+}
 
 /**
- * Executes automatic ISP Discovery over the physical uplink (`com.quietstorm.ng` bypasses the
- * VPN tunnel in [com.v2ray.ang.service.CoreVpnService]) right after the first successful VPN
- * connection:
- * 1) CloudFront Discovery
- * 2) Cloudflare Discovery (preserving all 46 seed CIDRs intact).
+ * Executes one-time-forever ISP Discovery over the physical uplink ONLY for the CDN provider(s)
+ * actually used in the user's configurations.
+ *
+ * Guarantees:
+ * - Never runs CloudFront Discovery when the user only has Cloudflare configs.
+ * - Never re-runs automatic Discovery after completion on reconnects.
+ * - Exposes [isRunning] so 2-hour background optimization never overlaps active Discovery.
  */
 object PostConnectDiscoveryRunner {
 
     private const val TAG = "PostConnectDiscovery"
-    private const val PREF_FIRST_CONNECT_DISCOVERY_DONE = "qsn_first_connect_discovery_done"
+    private const val PREF_CF_DISCOVERY_FOREVER_DONE = "np_cf_discovery_forever_done"
+    private const val PREF_CFR_DISCOVERY_FOREVER_DONE = "np_cfr_discovery_forever_done"
     private const val PREF_AUTO_POST_CONNECT_DISCOVERY = "qsn_auto_post_connect_discovery"
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -44,6 +50,8 @@ object PostConnectDiscoveryRunner {
     private val _state = MutableStateFlow(PostConnectDiscoveryState())
     val state: StateFlow<PostConnectDiscoveryState> = _state.asStateFlow()
 
+    fun isRunning(): Boolean = activeJob?.isActive == true || _state.value.running
+
     fun isAutoDiscoveryEnabled(): Boolean =
         MmkvManager.decodeSettingsBool(PREF_AUTO_POST_CONNECT_DISCOVERY, true)
 
@@ -51,28 +59,76 @@ object PostConnectDiscoveryRunner {
         MmkvManager.encodeSettings(PREF_AUTO_POST_CONNECT_DISCOVERY, enabled)
     }
 
-    fun hasCompletedOnce(): Boolean =
-        MmkvManager.decodeSettingsBool(PREF_FIRST_CONNECT_DISCOVERY_DONE, false)
-
-    fun maybeRunAfterFirstConnect(context: Context, guid: String) {
-        if (!isAutoDiscoveryEnabled()) return
-        if (hasCompletedOnce()) {
-            _state.value = _state.value.copy(completedOnce = true)
-            return
-        }
-        startSequentialDiscovery(context.applicationContext, guid, force = false)
+    fun hasCompletedForever(provider: CdnType): Boolean = when (provider) {
+        CdnType.CLOUDFLARE -> MmkvManager.decodeSettingsBool(PREF_CF_DISCOVERY_FOREVER_DONE, false)
+        CdnType.CLOUDFRONT -> MmkvManager.decodeSettingsBool(PREF_CFR_DISCOVERY_FOREVER_DONE, false)
+        CdnType.UNKNOWN -> true
     }
 
-    fun startSequentialDiscovery(context: Context, guid: String, force: Boolean = true) {
+    fun markCompletedForever(provider: CdnType, done: Boolean = true) {
+        when (provider) {
+            CdnType.CLOUDFLARE -> MmkvManager.encodeSettings(PREF_CF_DISCOVERY_FOREVER_DONE, done)
+            CdnType.CLOUDFRONT -> MmkvManager.encodeSettings(PREF_CFR_DISCOVERY_FOREVER_DONE, done)
+            CdnType.UNKNOWN -> Unit
+        }
+    }
+
+    fun maybeRunAfterFirstConnect(
+        context: Context,
+        guid: String,
+        activeProvider: CdnType,
+        subscriptionProviders: Collection<CdnType> = emptyList(),
+    ) {
+        val cfDone = hasCompletedForever(CdnType.CLOUDFLARE)
+        val cfrDone = hasCompletedForever(CdnType.CLOUDFRONT)
+        _state.value = _state.value.copy(
+            completedCloudflareOnce = cfDone,
+            completedCloudFrontOnce = cfrDone,
+        )
+        if (!isAutoDiscoveryEnabled()) return
+
+        val required = SmartConnectPolicy.determineRequiredDiscoveryProviders(
+            detectedProvidersInSubscription = subscriptionProviders,
+            activeProvider = activeProvider,
+        ).filter { !hasCompletedForever(it) }
+
+        if (required.isEmpty()) return
+
+        startProvidersDiscovery(
+            context = context.applicationContext,
+            guid = guid,
+            providers = required,
+            force = false,
+        )
+    }
+
+    fun startSequentialDiscovery(
+        context: Context,
+        guid: String,
+        providers: List<CdnType> = listOf(CdnType.CLOUDFLARE),
+        force: Boolean = true,
+    ) {
+        startProvidersDiscovery(context, guid, providers, force)
+    }
+
+    private fun startProvidersDiscovery(
+        context: Context,
+        guid: String,
+        providers: List<CdnType>,
+        force: Boolean,
+    ) {
         if (!force && activeJob?.isActive == true) return
+        val targets = providers.filter { it == CdnType.CLOUDFLARE || it == CdnType.CLOUDFRONT }.distinct()
+        if (targets.isEmpty()) return
+
         activeJob?.cancel()
         val appContext = context.applicationContext
         activeJob = scope.launch {
-            LogUtil.i(TAG, "Starting sequential post-connect discovery for guid=$guid")
+            LogUtil.i(TAG, "Starting post-connect discovery for providers=$targets guid=$guid")
             var frontFound = 0
             var cfFound = 0
             try {
-                for (provider in SmartConnectPolicy.postConnectDiscoveryOrder()) {
+                for (provider in targets) {
                     when (provider) {
                         CdnType.CLOUDFRONT -> {
                             _state.value = PostConnectDiscoveryState(
@@ -80,7 +136,8 @@ object PostConnectDiscoveryRunner {
                                 activeProvider = CdnType.CLOUDFRONT,
                                 cloudFrontFound = frontFound,
                                 cloudflareFound = cfFound,
-                                completedOnce = hasCompletedOnce(),
+                                completedCloudflareOnce = hasCompletedForever(CdnType.CLOUDFLARE),
+                                completedCloudFrontOnce = hasCompletedForever(CdnType.CLOUDFRONT),
                             )
                             val found = awaitCloudFrontDiscovery(appContext, guid) { d, t, cidr ->
                                 _state.value = _state.value.copy(
@@ -92,7 +149,8 @@ object PostConnectDiscoveryRunner {
                                 )
                             }
                             frontFound = found.size
-                            LogUtil.i(TAG, "Post-connect CloudFront discovery finished: ${found.size} ranges")
+                            markCompletedForever(CdnType.CLOUDFRONT, true)
+                            LogUtil.i(TAG, "One-time CloudFront discovery finished: ${found.size} ranges")
                         }
 
                         CdnType.CLOUDFLARE -> {
@@ -103,6 +161,7 @@ object PostConnectDiscoveryRunner {
                                 total = 0,
                                 currentCidr = "",
                                 cloudFrontFound = frontFound,
+                                cloudflareFound = cfFound,
                             )
                             val ispName = IspManager.detectIspName(appContext)
                             val found = awaitCloudflareDiscovery(appContext, ispName, guid) { d, t, cidr ->
@@ -115,19 +174,20 @@ object PostConnectDiscoveryRunner {
                                 )
                             }
                             cfFound = found.size
-                            LogUtil.i(TAG, "Post-connect Cloudflare discovery finished: ${found.size} ranges")
+                            markCompletedForever(CdnType.CLOUDFLARE, true)
+                            LogUtil.i(TAG, "One-time Cloudflare discovery finished: ${found.size} ranges")
                         }
 
                         CdnType.UNKNOWN -> Unit
                     }
                 }
-                MmkvManager.encodeSettings(PREF_FIRST_CONNECT_DISCOVERY_DONE, true)
                 _state.value = PostConnectDiscoveryState(
                     running = false,
                     activeProvider = null,
                     cloudFrontFound = frontFound,
                     cloudflareFound = cfFound,
-                    completedOnce = true,
+                    completedCloudflareOnce = hasCompletedForever(CdnType.CLOUDFLARE),
+                    completedCloudFrontOnce = hasCompletedForever(CdnType.CLOUDFRONT),
                 )
             } catch (e: Exception) {
                 LogUtil.e(TAG, "Post-connect discovery interrupted: ${e.message}", e)

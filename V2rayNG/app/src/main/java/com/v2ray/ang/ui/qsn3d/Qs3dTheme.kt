@@ -1,17 +1,21 @@
 package com.v2ray.ang.ui.qsn3d
 
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontFamily
 
 object QsColors {
     val DeepVoid = Color(0xFF040712)
     val MidnightNavy = Color(0xFF0B1124)
-    val NebulaSurface = Color(0xCC111932)
-    val GlassSurface = Color(0xB3151F3E)
-    val GlassBorderTop = Color(0x4D8BB8FF)
-    val GlassBorderBottom = Color(0x1A38BDF8)
+    val NebulaSurface = Color(0xD9111A35)
+    val GlassSurface = Color(0xCC131E3C)
+    val GlassSurfaceElevated = Color(0xE618264A)
+    val GlassBorderTop = Color(0x668BB8FF)
+    val GlassBorderBottom = Color(0x2238BDF8)
 
     val ElectricCyan = Color(0xFF38BDF8)
     val AuroraMint = Color(0xFF2DD4BF)
@@ -22,8 +26,8 @@ object QsColors {
     val ConnectedEmerald = Color(0xFF10B981)
     val DangerCrimson = Color(0xFFEF4444)
 
-    val TextPrimary = Color(0xFFF1F5F9)
-    val TextSecondary = Color(0xFF94A3B8)
+    val TextPrimary = Color(0xFFF8FAFC)
+    val TextSecondary = Color(0xFFA5B4FC).copy(alpha = 0.85f)
     val TextMuted = Color(0xFF64748B)
 }
 
@@ -32,7 +36,7 @@ private val QsDarkScheme = darkColorScheme(
     onPrimary = Color(0xFF031525),
     secondary = QsColors.PlasmaViolet,
     onSecondary = Color.White,
-    tertiary = QsColors.SolarGold,
+    tertiary = QsColors.AuroraMint,
     background = QsColors.DeepVoid,
     onBackground = QsColors.TextPrimary,
     surface = QsColors.MidnightNavy,
@@ -43,10 +47,17 @@ private val QsDarkScheme = darkColorScheme(
     onError = Color.White,
 )
 
+private val QsTypography = Typography(
+    bodyLarge = TextStyle(fontFamily = FontFamily.SansSerif),
+    bodyMedium = TextStyle(fontFamily = FontFamily.SansSerif),
+    titleLarge = TextStyle(fontFamily = FontFamily.SansSerif),
+)
+
 @Composable
 fun Qs3dTheme(content: @Composable () -> Unit) {
     MaterialTheme(
         colorScheme = QsDarkScheme,
+        typography = QsTypography,
         content = content
     )
 }

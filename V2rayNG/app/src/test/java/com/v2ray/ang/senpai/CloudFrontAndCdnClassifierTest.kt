@@ -97,22 +97,32 @@ class CloudFrontAndCdnClassifierTest {
         val vlessXhttp = ProfileItem.create(EConfigType.VLESS).apply {
             network = "xhttp"
             security = "tls"
+            serverPort = "443"
         }
         val vlessWs = ProfileItem.create(EConfigType.VLESS).apply {
             network = "ws"
             security = "tls"
+            serverPort = "2083"
+        }
+        val vlessNonCdnPort = ProfileItem.create(EConfigType.VLESS).apply {
+            network = "ws"
+            security = "tls"
+            serverPort = "12345"
         }
         val vlessReality = ProfileItem.create(EConfigType.VLESS).apply {
             network = "tcp"
             security = "reality"
+            serverPort = "443"
         }
         val trojanWs = ProfileItem.create(EConfigType.TROJAN).apply {
             network = "ws"
             security = "tls"
+            serverPort = "443"
         }
 
         assertTrue(AutoConfigFilter.isCdnScanEligible(vlessXhttp))
         assertTrue(AutoConfigFilter.isCdnScanEligible(vlessWs))
+        assertFalse(AutoConfigFilter.isCdnScanEligible(vlessNonCdnPort))
         assertFalse(AutoConfigFilter.isCdnScanEligible(vlessReality))
         assertFalse(AutoConfigFilter.isCdnScanEligible(trojanWs))
 
@@ -125,7 +135,20 @@ class CloudFrontAndCdnClassifierTest {
 
     @Test
     fun smartConnectPolicy_and_licenseBackendContract() {
-        assertEquals(listOf(CdnType.CLOUDFRONT, CdnType.CLOUDFLARE), SmartConnectPolicy.postConnectDiscoveryOrder())
+        assertEquals(
+            listOf(CdnType.CLOUDFLARE),
+            SmartConnectPolicy.determineRequiredDiscoveryProviders(
+                detectedProvidersInSubscription = listOf(CdnType.CLOUDFLARE),
+                activeProvider = CdnType.CLOUDFLARE
+            )
+        )
+        assertEquals(
+            listOf(CdnType.CLOUDFLARE, CdnType.CLOUDFRONT),
+            SmartConnectPolicy.determineRequiredDiscoveryProviders(
+                detectedProvidersInSubscription = listOf(CdnType.CLOUDFLARE, CdnType.CLOUDFRONT),
+                activeProvider = CdnType.CLOUDFLARE
+            )
+        )
 
         assertFalse(
             SmartConnectPolicy.shouldSwitchEdgeIp(
@@ -142,8 +165,10 @@ class CloudFrontAndCdnClassifierTest {
             )
         )
 
-        assertTrue(LicenseBackendClient.classifyInput("https://sub.example.com/abc") is ActivationInput.DirectSubscriptionUrl)
-        assertTrue(LicenseBackendClient.classifyInput("QSN-TRIAL-9988") is ActivationInput.LicenseKey)
+        assertTrue(LicenseBackendClient.classifyInput("https://sub.example.com/abc") is ActivationInput.RejectedUrl)
+        assertTrue(LicenseBackendClient.classifyInput("http://sub.example.com/abc") is ActivationInput.RejectedUrl)
+        assertTrue(LicenseBackendClient.classifyInput("vless://uuid@host:443") is ActivationInput.RejectedUrl)
+        assertTrue(LicenseBackendClient.classifyInput("NP-TRIAL-9988") is ActivationInput.LicenseKey)
         assertNull(LicenseBackendClient.parseRedeemJson("not json"))
 
         val redeemed = LicenseBackendClient.parseRedeemJson(
@@ -152,5 +177,22 @@ class CloudFrontAndCdnClassifierTest {
         assertEquals("https://panel.test/sub/1", redeemed?.resolvedSubscriptionUrl())
         assertEquals("Pro", redeemed?.planName)
         assertEquals(53687091200L, redeemed?.totalBytes)
+    }
+
+    @Test
+    fun cdnPingClassifier_rejectsSinkholeAndParsesDohJson() {
+        assertFalse(CdnPingClassifier.isPublicRoutableIpv4("10.10.34.35"))
+        assertFalse(CdnPingClassifier.isPublicRoutableIpv4("192.168.1.1"))
+        assertFalse(CdnPingClassifier.isPublicRoutableIpv4("127.0.0.1"))
+        assertTrue(CdnPingClassifier.isPublicRoutableIpv4("104.16.12.5"))
+
+        val dohJson = """
+            {"Status":0,"Answer":[
+              {"name":"example.com","type":5,"data":"cdn.example.com"},
+              {"name":"cdn.example.com","type":1,"data":"10.10.34.35"},
+              {"name":"cdn.example.com","type":1,"data":"104.16.12.5"}
+            ]}
+        """.trimIndent()
+        assertEquals(listOf("104.16.12.5"), CdnPingClassifier.parseDohJsonIpv4s(dohJson))
     }
 }

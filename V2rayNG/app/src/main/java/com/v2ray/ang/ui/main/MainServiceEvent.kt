@@ -9,6 +9,12 @@ sealed class MainServiceEvent {
     data object StateStartFailure : MainServiceEvent()
     data object StateStopSuccess : MainServiceEvent()
     data class MeasureDelayResult(val result: ConnectionTestResult) : MainServiceEvent()
+    data class LiveSpeedUpdate(
+        val proxyUplinkBps: Long,
+        val proxyDownlinkBps: Long,
+        val directUplinkBps: Long,
+        val directDownlinkBps: Long,
+    ) : MainServiceEvent()
     data object MeasureConfigSuccess : MainServiceEvent()
     data class MeasureConfigNotify(val progress: String) : MainServiceEvent()
     data class MeasureConfigFinish(val finishedCount: String?) : MainServiceEvent()

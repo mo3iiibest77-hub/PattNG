@@ -254,7 +254,7 @@ object AngConfigManager {
                 .reversed()
                 .forEach {
                     val config = parseConfig(it, subid, subItem)
-                    if (config != null) {
+                    if (config != null && com.v2ray.ang.senpai.AutoConfigFilter.isCdnScanEligible(config)) {
                         configs.add(config)
                     }
                 }

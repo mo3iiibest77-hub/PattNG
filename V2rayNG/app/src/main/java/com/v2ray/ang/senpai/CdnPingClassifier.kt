@@ -1,23 +1,67 @@
 package com.v2ray.ang.senpai
 
 import android.content.Context
+import com.google.gson.JsonParser
 import com.v2ray.ang.dto.entities.ProfileItem
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.net.Inet4Address
 import java.net.InetAddress
+import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
 import java.util.regex.Pattern
 
 /**
  * Classifies a configuration's origin domain into [CdnType.CLOUDFLARE],
- * [CdnType.CLOUDFRONT], or [CdnType.UNKNOWN] via physical DNS resolution,
- * bounded ICMP ping, and CIDR/header matching.
+ * [CdnType.CLOUDFRONT], or [CdnType.UNKNOWN] using unpoisoned DoH resolution,
+ * physical DNS + bounded ICMP ping fallback, full Cloudflare ASN & AWS CloudFront CIDR matching,
+ * and HTTPS edge header probing.
  */
 object CdnPingClassifier {
 
     private val IPV4_IN_PARENS: Pattern = Pattern.compile("""\((\d{1,3}(?:\.\d{1,3}){3})\)""")
     private val PING_TIME_MS: Pattern = Pattern.compile("""time[=<](\d+(?:\.\d+)?)\s*ms""", Pattern.CASE_INSENSITIVE)
+
+    @Volatile
+    private var cachedDiscoveryCfCidrs: List<String>? = null
+
+    /**
+     * Filters out private, loopback, link-local, CGNAT, and Iranian DNS-poisoning sinkhole IPs
+     * (such as `10.10.34.*`) so poisoned local resolver responses never misclassify domains.
+     */
+    fun isPublicRoutableIpv4(ip: String): Boolean {
+        val v = CloudflareSeedRanges.ipv4ToLong(ip) ?: return false
+        val b0 = ((v ushr 24) and 0xFF).toInt()
+        val b1 = ((v ushr 16) and 0xFF).toInt()
+        return when {
+            b0 == 0 -> false
+            b0 == 10 -> false // RFC1918 + ISP DNS filtering sinkholes (10.10.34.x)
+            b0 == 127 -> false // Loopback
+            b0 == 100 && b1 in 64..127 -> false // CGNAT
+            b0 == 169 && b1 == 254 -> false // Link-local
+            b0 == 172 && b1 in 16..31 -> false // RFC1918
+            b0 == 192 && b1 == 168 -> false // RFC1918
+            b0 >= 224 -> false // Multicast/reserved
+            else -> true
+        }
+    }
+
+    /**
+     * Extracts valid public IPv4 Type-A (type == 1) answers from Cloudflare/Google DoH JSON.
+     */
+    fun parseDohJsonIpv4s(json: String): List<String> = runCatching {
+        val root = JsonParser.parseString(json).asJsonObject
+        val answers = root.getAsJsonArray("Answer") ?: return@runCatching emptyList()
+        buildList {
+            for (el in answers) {
+                val obj = el.asJsonObject
+                val type = obj.get("type")?.asInt ?: continue
+                if (type != 1) continue
+                val data = obj.get("data")?.asString?.trim() ?: continue
+                if (isPublicRoutableIpv4(data)) add(data)
+            }
+        }.distinct()
+    }.getOrDefault(emptyList())
 
     /**
      * Pure JVM-testable classifier mapping a resolved IPv4 address against known CloudFront
@@ -69,6 +113,33 @@ object CdnPingClassifier {
     }
 
     /**
+     * Loads the complete bundled Cloudflare classification set (all 600+ ASN CIDRs + 46 seeds +
+     * official blocks) so domains hosted on any Cloudflare IP range are matched reliably.
+     */
+    fun getAllCloudflareCidrs(context: Context): List<String> {
+        val discovery = cachedDiscoveryCfCidrs ?: runCatching {
+            context.assets.open("cf_ranges_discovery_v4.txt")
+                .bufferedReader()
+                .use { reader ->
+                    reader.readLines()
+                        .asSequence()
+                        .map { it.trim() }
+                        .filter { it.isNotEmpty() && !it.startsWith("#") }
+                        .mapNotNull { CloudflareSeedRanges.normalizeIpv4Cidr(it) }
+                        .toList()
+                }
+        }.getOrDefault(emptyList()).also {
+            if (it.isNotEmpty()) cachedDiscoveryCfCidrs = it
+        }
+        return (
+            ProviderRangeStore.getEntries(context, CdnType.CLOUDFLARE).map { it.cidr } +
+                CloudflareSeedRanges.SEED_CIDRS +
+                CloudflareSeedRanges.OFFICIAL_CLASSIFICATION_CIDRS +
+                discovery
+            ).distinct()
+    }
+
+    /**
      * Parses the first IPv4 and RTT (rounded ms) from standard Android/Linux `ping` stdout.
      */
     fun parsePingOutput(stdout: String): Pair<String?, Long?> {
@@ -84,10 +155,40 @@ object CdnPingClassifier {
     }
 
     /**
+     * Fast local hint classification using origin domain, SNI/Host, current server IP, and
+     * full Cloudflare/CloudFront CIDR lists without blocking UI thread on network calls.
+     */
+    fun inferQuickCdnType(
+        profile: ProfileItem,
+        originDomain: String,
+        frontCidrs: List<String>,
+        cfCidrs: List<String>,
+    ): CdnType {
+        val candidates = listOfNotNull(
+            profile.server?.trim()?.takeIf { it.isNotEmpty() },
+            originDomain.trim().takeIf { it.isNotEmpty() },
+        )
+        for (ip in candidates) {
+            if (CloudflareSeedRanges.ipv4ToLong(ip) != null && isPublicRoutableIpv4(ip)) {
+                if (CloudflareSeedRanges.matchesAnyCidr(ip, frontCidrs)) return CdnType.CLOUDFRONT
+                if (CloudflareSeedRanges.matchesAnyCidr(ip, cfCidrs)) return CdnType.CLOUDFLARE
+            }
+        }
+        val hosts = listOfNotNull(
+            originDomain.lowercase(),
+            profile.sni?.lowercase(),
+            profile.host?.lowercase(),
+        )
+        if (hosts.any { "cloudfront.net" in it }) return CdnType.CLOUDFRONT
+        return CdnType.UNKNOWN
+    }
+
+    /**
      * Classifies [profile] over the physical network using:
-     * 1) `ping -c 1 -W 2 <domain>` (simultaneously capturing resolved IP and ICMP RTT),
-     * 2) [InetAddress.getAllByName] fallback when ICMP is filtered or blocked,
-     * 3) HTTP `Server`/`Via`/`CF-RAY` response-header tie-breaker if the IP CIDR wasn't listed.
+     * 1) DoH JSON lookup (1.1.1.1 & dns.google) bypassing ISP DNS poisoning
+     * 2) Bounded `ping -c 1 -W 2 <domain>` (simultaneously measuring ICMP RTT)
+     * 3) `InetAddress.getAllByName` filtered to public routable IPv4s
+     * 4) HTTPS edge header probe (`CF-RAY`, `Server: cloudflare`, `Via: CloudFront`, `X-Amz-Cf-Id`)
      */
     fun detectForProfile(
         context: Context,
@@ -95,55 +196,96 @@ object CdnPingClassifier {
         profile: ProfileItem,
     ): CdnDetectionResult {
         OriginDomainStore.rememberIfDomain(guid, profile)
-        val domain = OriginDomainStore.getOriginDomain(guid, profile)
+        val targetHost = OriginDomainStore.getOriginDomain(guid, profile)
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+            ?: profile.sni?.trim()?.takeIf { it.isNotEmpty() }
+            ?: profile.host?.trim()?.takeIf { it.isNotEmpty() }
             ?: return CdnDetectionResult("", null, null, CdnType.UNKNOWN, "No domain present")
 
-        val cfCidrs = (
-            ProviderRangeStore.getEntries(context, CdnType.CLOUDFLARE).map { it.cidr } +
-                CloudflareSeedRanges.SEED_CIDRS +
-                CloudflareSeedRanges.OFFICIAL_CLASSIFICATION_CIDRS
-            ).distinct()
+        val cfCidrs = getAllCloudflareCidrs(context)
         val frontCidrs = ProviderRangeStore.getEntries(context, CdnType.CLOUDFRONT)
             .map { it.cidr }
             .ifEmpty { ProviderRangeStore.loadBundledCloudFrontCidrs(context) }
 
-        // If the profile has only a literal IPv4 server and no domain hostname, classify directly.
-        if (CloudflareSeedRanges.ipv4ToLong(domain) != null) {
-            return classifyResolvedIp(domain, domain, null, frontCidrs, cfCidrs)
+        if (CloudflareSeedRanges.ipv4ToLong(targetHost) != null) {
+            return classifyResolvedIp(targetHost, targetHost, null, frontCidrs, cfCidrs)
         }
 
-        val (pingIp, pingRtt) = runBoundedPing(domain)
-        val dnsIps = resolveAllIpv4(domain)
+        val dohIps = resolveViaDoh(targetHost)
+        val (pingIpRaw, pingRtt) = runBoundedPing(targetHost)
+        val pingIp = pingIpRaw?.takeIf { isPublicRoutableIpv4(it) }
+        val localDnsIps = resolveAllIpv4(targetHost).filter { isPublicRoutableIpv4(it) }
+
         val candidateIps = buildList {
+            addAll(dohIps)
             if (pingIp != null) add(pingIp)
-            addAll(dnsIps)
+            addAll(localDnsIps)
         }.distinct()
 
         for (ip in candidateIps) {
-            val classified = classifyResolvedIp(domain, ip, pingRtt, frontCidrs, cfCidrs)
+            val classified = classifyResolvedIp(targetHost, ip, pingRtt, frontCidrs, cfCidrs)
             if (classified.cdnType != CdnType.UNKNOWN) {
                 return classified
             }
         }
 
-        val headerCdn = probeHttpHeadersForCdn(domain)
+        val headerCdn = probeHttpHeadersForCdn(targetHost)
         if (headerCdn != CdnType.UNKNOWN) {
             return CdnDetectionResult(
-                domain = domain,
+                domain = targetHost,
                 resolvedIp = candidateIps.firstOrNull(),
                 pingRttMs = pingRtt,
                 cdnType = headerCdn,
-                reason = "Detected via HTTP edge headers"
+                reason = "Detected via HTTPS edge headers"
+            )
+        }
+
+        if ("cloudfront.net" in targetHost.lowercase()) {
+            return CdnDetectionResult(
+                domain = targetHost,
+                resolvedIp = candidateIps.firstOrNull(),
+                pingRttMs = pingRtt,
+                cdnType = CdnType.CLOUDFRONT,
+                reason = "Matched CloudFront origin hostname"
             )
         }
 
         return CdnDetectionResult(
-            domain = domain,
+            domain = targetHost,
             resolvedIp = candidateIps.firstOrNull(),
             pingRttMs = pingRtt,
             cdnType = CdnType.UNKNOWN,
-            reason = "Unable to map ${candidateIps.firstOrNull() ?: domain} to Cloudflare or CloudFront"
+            reason = "Unable to map ${candidateIps.firstOrNull() ?: targetHost} to Cloudflare or CloudFront"
         )
+    }
+
+    private fun resolveViaDoh(domain: String): List<String> {
+        if (!domain.matches(Regex("""^[A-Za-z0-9.\-]+$"""))) return emptyList()
+        val encoded = URLEncoder.encode(domain, "UTF-8")
+        val client = OkHttpClient.Builder()
+            .connectTimeout(3, TimeUnit.SECONDS)
+            .readTimeout(3, TimeUnit.SECONDS)
+            .build()
+        val endpoints = listOf(
+            "https://dns.google/resolve?name=$encoded&type=A",
+            "https://cloudflare-dns.com/dns-query?name=$encoded&type=A",
+        )
+        for (url in endpoints) {
+            val ips = runCatching {
+                val req = Request.Builder()
+                    .url(url)
+                    .header("Accept", "application/dns-json")
+                    .get()
+                    .build()
+                client.newCall(req).execute().use { resp ->
+                    if (!resp.isSuccessful) emptyList()
+                    else parseDohJsonIpv4s(resp.body.string())
+                }
+            }.getOrDefault(emptyList())
+            if (ips.isNotEmpty()) return ips
+        }
+        return emptyList()
     }
 
     private fun runBoundedPing(domain: String): Pair<String?, Long?> {

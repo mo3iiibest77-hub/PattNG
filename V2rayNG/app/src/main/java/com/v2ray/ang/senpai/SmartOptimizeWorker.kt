@@ -36,6 +36,10 @@ class SmartOptimizeWorker(
 
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
         if (!isEnabled()) return@withContext Result.success()
+        if (PostConnectDiscoveryRunner.isRunning()) {
+            LogUtil.i(TAG, "2h optimize deferred: Discovery is currently running")
+            return@withContext Result.success()
+        }
 
         val guid = MmkvManager.getSelectServer() ?: return@withContext Result.success()
         val profile = MmkvManager.decodeServerConfig(guid) ?: return@withContext Result.success()

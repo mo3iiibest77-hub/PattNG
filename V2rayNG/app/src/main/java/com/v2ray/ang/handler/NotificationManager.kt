@@ -16,7 +16,8 @@ import com.v2ray.ang.R
 import com.v2ray.ang.core.CoreServiceManager
 import com.v2ray.ang.dto.entities.ProfileItem
 import com.v2ray.ang.extension.toSpeedString
-import com.v2ray.ang.ui.main.MainActivity
+import com.v2ray.ang.helper.MessageHelper
+import com.v2ray.ang.ui.qsn3d.QuietStormActivity
 import com.v2ray.ang.util.LogUtil
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -44,7 +45,7 @@ object NotificationManager {
      * @param currentConfig The current profile configuration.
      */
     fun startSpeedNotification() {
-        if (MmkvManager.decodeSettingsBool(AppConfig.PREF_SPEED_ENABLED) != true) return
+        if (MmkvManager.decodeSettingsBool(AppConfig.PREF_SPEED_ENABLED, true) != true) return
         if (speedNotificationJob != null || CoreServiceManager.isRunning() == false) return
 
         var lastZeroSpeed = false
@@ -69,7 +70,7 @@ object NotificationManager {
 
         val flags = PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
 
-        val startMainIntent = Intent(service, MainActivity::class.java)
+        val startMainIntent = Intent(service, QuietStormActivity::class.java)
         val contentPendingIntent = PendingIntent.getActivity(service, NOTIFICATION_PENDING_INTENT_CONTENT, startMainIntent, flags)
 
         val stopV2RayIntent = Intent(AppConfig.BROADCAST_ACTION_SERVICE)
@@ -91,9 +92,18 @@ object NotificationManager {
                 ""
             }
 
+        val configTitle = currentConfig?.remarks?.takeIf { it.isNotBlank() }
+        val fullTitle = if (configTitle != null) {
+            "${service.getString(R.string.app_name)} • $configTitle"
+        } else {
+            service.getString(R.string.app_name)
+        }
+
         mBuilder = NotificationCompat.Builder(service, channelId)
             .setSmallIcon(R.drawable.ic_stat_name)
-            .setContentTitle(currentConfig?.remarks ?: service.getString(R.string.app_name))
+            .setColor(Color.parseColor("#22D3EE"))
+            .setContentTitle(fullTitle)
+            .setContentText(service.getString(R.string.novapulse_notif_connected_ready))
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setOngoing(true)
             .setShowWhen(false)
@@ -101,12 +111,12 @@ object NotificationManager {
             .setContentIntent(contentPendingIntent)
             .addAction(
                 R.drawable.ic_delete_24dp,
-                service.getString(R.string.notification_action_stop_v2ray),
+                service.getString(R.string.novapulse_notif_action_disconnect),
                 stopV2RayPendingIntent
             )
             .addAction(
                 R.drawable.ic_restore_24dp,
-                service.getString(R.string.title_service_restart),
+                service.getString(R.string.novapulse_notif_action_reconnect),
                 restartV2RayPendingIntent
             )
 
@@ -200,23 +210,6 @@ object NotificationManager {
     }
 
     /**
-     * Appends the speed string to the given text.
-     * @param text The text to append to.
-     * @param name The name of the tag.
-     * @param up The uplink speed.
-     * @param down The downlink speed.
-     */
-    private fun appendSpeedString(text: StringBuilder, name: String?, up: Double, down: Double) {
-        var n = name ?: "no tag"
-        n = n.take(min(n.length, 6))
-        text.append(n)
-        for (i in n.length..6 step 2) {
-            text.append("\t")
-        }
-        text.append("•  ${up.toLong().toSpeedString()}↑  ${down.toLong().toSpeedString()}↓\n")
-    }
-
-    /**
      * Updates the speed notification once.
      * Queries traffic stats, separates proxy and direct, and updates the notification.
      * @param lastZeroSpeed The previous zero speed state.
@@ -260,21 +253,29 @@ object NotificationManager {
 
         val proxyTotal = proxyUplink + proxyDownlink
         val directTotal = directUplink + directDownlink
+        val proxyUpBps = (proxyUplink / sinceLastQueryInSeconds).toLong().coerceAtLeast(0L)
+        val proxyDownBps = (proxyDownlink / sinceLastQueryInSeconds).toLong().coerceAtLeast(0L)
+        val directUpBps = (directUplink / sinceLastQueryInSeconds).toLong().coerceAtLeast(0L)
+        val directDownBps = (directDownlink / sinceLastQueryInSeconds).toLong().coerceAtLeast(0L)
+        getService()?.let { svc ->
+            MessageHelper.sendMsg2UI(
+                svc,
+                AppConfig.MSG_LIVE_SPEED_UPDATE,
+                "$proxyUpBps|$proxyDownBps|$directUpBps|$directDownBps",
+            )
+        }
         val zeroSpeed = proxyTotal + directTotal == 0L
         if (!zeroSpeed || !lastZeroSpeed) {
-            val text = StringBuilder()
-            appendSpeedString(
-                text, AppConfig.TAG_PROXY,
-                proxyUplink / sinceLastQueryInSeconds,
-                proxyDownlink / sinceLastQueryInSeconds
-            )
-
-            appendSpeedString(
-                text, AppConfig.TAG_DIRECT,
-                directUplink / sinceLastQueryInSeconds,
-                directDownlink / sinceLastQueryInSeconds
-            )
-            updateNotification(text.toString(), proxyTotal, directTotal)
+            val svc = getService()
+            val tunnelLabel = svc?.getString(R.string.novapulse_notif_tunnel_label) ?: "Tunnel"
+            val directLabel = svc?.getString(R.string.novapulse_notif_direct_label) ?: "Direct"
+            val text = buildString {
+                append("$tunnelLabel:  ↓ ${proxyDownBps.toSpeedString()}   ↑ ${proxyUpBps.toSpeedString()}")
+                if (directTotal > 0L) {
+                    append("\n$directLabel:  ↓ ${directDownBps.toSpeedString()}   ↑ ${directUpBps.toSpeedString()}")
+                }
+            }
+            updateNotification(text, proxyTotal, directTotal)
         }
         lastQueryTime = queryTime
         return zeroSpeed

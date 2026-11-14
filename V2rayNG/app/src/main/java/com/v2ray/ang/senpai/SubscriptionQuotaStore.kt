@@ -7,7 +7,7 @@ import okhttp3.Request
 import java.util.concurrent.TimeUnit
 
 /**
- * Parsed subscription traffic quota and expiration metadata from `subscription-userinfo` HTTP header.
+ * Subscription traffic quota, validity dates, and device binding summary.
  */
 data class SubscriptionQuotaInfo(
     val uploadBytes: Long = 0L,
@@ -15,6 +15,11 @@ data class SubscriptionQuotaInfo(
     val totalBytes: Long = 0L,
     val expireAtSeconds: Long = 0L,
     val updatedAtMs: Long = System.currentTimeMillis(),
+    val planName: String? = null,
+    val createdAtSeconds: Long = 0L,
+    val maxDevices: Int = 1,
+    val usedDevices: Int = 1,
+    val licenseStatus: String = "active",
 ) {
     val usedBytes: Long get() = (uploadBytes + downloadBytes).coerceAtLeast(0L)
     val remainingBytes: Long? get() = if (totalBytes > 0L) (totalBytes - usedBytes).coerceAtLeast(0L) else null
@@ -47,7 +52,7 @@ object SubscriptionQuotaParser {
                 "upload" -> { upload = value.coerceAtLeast(0L); matchedAny = true }
                 "download" -> { download = value.coerceAtLeast(0L); matchedAny = true }
                 "total" -> { total = value.coerceAtLeast(0L); matchedAny = true }
-                "expire" -> { expire = value.coerceAtLeast(0L); matchedAny = true }
+                "expire" -> { expire = value; matchedAny = true }
             }
         }
         return if (matchedAny) SubscriptionQuotaInfo(upload, download, total, expire) else null
@@ -69,6 +74,7 @@ object SubscriptionQuotaStore {
     }
 
     fun fetchAndSaveHeader(subId: String, url: String, userAgent: String? = null) {
+        val existing = get(subId)
         val client = OkHttpClient.Builder()
             .connectTimeout(10, TimeUnit.SECONDS)
             .readTimeout(10, TimeUnit.SECONDS)
@@ -81,8 +87,18 @@ object SubscriptionQuotaStore {
             client.newCall(reqBuilder.build()).execute().use { resp ->
                 val rawHeader = resp.header("subscription-userinfo")
                     ?: resp.header("Subscription-Userinfo")
+                val createdHeader = resp.header("X-Subscription-Created-At")?.toLongOrNull() ?: 0L
                 SubscriptionQuotaParser.parseHeader(rawHeader)?.let { info ->
-                    save(subId, info)
+                    save(
+                        subId,
+                        info.copy(
+                            planName = existing?.planName,
+                            createdAtSeconds = createdHeader.takeIf { it > 0L } ?: (existing?.createdAtSeconds ?: 0L),
+                            maxDevices = existing?.maxDevices ?: 1,
+                            usedDevices = existing?.usedDevices ?: 1,
+                            licenseStatus = existing?.licenseStatus ?: "active",
+                        )
+                    )
                 }
             }
         }

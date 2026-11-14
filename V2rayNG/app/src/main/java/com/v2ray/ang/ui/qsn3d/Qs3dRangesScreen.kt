@@ -19,74 +19,60 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.v2ray.ang.R
 import com.v2ray.ang.senpai.CdnType
-import com.v2ray.ang.senpai.ProviderRangeEntry
 import com.v2ray.ang.senpai.RangeOrigin
+import java.text.DateFormat
+import java.util.Date
+import java.util.Locale
 
+/**
+ * Uncluttered CDN Ranges & Discovery screen:
+ * - Strictly separates Cloudflare and Amazon CloudFront pools and Discovery progress
+ * - Removes individual CIDR toggle switches and per-row delete controls
+ * - Launches dedicated full-page [Qs3dRangesExplorerScreen] for browsing and Copy All
+ */
 @Composable
 fun Qs3dRangesScreen(
     state: Qs3dUiState,
     onSelectProvider: (CdnType) -> Unit,
-    onSearchChange: (String) -> Unit,
-    onAddManualCidrs: (String) -> Unit,
-    onToggleEntry: (ProviderRangeEntry) -> Unit,
-    onRemoveEntry: (ProviderRangeEntry) -> Unit,
-    onResetCfSeeds: () -> Unit,
-    onClearDiscovered: (CdnType) -> Unit,
-    onCopyAllVisible: () -> Unit,
-    onSyncAwsCloudFront: () -> Unit,
     onStartDiscovery: (CdnType) -> Unit,
-    onStartSequentialDiscovery: () -> Unit,
     onStopDiscovery: () -> Unit,
+    onSyncAws: () -> Unit,
+    onOpenExplorer: () -> Unit,
+    onCopyAll: () -> Unit,
 ) {
-    var showAddDialog by remember { mutableStateOf(false) }
-
     val provider = state.activeRangeProvider
-    val q = state.rangeSearchQuery.trim().lowercase()
-    val filteredEntries = remember(state.rangeEntries, q) {
-        if (q.isEmpty()) state.rangeEntries
-        else state.rangeEntries.filter {
-            it.cidr.lowercase().contains(q) || it.origin.name.lowercase().contains(q)
-        }
-    }
-
     val discoveredCount = state.rangeEntries.count { it.origin == RangeOrigin.DISCOVERED }
     val seedCount = state.rangeEntries.count { it.origin == RangeOrigin.SEED }
     val fetchedCount = state.rangeEntries.count { it.origin == RangeOrigin.FETCHED }
-    val manualCount = state.rangeEntries.count { it.origin == RangeOrigin.MANUAL }
+
+    val providerDiscoveryRunning = state.isManualDiscoveryRunning ||
+        (state.discoveryState.running && state.discoveryState.activeProvider == provider)
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
+        verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        // 1. Cloudflare vs CloudFront Segmented Switcher
+        // 1. Independent Provider Switcher
         item {
             Row(
                 modifier = Modifier
@@ -113,12 +99,10 @@ fun Qs3dRangesScreen(
             }
         }
 
-        // 2. Pool Summary + Discovery Actions Card
+        // 2. Clean Provider Summary & Actions Card
         item {
-            Glass3dCard(
-                glowColor = if (provider == CdnType.CLOUDFLARE) QsColors.CloudflareOrange.copy(alpha = 0.4f)
-                else QsColors.CloudFrontSky.copy(alpha = 0.4f)
-            ) {
+            val accent = if (provider == CdnType.CLOUDFLARE) QsColors.CloudflareOrange else QsColors.CloudFrontSky
+            Glass3dCard(glowColor = accent.copy(alpha = 0.42f)) {
                 Text(
                     text = if (provider == CdnType.CLOUDFLARE) {
                         stringResource(R.string.qsn3d_cf_pool_title)
@@ -127,32 +111,68 @@ fun Qs3dRangesScreen(
                     },
                     color = QsColors.TextPrimary,
                     fontWeight = FontWeight.Bold,
-                    fontSize = 15.sp
+                    fontSize = 16.sp
                 )
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    text = if (provider == CdnType.CLOUDFLARE) {
-                        "Seeds: $seedCount • Discovered: $discoveredCount • Manual: $manualCount • Total: ${state.rangeEntries.size}"
-                    } else {
-                        "AWS Prefixes: $fetchedCount • Discovered: $discoveredCount • Manual: $manualCount • Total: ${state.rangeEntries.size}"
-                    },
-                    color = QsColors.TextSecondary,
-                    fontSize = 12.sp
-                )
+                Spacer(Modifier.height(10.dp))
 
-                val anyDiscoveryRunning = state.isManualDiscoveryRunning || state.discoveryState.running
-                if (anyDiscoveryRunning) {
-                    val done = if (state.discoveryState.running) state.discoveryState.done else state.manualDiscoveryDone
-                    val total = if (state.discoveryState.running) state.discoveryState.total else state.manualDiscoveryTotal
-                    val cur = if (state.discoveryState.running) state.discoveryState.currentCidr else state.manualDiscoveryCidr
-                    Spacer(Modifier.height(10.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    MetricPill(
+                        label = stringResource(R.string.novapulse_ranges_discovered_label),
+                        value = "$discoveredCount",
+                        accent = QsColors.AuroraMint,
+                        modifier = Modifier.weight(1f)
+                    )
+                    MetricPill(
+                        label = if (provider == CdnType.CLOUDFLARE) {
+                            stringResource(R.string.novapulse_ranges_seed_label)
+                        } else {
+                            stringResource(R.string.novapulse_ranges_aws_label)
+                        },
+                        value = if (provider == CdnType.CLOUDFLARE) "$seedCount" else "$fetchedCount",
+                        accent = accent,
+                        modifier = Modifier.weight(1f)
+                    )
+                    MetricPill(
+                        label = stringResource(R.string.novapulse_ranges_total_label),
+                        value = "${state.rangeEntries.size}",
+                        accent = QsColors.ElectricCyan,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+
+                if (provider == CdnType.CLOUDFRONT && state.cloudFrontLastSyncedAt > 0L) {
+                    val syncedStr = DateFormat.getDateTimeInstance(
+                        DateFormat.SHORT, DateFormat.SHORT, Locale.getDefault()
+                    ).format(Date(state.cloudFrontLastSyncedAt))
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        text = stringResource(R.string.novapulse_last_aws_sync_fmt, syncedStr),
+                        color = QsColors.TextSecondary,
+                        fontSize = 11.sp
+                    )
+                }
+
+                if (providerDiscoveryRunning) {
+                    val done = if (state.discoveryState.running && state.discoveryState.activeProvider == provider) {
+                        state.discoveryState.done
+                    } else state.manualDiscoveryDone
+                    val total = if (state.discoveryState.running && state.discoveryState.activeProvider == provider) {
+                        state.discoveryState.total
+                    } else state.manualDiscoveryTotal
+                    val cur = if (state.discoveryState.running && state.discoveryState.activeProvider == provider) {
+                        state.discoveryState.currentCidr
+                    } else state.manualDiscoveryCidr
+                    Spacer(Modifier.height(12.dp))
                     LinearProgressIndicator(
                         progress = { if (total > 0) (done.toFloat() / total).coerceIn(0f, 1f) else 0f },
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(6.dp)
                             .clip(RoundedCornerShape(4.dp)),
-                        color = QsColors.ElectricCyan,
+                        color = accent,
                         trackColor = Color.White.copy(alpha = 0.1f)
                     )
                     Spacer(Modifier.height(4.dp))
@@ -163,169 +183,172 @@ fun Qs3dRangesScreen(
                     )
                 }
 
-                Spacer(Modifier.height(10.dp))
+                Spacer(Modifier.height(14.dp))
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .horizontalScroll(rememberScrollState()),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    if (anyDiscoveryRunning) {
-                        Button(onClick = onStopDiscovery) {
-                            Text(stringResource(R.string.qsn3d_stop_discovery), fontSize = 12.sp)
+                    if (providerDiscoveryRunning) {
+                        OutlinedButton(onClick = onStopDiscovery) {
+                            Text(stringResource(R.string.qsn3d_stop_discovery), color = QsColors.DangerCrimson)
                         }
                     } else {
-                        Button(onClick = { onStartDiscovery(provider) }) {
-                            Text(
-                                text = if (provider == CdnType.CLOUDFLARE) {
-                                    stringResource(R.string.qsn3d_run_cf_discovery)
-                                } else {
-                                    stringResource(R.string.qsn3d_run_cfront_discovery)
-                                },
-                                fontSize = 12.sp
-                            )
-                        }
-                        OutlinedButton(onClick = onStartSequentialDiscovery) {
-                            Text(stringResource(R.string.qsn3d_run_seq_discovery), fontSize = 12.sp)
-                        }
-                    }
-
-                    if (provider == CdnType.CLOUDFRONT) {
-                        OutlinedButton(
-                            onClick = onSyncAwsCloudFront,
-                            enabled = !state.isSyncingAws
+                        Button(
+                            onClick = { onStartDiscovery(provider) },
+                            colors = ButtonDefaults.buttonColors(containerColor = accent)
                         ) {
                             Text(
-                                text = if (state.isSyncingAws) "..."
-                                else stringResource(R.string.qsn3d_sync_aws_ranges),
-                                fontSize = 12.sp
+                                text = stringResource(R.string.qsn3d_run_discovery),
+                                color = Color(0xFF041322),
+                                fontWeight = FontWeight.Bold
                             )
                         }
-                    } else {
-                        OutlinedButton(onClick = onResetCfSeeds) {
-                            Text(stringResource(R.string.qsn3d_reset_46_seeds), fontSize = 12.sp)
-                        }
                     }
-
-                    if (discoveredCount > 0) {
-                        OutlinedButton(onClick = { onClearDiscovered(provider) }) {
-                            Text(stringResource(R.string.qsn3d_clear_discovered), fontSize = 12.sp)
+                    if (provider == CdnType.CLOUDFRONT) {
+                        OutlinedButton(onClick = onSyncAws, enabled = !state.isSyncingAws) {
+                            Text(
+                                if (state.isSyncingAws) stringResource(R.string.qsn3d_syncing)
+                                else stringResource(R.string.qsn3d_sync_aws)
+                            )
                         }
                     }
                 }
             }
         }
 
-        // 3. Uncapped Search, Add, Copy-All Bar
+        // 3. Dedicated Range & Discovered IP Viewer Launcher Card
         item {
-            OutlinedTextField(
-                value = state.rangeSearchQuery,
-                onValueChange = onSearchChange,
-                modifier = Modifier.fillMaxWidth(),
-                singleLine = true,
-                placeholder = { Text(stringResource(R.string.qsn3d_search_ranges), fontSize = 12.sp) }
-            )
-            Spacer(Modifier.height(6.dp))
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
+            Glass3dCard(glowColor = QsColors.PlasmaViolet.copy(alpha = 0.35f)) {
                 Text(
-                    text = stringResource(R.string.qsn3d_showing_ranges_count, filteredEntries.size),
+                    text = stringResource(R.string.novapulse_range_viewer_card_title),
+                    color = QsColors.TextPrimary,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 14.sp
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    text = stringResource(R.string.novapulse_range_viewer_card_desc),
                     color = QsColors.TextSecondary,
                     fontSize = 12.sp
                 )
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(onClick = onCopyAllVisible, shape = RoundedCornerShape(50)) {
-                        Text(stringResource(R.string.qsn3d_copy_all), fontSize = 12.sp)
+                Spacer(Modifier.height(12.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Button(
+                        onClick = onOpenExplorer,
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(14.dp)
+                    ) {
+                        Text(stringResource(R.string.novapulse_open_range_viewer_btn))
                     }
-                    Button(onClick = { showAddDialog = true }, shape = RoundedCornerShape(50)) {
-                        Text("+ ${stringResource(R.string.qsn3d_add_cidr)}", fontSize = 12.sp)
+                    OutlinedButton(
+                        onClick = onCopyAll,
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(14.dp)
+                    ) {
+                        Text(stringResource(R.string.qsn3d_copy_all_btn))
                     }
-                }
-            }
-        }
-
-        // 4. Full Uncapped CIDR List
-        items(filteredEntries, key = { "${it.provider.name}_${it.cidr}" }) { entry ->
-            val originColor = when (entry.origin) {
-                RangeOrigin.SEED -> QsColors.SolarGold
-                RangeOrigin.DISCOVERED -> QsColors.ConnectedEmerald
-                RangeOrigin.FETCHED -> QsColors.CloudFrontSky
-                RangeOrigin.MANUAL -> QsColors.PlasmaViolet
-            }
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(14.dp))
-                    .background(QsColors.GlassSurface)
-                    .border(
-                        1.dp,
-                        if (entry.enabled) originColor.copy(alpha = 0.25f) else Color.White.copy(alpha = 0.08f),
-                        RoundedCornerShape(14.dp)
-                    )
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = entry.cidr,
-                        color = if (entry.enabled) QsColors.TextPrimary else QsColors.TextMuted,
-                        fontFamily = FontFamily.Monospace,
-                        fontWeight = FontWeight.SemiBold,
-                        fontSize = 13.sp
-                    )
-                    Spacer(Modifier.height(2.dp))
-                    Text(
-                        text = entry.origin.name,
-                        color = originColor,
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-                Switch(
-                    checked = entry.enabled,
-                    onCheckedChange = { onToggleEntry(entry) }
-                )
-                Spacer(Modifier.width(4.dp))
-                IconButton(onClick = { onRemoveEntry(entry) }) {
-                    Icon(
-                        painter = painterResource(R.drawable.ic_delete_24dp),
-                        contentDescription = "Delete CIDR",
-                        tint = QsColors.DangerCrimson.copy(alpha = 0.8f)
-                    )
                 }
             }
         }
     }
+}
 
-    if (showAddDialog) {
-        var text by remember { mutableStateOf("") }
-        AlertDialog(
-            onDismissRequest = { showAddDialog = false },
-            title = { Text("${stringResource(R.string.qsn3d_add_cidr)} (${provider.name})") },
-            text = {
-                OutlinedTextField(
-                    value = text,
-                    onValueChange = { text = it },
-                    minLines = 3,
-                    maxLines = 6,
-                    placeholder = { Text("104.16.0.0/13\n8.34.146.0/24") }
-                )
-            },
-            confirmButton = {
-                Button(onClick = {
-                    onAddManualCidrs(text)
-                    showAddDialog = false
-                }) { Text(stringResource(R.string.qsn3d_save)) }
-            },
-            dismissButton = {
-                TextButton(onClick = { showAddDialog = false }) {
-                    Text(stringResource(R.string.qsn3d_cancel))
+/**
+ * Independent scrollable viewer for Discovered & Active CIDR Ranges with Search & Copy All.
+ */
+@Composable
+fun Qs3dRangesExplorerScreen(
+    state: Qs3dUiState,
+    onSearchChange: (String) -> Unit,
+    onCopyAll: () -> Unit,
+    onBack: () -> Unit,
+) {
+    val provider = state.activeRangeProvider
+    val q = state.rangeSearchQuery.trim().lowercase()
+    val filtered = state.rangeEntries.filter {
+        q.isEmpty() || it.cidr.lowercase().contains(q)
+    }
+
+    Column(modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 10.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            TextButton(onClick = onBack) {
+                Text(stringResource(R.string.novapulse_back_btn), color = QsColors.ElectricCyan)
+            }
+            Text(
+                text = if (provider == CdnType.CLOUDFLARE) "Cloudflare (${filtered.size})"
+                else "CloudFront (${filtered.size})",
+                color = QsColors.TextPrimary,
+                fontWeight = FontWeight.Bold,
+                fontSize = 16.sp
+            )
+            OutlinedButton(onClick = onCopyAll) {
+                Text(stringResource(R.string.qsn3d_copy_all_btn), fontSize = 12.sp)
+            }
+        }
+
+        Spacer(Modifier.height(8.dp))
+        OutlinedTextField(
+            value = state.rangeSearchQuery,
+            onValueChange = onSearchChange,
+            placeholder = { Text(stringResource(R.string.qsn3d_search_cidr_hint)) },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+        Spacer(Modifier.height(10.dp))
+
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            items(filtered, key = { "${it.provider.name}_${it.cidr}" }) { entry ->
+                val badgeColor = when (entry.origin) {
+                    RangeOrigin.DISCOVERED -> QsColors.AuroraMint
+                    RangeOrigin.SEED -> QsColors.CloudflareOrange
+                    RangeOrigin.FETCHED -> QsColors.CloudFrontSky
+                    RangeOrigin.MANUAL -> QsColors.PlasmaViolet
+                }
+                val originLabel = when (entry.origin) {
+                    RangeOrigin.DISCOVERED -> stringResource(R.string.novapulse_origin_discovered)
+                    RangeOrigin.SEED -> stringResource(R.string.novapulse_origin_seed)
+                    RangeOrigin.FETCHED -> stringResource(R.string.novapulse_origin_fetched)
+                    RangeOrigin.MANUAL -> stringResource(R.string.novapulse_origin_manual)
+                }
+                Glass3dCard(
+                    cornerRadius = 14.dp,
+                    glowColor = badgeColor.copy(alpha = 0.25f)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = entry.cidr,
+                            color = QsColors.TextPrimary,
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 14.sp
+                        )
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(badgeColor.copy(alpha = 0.16f))
+                                .padding(horizontal = 8.dp, vertical = 3.dp)
+                        ) {
+                            Text(text = originLabel, color = badgeColor, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
                 }
             }
-        )
+        }
     }
 }
 
@@ -342,8 +365,8 @@ private fun ProviderSegmentButton(
             .clip(RoundedCornerShape(12.dp))
             .background(if (selected) accent.copy(alpha = 0.22f) else Color.Transparent)
             .border(
-                width = 1.dp,
-                color = if (selected) accent else Color.Transparent,
+                width = if (selected) 1.dp else 0.dp,
+                color = if (selected) accent.copy(alpha = 0.6f) else Color.Transparent,
                 shape = RoundedCornerShape(12.dp)
             )
             .clickable(onClick = onClick)
@@ -353,8 +376,9 @@ private fun ProviderSegmentButton(
         Text(
             text = label,
             color = if (selected) accent else QsColors.TextSecondary,
-            fontWeight = FontWeight.Bold,
-            fontSize = 13.sp
+            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+            fontSize = 13.sp,
+            textAlign = TextAlign.Center
         )
     }
 }

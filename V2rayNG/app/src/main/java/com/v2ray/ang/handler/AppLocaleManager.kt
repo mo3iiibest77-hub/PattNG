@@ -79,7 +79,7 @@ object AppLocaleManager {
     }
 
     private fun storedLanguage(): Language = Language.fromCode(
-        MmkvManager.decodeSettingsString(AppConfig.PREF_LANGUAGE) ?: Language.AUTO.code
+        MmkvManager.decodeSettingsString(AppConfig.PREF_LANGUAGE) ?: Language.PERSIAN.code
     )
 
     private fun syncLegacyPreference(languageTag: String?) {

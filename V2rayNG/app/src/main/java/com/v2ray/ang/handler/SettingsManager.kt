@@ -476,6 +476,10 @@ object SettingsManager {
         ensureDefaultValue(AppConfig.PREF_OBSERVATORY_LEAST_LOAD_METHOD, AppConfig.OBSERVATORY_LEAST_LOAD_METHOD)
         ensureDefaultValue(AppConfig.PREF_OBSERVATORY_LEAST_LOAD_SAMPLING, AppConfig.OBSERVATORY_LEAST_LOAD_SAMPLING)
         ensureDefaultValue(AppConfig.PREF_OBSERVATORY_LEAST_LOAD_TIMEOUT, AppConfig.OBSERVATORY_LEAST_LOAD_TIMEOUT)
+        if (MmkvManager.decodeSettingsString("qsn_speed_default_init").isNullOrEmpty()) {
+            MmkvManager.encodeSettings(AppConfig.PREF_SPEED_ENABLED, true)
+            MmkvManager.encodeSettings("qsn_speed_default_init", "1")
+        }
     }
 
     private fun ensureDefaultValue(key: String, default: String) {

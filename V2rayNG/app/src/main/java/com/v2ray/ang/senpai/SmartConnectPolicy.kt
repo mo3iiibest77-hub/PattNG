@@ -1,7 +1,8 @@
 package com.v2ray.ang.senpai
 
 /**
- * Pure policy rules governing 2-hour background optimization and safe IP replacement/rollback.
+ * Pure policy rules governing 2-hour background optimization, safe IP replacement/rollback,
+ * and provider-conditional one-time Discovery scheduling.
  */
 object SmartConnectPolicy {
 
@@ -25,8 +26,24 @@ object SmartConnectPolicy {
     }
 
     /**
-     * Orders background Discovery sequentially: CloudFront Discovery first, then Cloudflare Discovery.
+     * Determines which providers should be included in one-time post-connect Discovery based
+     * strictly on the CDN providers actually present in the user's subscription/profile set.
+     * CloudFront Discovery NEVER runs unless a CloudFront profile actually exists.
      */
-    fun postConnectDiscoveryOrder(): List<CdnType> =
-        listOf(CdnType.CLOUDFRONT, CdnType.CLOUDFLARE)
+    fun determineRequiredDiscoveryProviders(
+        detectedProvidersInSubscription: Collection<CdnType>,
+        activeProvider: CdnType,
+    ): List<CdnType> {
+        val combined = (detectedProvidersInSubscription + activeProvider)
+            .filter { it == CdnType.CLOUDFLARE || it == CdnType.CLOUDFRONT }
+            .toSet()
+
+        if (combined.isEmpty()) {
+            return listOf(CdnType.CLOUDFLARE)
+        }
+        val ordered = mutableListOf<CdnType>()
+        if (CdnType.CLOUDFLARE in combined) ordered.add(CdnType.CLOUDFLARE)
+        if (CdnType.CLOUDFRONT in combined) ordered.add(CdnType.CLOUDFRONT)
+        return ordered
+    }
 }

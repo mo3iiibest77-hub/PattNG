@@ -2,7 +2,6 @@ package com.v2ray.ang.ui.qsn3d
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -13,16 +12,12 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -38,22 +33,15 @@ import androidx.compose.ui.unit.sp
 import com.v2ray.ang.R
 import com.v2ray.ang.senpai.CdnType
 import com.v2ray.ang.senpai.SmartStep
-import com.v2ray.ang.senpai.SubscriptionQuotaInfo
-import java.text.DateFormat
-import java.util.Date
-import java.util.Locale
 
 @Composable
 fun Qs3dConnectScreen(
     state: Qs3dUiState,
-    onSmartConnectOrDisconnect: () -> Unit,
-    onDirectConnect: () -> Unit,
+    onConnectOrDisconnect: () -> Unit,
+    onRescanIpAndConnect: () -> Unit,
     onCancelFlow: () -> Unit,
-    onActivationInputChange: (String) -> Unit,
-    onRedeemActivation: () -> Unit,
+    onOpenSubscriptionDetails: () -> Unit,
     onRefreshSubs: () -> Unit,
-    onDetectCdnPing: () -> Unit,
-    onForcedCdnChange: (CdnType?) -> Unit,
     onTestConnectedPing: () -> Unit,
     onOpenConfigsTab: () -> Unit,
 ) {
@@ -84,9 +72,10 @@ fun Qs3dConnectScreen(
     }
 
     val orbSubtitle = when {
-        state.coreRunning -> activeConfig?.server?.takeIf { it.isNotBlank() }
+        state.coreRunning -> state.connectedCountry.takeIf { it.isNotBlank() }
+            ?: activeConfig?.remarks
             ?: stringResource(R.string.qsn3d_tap_disconnect)
-        flow.busy && flow.bestIp != null -> "${flow.bestIp} (${flow.bestUploadKBps} KB/s)"
+        flow.busy && flow.bestIp != null -> "${flow.bestUploadKBps} KB/s"
         flow.busy -> stringResource(R.string.qsn3d_tap_cancel)
         else -> activeConfig?.remarks ?: stringResource(R.string.qsn3d_one_tap_ready)
     }
@@ -102,160 +91,157 @@ fun Qs3dConnectScreen(
         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        // 1. Hero 3D Holographic Orb
+        // 1. Hero 3D Orbital Sphere Card + Fresh IP Optimization Action
         item {
-            Column(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalAlignment = Alignment.CenterHorizontally
+            Glass3dCard(
+                glowColor = when (orbMode) {
+                    OrbVisualMode.CONNECTED -> QsColors.ConnectedEmerald.copy(alpha = 0.52f)
+                    OrbVisualMode.PROCESSING -> QsColors.PlasmaViolet.copy(alpha = 0.52f)
+                    OrbVisualMode.ERROR -> QsColors.DangerCrimson.copy(alpha = 0.52f)
+                    OrbVisualMode.DISCONNECTED -> QsColors.ElectricCyan.copy(alpha = 0.36f)
+                }
             ) {
-                Holographic3dConnectOrb(
-                    mode = orbMode,
-                    title = orbTitle,
-                    subtitle = orbSubtitle,
-                    cdnType = activeCdn,
-                    onClick = {
-                        if (flow.busy) onCancelFlow() else onSmartConnectOrDisconnect()
-                    }
-                )
-
-                // Quick secondary controls under orb
                 Row(
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    if (!state.coreRunning && !flow.busy && activeConfig != null) {
-                        OutlinedButton(
-                            onClick = onDirectConnect,
-                            shape = RoundedCornerShape(50)
-                        ) {
-                            Text(
-                                text = stringResource(R.string.qsn3d_direct_connect),
-                                fontSize = 12.sp
-                            )
-                        }
-                    }
-                    if (state.coreRunning) {
-                        OutlinedButton(
-                            onClick = onTestConnectedPing,
-                            shape = RoundedCornerShape(50)
-                        ) {
-                            Text(
-                                text = state.connectedTestMessage
-                                    ?: stringResource(R.string.qsn3d_test_real_ping),
-                                fontSize = 12.sp,
-                                color = QsColors.AuroraMint
-                            )
-                        }
-                    }
-                }
-            }
-        }
-
-        // 2. Scan / Smart Connect live step progress
-        if (flow.busy || flow.step == SmartStep.Error) {
-            item {
-                Glass3dCard(
-                    glowColor = if (flow.step == SmartStep.Error) QsColors.DangerCrimson.copy(alpha = 0.5f)
-                    else QsColors.ElectricCyan.copy(alpha = 0.45f)
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        StatusDot(active = state.coreRunning)
                         Text(
-                            text = if (flow.step == SmartStep.Error) {
-                                flow.errorMessage ?: stringResource(R.string.qsn3d_error_generic)
-                            } else {
-                                stepLabel(flow.step)
-                            },
-                            color = if (flow.step == SmartStep.Error) QsColors.DangerCrimson else QsColors.TextPrimary,
-                            fontWeight = FontWeight.SemiBold,
-                            fontSize = 13.sp,
-                            modifier = Modifier.weight(1f)
-                        )
-                        if (flow.busy) {
-                            TextButton(onClick = onCancelFlow) {
-                                Text(stringResource(R.string.qsn3d_cancel), color = QsColors.SolarGold)
-                            }
-                        }
-                    }
-                    if (flow.step == SmartStep.ScanningBestIp && flow.scanTotal > 0) {
-                        Spacer(Modifier.height(6.dp))
-                        LinearProgressIndicator(
-                            progress = { (flow.scanDone.toFloat() / flow.scanTotal.coerceAtLeast(1)).coerceIn(0f, 1f) },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(6.dp)
-                                .clip(RoundedCornerShape(4.dp)),
-                            color = QsColors.ElectricCyan,
-                            trackColor = Color.White.copy(alpha = 0.1f)
-                        )
-                        if (flow.bestIp != null) {
-                            Spacer(Modifier.height(6.dp))
-                            Text(
-                                text = "${stringResource(R.string.qsn3d_best_candidate)}: ${flow.bestIp} (${flow.bestUploadKBps} KB/s)",
-                                color = QsColors.AuroraMint,
-                                fontSize = 12.sp
-                            )
-                        }
-                    }
-                }
-            }
-        }
-
-        // 3. Post-First-Connect Sequential Discovery Live Banner
-        if (state.discoveryState.running) {
-            item {
-                val disc = state.discoveryState
-                Glass3dCard(glowColor = QsColors.PlasmaViolet.copy(alpha = 0.55f)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = stringResource(
-                                R.string.qsn3d_post_connect_discovery_banner,
-                                disc.activeProvider?.name ?: "CDN",
-                                disc.done,
-                                disc.total
-                            ),
+                            text = if (state.coreRunning) stringResource(R.string.novapulse_tunnel_protected)
+                            else stringResource(R.string.qsn3d_status_ready),
                             color = QsColors.TextPrimary,
-                            fontWeight = FontWeight.SemiBold,
-                            fontSize = 13.sp
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold
                         )
-                        if (disc.activeProvider != null) {
-                            ProviderPillBadge(cdnType = disc.activeProvider)
-                        }
                     }
-                    Spacer(Modifier.height(6.dp))
-                    LinearProgressIndicator(
-                        progress = {
-                            if (disc.total > 0) (disc.done.toFloat() / disc.total).coerceIn(0f, 1f) else 0f
-                        },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(5.dp)
-                            .clip(RoundedCornerShape(4.dp)),
-                        color = QsColors.PlasmaViolet,
-                        trackColor = Color.White.copy(alpha = 0.1f)
+                    CdnProviderBadge(cdnType = activeCdn)
+                }
+
+                Spacer(Modifier.height(6.dp))
+                Box(
+                    modifier = Modifier.fillMaxWidth(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    val progress = if (flow.busy && flow.step == SmartStep.ScanningBestIp && flow.scanTotal > 0) {
+                        flow.scanDone.toFloat() / flow.scanTotal.toFloat()
+                    } else null
+
+                    ConnectionOrb3d(
+                        mode = orbMode,
+                        progressFraction = progress,
+                        primaryText = orbTitle,
+                        secondaryText = orbSubtitle,
+                        onClick = {
+                            if (flow.busy) onCancelFlow() else onConnectOrDisconnect()
+                        }
                     )
-                    if (disc.currentCidr.isNotBlank()) {
-                        Spacer(Modifier.height(4.dp))
+                }
+
+                if (flow.step == SmartStep.Error && !flow.errorMessage.isNullOrBlank()) {
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        text = flow.errorMessage,
+                        color = QsColors.DangerCrimson,
+                        fontSize = 12.sp
+                    )
+                }
+
+                Spacer(Modifier.height(10.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = { if (state.coreRunning) onTestConnectedPing() else onOpenConfigsTab() },
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(14.dp)
+                    ) {
                         Text(
-                            text = disc.currentCidr,
-                            color = QsColors.TextSecondary,
-                            fontSize = 11.sp
+                            text = if (state.coreRunning) stringResource(R.string.qsn3d_test_ping)
+                            else stringResource(R.string.qsn3d_select_config_btn),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    OutlinedButton(
+                        onClick = onRescanIpAndConnect,
+                        enabled = !flow.busy,
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(14.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = QsColors.ElectricCyan)
+                    ) {
+                        Text(
+                            text = stringResource(R.string.novapulse_find_faster_ip_btn),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
                     }
                 }
             }
         }
 
-        // 4. Domain Ping CDN Classification & Active Server Card
+        // 2. Real-time Custom Speed HUD (Always enabled by default!)
+        if (state.speedDisplayEnabled) {
+            item {
+                LiveSpeedHudRow(
+                    downloadSpeedText = if (state.coreRunning) state.liveDownloadFormatted else "0 B/s",
+                    uploadSpeedText = if (state.coreRunning) state.liveUploadFormatted else "0 B/s",
+                    downloadLabel = stringResource(R.string.novapulse_download_speed),
+                    uploadLabel = stringResource(R.string.novapulse_upload_speed),
+                    active = state.coreRunning
+                )
+            }
+        }
+
+        // 3. Connected Node Location, Server Name & Ping Telemetry Strip
         item {
-            Glass3dCard(glowColor = QsColors.CloudFrontSky.copy(alpha = 0.35f)) {
+            Glass3dCard(
+                glowColor = QsColors.AuroraMint.copy(alpha = 0.28f),
+                onClick = onOpenConfigsTab
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = activeConfig?.remarks ?: stringResource(R.string.novapulse_default_server_name),
+                        color = QsColors.TextPrimary,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 14.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Text(
+                        text = state.connectedLatencyMs?.let { "$it ms" }
+                            ?: activeConfig?.delayMillis?.takeIf { it > 0L }?.let { "$it ms" }
+                            ?: "—",
+                        color = QsColors.ConnectedEmerald,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 13.sp
+                    )
+                }
+                if (state.connectedCountry.isNotBlank()) {
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = "${stringResource(R.string.novapulse_location_label)}: ${state.connectedCountry}",
+                        color = QsColors.TextSecondary,
+                        fontSize = 12.sp
+                    )
+                }
+            }
+        }
+
+        // 4. Compact Subscription Card -> Tap opens full 3D Animated Subscription Details Screen!
+        item {
+            Glass3dCard(
+                glowColor = QsColors.PlasmaViolet.copy(alpha = 0.36f),
+                onClick = onOpenSubscriptionDetails
+            ) {
+                val quota = activeSub?.quota
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -263,249 +249,99 @@ fun Qs3dConnectScreen(
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = activeConfig?.remarks ?: stringResource(R.string.qsn3d_no_config_selected),
+                            text = quota?.planName ?: activeSub?.remarks
+                                ?: stringResource(R.string.novapulse_my_subscription_title),
                             color = QsColors.TextPrimary,
                             fontWeight = FontWeight.Bold,
-                            fontSize = 15.sp,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
+                            fontSize = 14.sp
                         )
-                        val origin = activeConfig?.originDomain.orEmpty()
-                        if (origin.isNotBlank()) {
-                            Text(
-                                text = origin,
-                                color = QsColors.TextSecondary,
-                                fontSize = 12.sp,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
-                    }
-                    ProviderPillBadge(cdnType = activeCdn)
-                }
-
-                val pingInfo = state.lastCdnDetection
-                if (pingInfo != null) {
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        text = buildString {
-                            append(stringResource(R.string.qsn3d_ping_classify_result))
-                            append(": ")
-                            append(pingInfo.resolvedIp ?: "-")
-                            if (pingInfo.pingRttMs != null) {
-                                append(" (${pingInfo.pingRttMs} ms)")
+                        val exp = quota?.expireAtSeconds ?: 0L
+                        val daysSummary = when {
+                            exp > 0L -> {
+                                val d = (((exp * 1000L) - System.currentTimeMillis()) / 86_400_000L).coerceAtLeast(0L)
+                                stringResource(R.string.novapulse_days_left_fmt, d)
                             }
-                            append(" -> ")
-                            append(pingInfo.cdnType.name)
-                        },
+                            exp < 0L -> {
+                                val d = ((-exp) / 86_400L).coerceAtLeast(1L)
+                                stringResource(R.string.novapulse_days_duration_fmt, d)
+                            }
+                            else -> stringResource(R.string.novapulse_unlimited)
+                        }
+                        val remSummary = quota?.remainingBytes?.let { formatGbCompact(it) }
+                            ?: stringResource(R.string.novapulse_unlimited)
+                        Spacer(Modifier.height(2.dp))
+                        Text(
+                            text = "$remSummary • $daysSummary",
+                            color = QsColors.AuroraMint,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        TextButton(onClick = onRefreshSubs) {
+                            Text(stringResource(R.string.qsn3d_sync_btn), fontSize = 12.sp)
+                        }
+                        Text(
+                            text = stringResource(R.string.novapulse_view_details_chevron),
+                            color = QsColors.ElectricCyan,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+                if (quota?.usageFraction != null) {
+                    Spacer(Modifier.height(8.dp))
+                    LinearProgressIndicator(
+                        progress = { (1f - quota.usageFraction!!).coerceIn(0f, 1f) },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(6.dp)
+                            .clip(RoundedCornerShape(4.dp)),
                         color = QsColors.AuroraMint,
-                        fontSize = 11.sp
+                        trackColor = Color.White.copy(alpha = 0.08f)
                     )
                 }
+            }
+        }
 
-                Spacer(Modifier.height(10.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    FilterChip(
-                        selected = state.forcedCdn == null,
-                        onClick = { onForcedCdnChange(null) },
-                        label = { Text(stringResource(R.string.qsn3d_cdn_auto), fontSize = 11.sp) }
-                    )
-                    FilterChip(
-                        selected = state.forcedCdn == CdnType.CLOUDFLARE,
-                        onClick = { onForcedCdnChange(CdnType.CLOUDFLARE) },
-                        label = { Text("CF", fontSize = 11.sp) }
-                    )
-                    FilterChip(
-                        selected = state.forcedCdn == CdnType.CLOUDFRONT,
-                        onClick = { onForcedCdnChange(CdnType.CLOUDFRONT) },
-                        label = { Text("CloudFront", fontSize = 11.sp) }
-                    )
-                    Spacer(Modifier.weight(1f))
-                    TextButton(
-                        onClick = onDetectCdnPing,
-                        enabled = !state.detectingCdn && activeConfig != null
+        // 5. Post-Connect One-Time Discovery Live Banner (shows ONLY when running)
+        if (state.discoveryState.running) {
+            item {
+                val disc = state.discoveryState
+                val frac = if (disc.total > 0) (disc.done.toFloat() / disc.total).coerceIn(0f, 1f) else 0f
+                Glass3dCard(glowColor = QsColors.AuroraMint.copy(alpha = 0.45f)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            text = if (state.detectingCdn) "..." else stringResource(R.string.qsn3d_ping_detect_btn),
+                            text = stringResource(
+                                R.string.qsn3d_discovery_running_fmt,
+                                disc.activeProvider?.name ?: "CDN"
+                            ),
+                            color = QsColors.AuroraMint,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 13.sp
+                        )
+                        Text(
+                            text = "${disc.done}/${disc.total}",
+                            color = QsColors.TextPrimary,
                             fontSize = 12.sp
                         )
                     }
-                }
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = stringResource(R.string.qsn3d_configs_count_label, state.configs.size),
-                        color = QsColors.TextMuted,
-                        fontSize = 11.sp
-                    )
-                    Text(
-                        text = stringResource(R.string.qsn3d_manage_configs),
-                        color = QsColors.ElectricCyan,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier.clickable(onClick = onOpenConfigsTab)
-                    )
-                }
-            }
-        }
-
-        // 5. Subscription Quota OR License / Subscription Activation Card
-        if (activeSub != null) {
-            item {
-                SubscriptionQuotaCard(
-                    sub = activeSub,
-                    onRefresh = onRefreshSubs
-                )
-            }
-        }
-
-        item {
-            Glass3dCard(glowColor = QsColors.SolarGold.copy(alpha = 0.25f)) {
-                Text(
-                    text = stringResource(R.string.qsn3d_activation_title),
-                    color = QsColors.TextPrimary,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 14.sp
-                )
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    text = stringResource(R.string.qsn3d_activation_subtitle),
-                    color = QsColors.TextSecondary,
-                    fontSize = 12.sp
-                )
-                Spacer(Modifier.height(10.dp))
-                OutlinedTextField(
-                    value = state.activationInput,
-                    onValueChange = onActivationInputChange,
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true,
-                    placeholder = {
-                        Text(stringResource(R.string.qsn3d_activation_hint), fontSize = 12.sp)
-                    }
-                )
-                Spacer(Modifier.height(10.dp))
-                Button(
-                    onClick = onRedeemActivation,
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(14.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = QsColors.ElectricCyan,
-                        contentColor = Color(0xFF031322)
-                    )
-                ) {
-                    Text(
-                        text = stringResource(R.string.qsn3d_activate_import_btn),
-                        fontWeight = FontWeight.Bold
+                    Spacer(Modifier.height(6.dp))
+                    LinearProgressIndicator(
+                        progress = { frac },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(6.dp)
+                            .clip(RoundedCornerShape(4.dp)),
+                        color = QsColors.AuroraMint,
+                        trackColor = Color.White.copy(alpha = 0.1f)
                     )
                 }
             }
         }
     }
-}
-
-@Composable
-private fun SubscriptionQuotaCard(
-    sub: SubscriptionUiRow,
-    onRefresh: () -> Unit,
-) {
-    Glass3dCard(glowColor = QsColors.AuroraMint.copy(alpha = 0.30f)) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = sub.remarks,
-                    color = QsColors.TextPrimary,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 14.sp
-                )
-                Text(
-                    text = "${sub.configCount} configs",
-                    color = QsColors.TextSecondary,
-                    fontSize = 11.sp
-                )
-            }
-            OutlinedButton(
-                onClick = onRefresh,
-                shape = RoundedCornerShape(50),
-                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 4.dp)
-            ) {
-                Text(stringResource(R.string.qsn3d_refresh_sub), fontSize = 12.sp)
-            }
-        }
-        val q = sub.quota
-        if (q != null && (q.totalBytes > 0L || q.expireAtSeconds > 0L)) {
-            Spacer(Modifier.height(10.dp))
-            QuotaBarContent(q)
-        }
-    }
-}
-
-@Composable
-fun QuotaBarContent(quota: SubscriptionQuotaInfo) {
-    val frac = quota.usageFraction
-    if (frac != null) {
-        LinearProgressIndicator(
-            progress = { frac },
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(6.dp)
-                .clip(RoundedCornerShape(4.dp)),
-            color = if (frac > 0.85f) QsColors.DangerCrimson else QsColors.AuroraMint,
-            trackColor = Color.White.copy(alpha = 0.1f)
-        )
-        Spacer(Modifier.height(6.dp))
-    }
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween
-    ) {
-        val usedText = formatBytes(quota.usedBytes)
-        val totalText = if (quota.totalBytes > 0L) formatBytes(quota.totalBytes) else "∞"
-        Text(
-            text = "$usedText / $totalText",
-            color = QsColors.TextSecondary,
-            fontSize = 11.sp
-        )
-        if (quota.expireAtSeconds > 0L) {
-            val formattedDate = DateFormat.getDateInstance(DateFormat.MEDIUM, Locale.getDefault())
-                .format(Date(quota.expireAtSeconds * 1000L))
-            Text(
-                text = formattedDate,
-                color = QsColors.TextSecondary,
-                fontSize = 11.sp
-            )
-        }
-    }
-}
-
-private fun formatBytes(bytes: Long): String {
-    if (bytes <= 0L) return "0 MB"
-    val gb = bytes / (1024.0 * 1024.0 * 1024.0)
-    return if (gb >= 1.0) String.format(Locale.US, "%.2f GB", gb)
-    else String.format(Locale.US, "%.0f MB", bytes / (1024.0 * 1024.0))
-}
-
-@Composable
-private fun stepLabel(step: SmartStep): String = when (step) {
-    SmartStep.Idle -> ""
-    SmartStep.RedeemingAccess -> stringResource(R.string.qsn3d_step_redeeming)
-    SmartStep.RefreshingSubscription -> stringResource(R.string.qsn3d_step_refresh_sub)
-    SmartStep.SelectingProfile -> stringResource(R.string.qsn3d_step_selecting)
-    SmartStep.DetectingCdnViaPing -> stringResource(R.string.qsn3d_step_detect_cdn)
-    SmartStep.ScanningBestIp -> stringResource(R.string.qsn3d_step_scanning_ips)
-    SmartStep.ApplyingBestIp -> stringResource(R.string.qsn3d_step_applying)
-    SmartStep.StartingVpn -> stringResource(R.string.qsn3d_step_starting_vpn)
-    SmartStep.Connected -> stringResource(R.string.qsn3d_orb_connected)
-    SmartStep.Error -> stringResource(R.string.qsn3d_error_generic)
 }

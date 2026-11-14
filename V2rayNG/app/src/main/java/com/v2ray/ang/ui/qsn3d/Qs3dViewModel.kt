@@ -4,16 +4,16 @@ import android.app.Application
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
-import android.graphics.Bitmap
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.v2ray.ang.AngApplication
 import com.v2ray.ang.AppConfig
+import com.v2ray.ang.R
 import com.v2ray.ang.dto.TestServiceMessage
 import com.v2ray.ang.dto.entities.ProfileItem
-import com.v2ray.ang.dto.entities.SubscriptionItem
+import com.v2ray.ang.extension.toSpeedString
 import com.v2ray.ang.handler.AngConfigManager
 import com.v2ray.ang.handler.AppLocaleManager
 import com.v2ray.ang.handler.MmkvManager
@@ -23,7 +23,6 @@ import com.v2ray.ang.senpai.CdnPingClassifier
 import com.v2ray.ang.senpai.CdnType
 import com.v2ray.ang.senpai.CloudFrontScanner
 import com.v2ray.ang.senpai.CloudflareScanner
-import com.v2ray.ang.senpai.CloudflareSeedRanges
 import com.v2ray.ang.senpai.LicenseBackendClient
 import com.v2ray.ang.senpai.OriginDomainStore
 import com.v2ray.ang.senpai.PostConnectDiscoveryRunner
@@ -34,43 +33,35 @@ import com.v2ray.ang.senpai.SmartConnectCoordinator
 import com.v2ray.ang.senpai.SmartFlowState
 import com.v2ray.ang.senpai.SmartOptimizeWorker
 import com.v2ray.ang.senpai.SubscriptionQuotaInfo
-import com.v2ray.ang.senpai.SubscriptionQuotaStore
 import com.v2ray.ang.ui.main.MainDataSource
 import com.v2ray.ang.ui.main.MainRepository
 import com.v2ray.ang.ui.main.MainServiceEvent
-import com.v2ray.ang.util.Utils
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
 enum class Qs3dTab { Connect, Configs, Ranges, Apps }
-
-enum class ConfigFilterChip { TLS, XHTTP, WS, CLOUDFLARE, CLOUDFRONT, TESTED }
 
 data class SubscriptionUiRow(
     val guid: String,
     val remarks: String,
-    val url: String,
     val enabled: Boolean,
     val lastUpdated: Long,
     val configCount: Int,
     val quota: SubscriptionQuotaInfo?,
 )
 
+/**
+ * Privacy-hardened config representation for UI: strips protocol, host, transport, and raw
+ * endpoint details while keeping user-facing name, connection delay, and coarse CDN eligibility.
+ */
 data class ConfigUiRow(
     val guid: String,
     val subscriptionId: String,
     val remarks: String,
-    val protocol: String,
-    val network: String,
-    val security: String,
-    val originDomain: String,
-    val server: String,
-    val port: String,
     val delayMillis: Long,
     val cdnHint: CdnType,
     val eligibleForScan: Boolean,
@@ -78,10 +69,20 @@ data class ConfigUiRow(
 
 data class Qs3dUiState(
     val activeTab: Qs3dTab = Qs3dTab.Connect,
+    val showSubscriptionDetails: Boolean = false,
+    val showRangeExplorer: Boolean = false,
+    val showOptimizeConsentPrompt: Boolean = false,
+    val hasActiveLicense: Boolean = false,
+    val savedLicenseKey: String = "",
+    val isRedeemingLicense: Boolean = false,
     val coreRunning: Boolean = false,
     val selectedGuid: String? = null,
     val connectedLatencyMs: Long? = null,
+    val connectedCountry: String = "",
     val connectedTestMessage: String? = null,
+    val liveDownloadBps: Long = 0L,
+    val liveUploadBps: Long = 0L,
+    val speedDisplayEnabled: Boolean = true,
     val activationInput: String = "",
     val toastMessage: String? = null,
     val smartFlow: SmartFlowState = SmartFlowState(),
@@ -89,10 +90,9 @@ data class Qs3dUiState(
     val lastCdnDetection: CdnDetectionResult? = null,
     val forcedCdn: CdnType? = null,
     val detectingCdn: Boolean = false,
-    // Configs & subscriptions
+    // Configs & Subscriptions
     val subscriptions: List<SubscriptionUiRow> = emptyList(),
     val configs: List<ConfigUiRow> = emptyList(),
-    val activeFilters: Set<ConfigFilterChip> = emptySet(),
     val configSearchQuery: String = "",
     val bulkSelectedGuids: Set<String> = emptySet(),
     val isDelayTestingAll: Boolean = false,
@@ -107,15 +107,17 @@ data class Qs3dUiState(
     val manualDiscoveryCidr: String = "",
     val isSyncingAws: Boolean = false,
     val cloudFrontLastSyncedAt: Long = 0L,
-    // Settings / Smart automation
+    // Settings / Automation
     val autoPostConnectDiscovery: Boolean = true,
     val auto2hOptimize: Boolean = true,
     val lastOptimizeAt: Long = 0L,
     val lastOptimizeIp: String = "",
     val lastOptimizeUploadKBps: Long = 0L,
-    val backendBaseUrl: String = "",
-    val currentLanguageCode: String = "auto",
-)
+    val currentLanguageCode: String = "fa",
+) {
+    val liveDownloadFormatted: String get() = liveDownloadBps.toSpeedString()
+    val liveUploadFormatted: String get() = liveUploadBps.toSpeedString()
+}
 
 class Qs3dViewModel(
     application: Application,
@@ -125,10 +127,14 @@ class Qs3dViewModel(
     private val _uiState = MutableStateFlow(Qs3dUiState())
     val uiState: StateFlow<Qs3dUiState> = _uiState.asStateFlow()
 
+    companion object {
+        private const val PREF_OPTIMIZE_CONSENT_ASKED = "np_2h_optimize_consent_asked"
+    }
+
     init {
         collectServiceEvents()
         collectCoordinatorFlows()
-        refreshAllData()
+        refreshAllData(fetchRemoteQuota = true)
     }
 
     private fun collectServiceEvents() {
@@ -141,9 +147,15 @@ class Qs3dViewModel(
                     }
 
                     MainServiceEvent.StateStartSuccess -> {
-                        _uiState.update { it.copy(coreRunning = true) }
+                        val consentAsked = MmkvManager.decodeSettingsBool(PREF_OPTIMIZE_CONSENT_ASKED, false)
+                        _uiState.update {
+                            it.copy(
+                                coreRunning = true,
+                                showOptimizeConsentPrompt = !consentAsked,
+                            )
+                        }
                         SmartConnectCoordinator.notifyVpnConnected(getApplication(), MmkvManager.getSelectServer())
-                        refreshAllData()
+                        loadConfigsAndSubs()
                     }
 
                     MainServiceEvent.StateNotRunning,
@@ -152,7 +164,10 @@ class Qs3dViewModel(
                             it.copy(
                                 coreRunning = false,
                                 connectedLatencyMs = null,
-                                connectedTestMessage = null
+                                connectedCountry = "",
+                                connectedTestMessage = null,
+                                liveDownloadBps = 0L,
+                                liveUploadBps = 0L,
                             )
                         }
                     }
@@ -161,25 +176,37 @@ class Qs3dViewModel(
                         _uiState.update {
                             it.copy(
                                 coreRunning = false,
-                                toastMessage = "VPN core failed to start"
+                                liveDownloadBps = 0L,
+                                liveUploadBps = 0L,
+                                toastMessage = getApplication<Application>().getString(R.string.novapulse_vpn_start_failed)
                             )
                         }
                     }
 
                     is MainServiceEvent.MeasureDelayResult -> {
                         val ms = event.result.delayMillis
+                        val ctry = event.result.country.orEmpty().trim()
                         _uiState.update {
                             it.copy(
                                 connectedLatencyMs = if (ms >= 0) ms else null,
-                                connectedTestMessage = if (ms >= 0) "${ms} ms (${event.result.country.orEmpty()})"
-                                else event.result.errorMessage.ifBlank { "Timeout" }
+                                connectedCountry = ctry.ifEmpty { it.connectedCountry },
+                                connectedTestMessage = if (ms >= 0) {
+                                    if (ctry.isNotEmpty()) "${ms}ms • $ctry" else "${ms}ms"
+                                } else event.result.errorMessage
                             )
                         }
                     }
 
-                    MainServiceEvent.MeasureConfigSuccess -> {
-                        loadConfigsAndSubs()
+                    is MainServiceEvent.LiveSpeedUpdate -> {
+                        _uiState.update {
+                            it.copy(
+                                liveDownloadBps = event.proxyDownlinkBps,
+                                liveUploadBps = event.proxyUplinkBps,
+                            )
+                        }
                     }
+
+                    MainServiceEvent.MeasureConfigSuccess -> loadConfigsAndSubs()
 
                     is MainServiceEvent.MeasureConfigNotify -> {
                         _uiState.update { it.copy(delayTestProgress = event.progress) }
@@ -214,9 +241,36 @@ class Qs3dViewModel(
     }
 
     fun selectTab(tab: Qs3dTab) {
-        _uiState.update { it.copy(activeTab = tab) }
+        _uiState.update {
+            it.copy(
+                activeTab = tab,
+                showSubscriptionDetails = false,
+                showRangeExplorer = false,
+            )
+        }
         if (tab == Qs3dTab.Ranges) loadRanges(_uiState.value.activeRangeProvider)
         if (tab == Qs3dTab.Configs || tab == Qs3dTab.Connect) loadConfigsAndSubs()
+    }
+
+    fun openSubscriptionDetails(open: Boolean) {
+        _uiState.update { it.copy(showSubscriptionDetails = open) }
+        if (open) refreshQuotaOnly()
+    }
+
+    fun openRangeExplorer(open: Boolean) {
+        _uiState.update { it.copy(showRangeExplorer = open) }
+        if (open) loadRanges(_uiState.value.activeRangeProvider)
+    }
+
+    fun respondToOptimizeConsent(accepted: Boolean) {
+        MmkvManager.encodeSettings(PREF_OPTIMIZE_CONSENT_ASKED, true)
+        SmartOptimizeWorker.setEnabled(getApplication(), accepted)
+        _uiState.update {
+            it.copy(
+                showOptimizeConsentPrompt = false,
+                auto2hOptimize = accepted,
+            )
+        }
     }
 
     fun consumeToast() {
@@ -231,10 +285,22 @@ class Qs3dViewModel(
         _uiState.update { it.copy(forcedCdn = cdnType) }
     }
 
-    fun refreshAllData() {
+    fun refreshAllData(fetchRemoteQuota: Boolean = false) {
         loadConfigsAndSubs()
         loadRanges(_uiState.value.activeRangeProvider)
         refreshSmartSettings()
+        if (fetchRemoteQuota && LicenseBackendClient.getSavedLicenseKey().isNotEmpty()) {
+            refreshQuotaOnly()
+        }
+    }
+
+    fun refreshQuotaOnly() {
+        val ctx = getApplication<Application>()
+        SmartConnectCoordinator.refreshQuotaAndSubscription(ctx) { res ->
+            res.onSuccess {
+                loadConfigsAndSubs()
+            }
+        }
     }
 
     fun loadConfigsAndSubs() {
@@ -244,69 +310,63 @@ class Qs3dViewModel(
             val subs = MmkvManager.decodeSubscriptions()
             val allGuids = MmkvManager.decodeAllServerList()
 
-            val subCounts = mutableMapOf<String, Int>()
-            val frontCidrs = ProviderRangeStore.getEntries(ctx, CdnType.CLOUDFRONT).map { it.cidr }
-            val cfCidrs = ProviderRangeStore.getEntries(ctx, CdnType.CLOUDFLARE).map { it.cidr }
+            val cfCidrs = CdnPingClassifier.getAllCloudflareCidrs(ctx)
+            val frontCidrs = ProviderRangeStore.getEntries(ctx, CdnType.CLOUDFRONT)
+                .map { it.cidr }
+                .ifEmpty { ProviderRangeStore.loadBundledCloudFrontCidrs(ctx) }
 
-            val configRows = allGuids.mapNotNull { guid ->
+            val subCounts = mutableMapOf<String, Int>()
+            val rawConfigs = allGuids.mapNotNull { guid ->
                 val profile = MmkvManager.decodeServerConfig(guid) ?: return@mapNotNull null
+                if (!AutoConfigFilter.isCdnScanEligible(profile)) return@mapNotNull null
                 OriginDomainStore.rememberIfDomain(guid, profile)
                 subCounts[profile.subscriptionId] = (subCounts[profile.subscriptionId] ?: 0) + 1
                 val aff = MmkvManager.decodeServerAffiliationInfo(guid)
                 val originDomain = OriginDomainStore.getOriginDomain(guid, profile) ?: profile.server.orEmpty()
-                val cdnHint = inferCdnHint(profile, originDomain, frontCidrs, cfCidrs)
+                val cdnHint = CdnPingClassifier.inferQuickCdnType(profile, originDomain, frontCidrs, cfCidrs)
                 ConfigUiRow(
                     guid = guid,
                     subscriptionId = profile.subscriptionId,
-                    remarks = profile.remarks.ifBlank { originDomain.ifBlank { "Unnamed" } },
-                    protocol = profile.configType.name,
-                    network = profile.network.orEmpty(),
-                    security = profile.security.orEmpty(),
-                    originDomain = originDomain,
-                    server = profile.server.orEmpty(),
-                    port = profile.serverPort.orEmpty(),
+                    remarks = profile.remarks.ifBlank { ctx.getString(R.string.novapulse_default_server_name) },
                     delayMillis = aff?.testDelayMillis ?: -1L,
                     cdnHint = cdnHint,
-                    eligibleForScan = AutoConfigFilter.isCdnScanEligible(profile)
+                    eligibleForScan = true,
                 )
             }
+
+            // Pin selected / active connected server cleanly at the top
+            val sortedPinned = rawConfigs.sortedByDescending { it.guid == selected }
 
             val subRows = subs.map { cache ->
                 SubscriptionUiRow(
                     guid = cache.guid,
-                    remarks = cache.subscription.remarks.ifBlank { "Subscription" },
-                    url = cache.subscription.url,
+                    remarks = cache.subscription.remarks.ifBlank { ctx.getString(R.string.novapulse_sub_default_title) },
                     enabled = cache.subscription.enabled,
                     lastUpdated = cache.subscription.lastUpdated,
                     configCount = subCounts[cache.guid] ?: 0,
-                    quota = SubscriptionQuotaStore.get(cache.guid)
+                    quota = com.v2ray.ang.senpai.SubscriptionQuotaStore.get(cache.guid),
                 )
+            }
+
+            val savedKey = LicenseBackendClient.getSavedLicenseKey()
+            val licensed = savedKey.isNotEmpty() || rawConfigs.isNotEmpty() || subRows.isNotEmpty()
+
+            val effectiveSelected = if (selected != null && rawConfigs.any { it.guid == selected }) {
+                selected
+            } else {
+                rawConfigs.firstOrNull()?.guid?.also { MmkvManager.setSelectServer(it) }
             }
 
             _uiState.update {
                 it.copy(
-                    selectedGuid = selected,
+                    hasActiveLicense = licensed,
+                    savedLicenseKey = savedKey,
+                    selectedGuid = effectiveSelected,
                     subscriptions = subRows,
-                    configs = configRows
+                    configs = sortedPinned,
                 )
             }
         }
-    }
-
-    private fun inferCdnHint(
-        profile: ProfileItem,
-        originDomain: String,
-        frontCidrs: List<String>,
-        cfCidrs: List<String>,
-    ): CdnType {
-        val currentServer = profile.server.orEmpty().trim()
-        if (CloudflareSeedRanges.ipv4ToLong(currentServer) != null) {
-            if (CloudflareSeedRanges.matchesAnyCidr(currentServer, frontCidrs)) return CdnType.CLOUDFRONT
-            if (CloudflareSeedRanges.matchesAnyCidr(currentServer, cfCidrs)) return CdnType.CLOUDFLARE
-        }
-        val lower = originDomain.lowercase()
-        if ("cloudfront" in lower) return CdnType.CLOUDFRONT
-        return CdnType.UNKNOWN
     }
 
     fun detectCdnForSelected() {
@@ -323,112 +383,65 @@ class Qs3dViewModel(
         dataSource.testCurrentServerRealPing()
     }
 
-    fun redeemActivationInput() {
-        val input = _uiState.value.activationInput.trim()
+    fun redeemActivationInput(overrideInput: String? = null) {
+        val input = (overrideInput ?: _uiState.value.activationInput).trim()
+        val ctx = getApplication<Application>()
         if (input.isEmpty()) {
-            _uiState.update { it.copy(toastMessage = "Enter a subscription URL or license code") }
+            _uiState.update { it.copy(toastMessage = ctx.getString(R.string.novapulse_license_enter_prompt)) }
             return
         }
-        SmartConnectCoordinator.redeemInputOnly(getApplication(), input) { res ->
+        _uiState.update { it.copy(isRedeemingLicense = true) }
+        SmartConnectCoordinator.redeemInputOnly(ctx, input) { res ->
             res.onSuccess { count ->
                 _uiState.update {
                     it.copy(
+                        isRedeemingLicense = false,
+                        hasActiveLicense = true,
+                        savedLicenseKey = LicenseBackendClient.getSavedLicenseKey(),
                         activationInput = "",
-                        toastMessage = "Imported $count configs cleanly"
+                        toastMessage = ctx.getString(R.string.novapulse_license_activated_fmt, count)
                     )
                 }
                 loadConfigsAndSubs()
                 detectCdnForSelected()
             }.onFailure { err ->
-                _uiState.update { it.copy(toastMessage = err.message ?: "Activation failed") }
+                _uiState.update {
+                    it.copy(
+                        isRedeemingLicense = false,
+                        toastMessage = err.message ?: ctx.getString(R.string.novapulse_license_failed)
+                    )
+                }
             }
         }
     }
 
-    // ---------- Config & Subscription Actions ----------
+    fun logoutLicense() {
+        viewModelScope.launch(Dispatchers.IO) {
+            MmkvManager.removeAllServer()
+            MmkvManager.decodeSubscriptions().forEach { MmkvManager.removeSubscription(it.guid) }
+            LicenseBackendClient.clearSavedLicenseKey()
+            _uiState.update {
+                it.copy(
+                    hasActiveLicense = false,
+                    savedLicenseKey = "",
+                    configs = emptyList(),
+                    subscriptions = emptyList(),
+                    selectedGuid = null,
+                    showSubscriptionDetails = false,
+                )
+            }
+        }
+    }
+
+    // ---------- Config Management (Privacy-Hardened) ----------
 
     fun selectConfig(guid: String) {
         MmkvManager.setSelectServer(guid)
-        _uiState.update { it.copy(selectedGuid = guid) }
-        detectCdnForSelected()
-    }
-
-    fun addOrUpdateSubscription(remarks: String, url: String) {
-        val cleanUrl = url.trim()
-        if (cleanUrl.isEmpty()) return
-        viewModelScope.launch(Dispatchers.IO) {
-            val guid = Utils.getUuid()
-            val item = SubscriptionItem(
-                remarks = remarks.trim().ifBlank { "QuietStorm" },
-                url = cleanUrl,
-                enabled = true
-            )
-            MmkvManager.encodeSubscription(guid, item)
-            val cache = com.v2ray.ang.dto.entities.SubscriptionCache(guid, item)
-            val res = AngConfigManager.updateConfigViaSub(cache)
-            SubscriptionQuotaStore.fetchAndSaveHeader(guid, item.url, item.userAgent)
-            _uiState.update {
-                it.copy(toastMessage = "Subscription added (${res.configCount} configs)")
-            }
-            loadConfigsAndSubs()
-        }
-    }
-
-    fun toggleSubscriptionEnabled(guid: String, enabled: Boolean) {
-        viewModelScope.launch(Dispatchers.IO) {
-            val item = MmkvManager.decodeSubscription(guid) ?: return@launch
-            item.enabled = enabled
-            MmkvManager.encodeSubscription(guid, item)
-            loadConfigsAndSubs()
-        }
-    }
-
-    fun renameSubscription(guid: String, newRemarks: String) {
-        viewModelScope.launch(Dispatchers.IO) {
-            val item = MmkvManager.decodeSubscription(guid) ?: return@launch
-            item.remarks = newRemarks.trim().ifBlank { item.remarks }
-            MmkvManager.encodeSubscription(guid, item)
-            loadConfigsAndSubs()
-        }
-    }
-
-    fun deleteSubscription(guid: String) {
-        viewModelScope.launch(Dispatchers.IO) {
-            MmkvManager.removeSubscription(guid)
-            loadConfigsAndSubs()
-        }
-    }
-
-    fun refreshAllSubscriptions() {
-        viewModelScope.launch(Dispatchers.IO) {
-            val count = SmartConnectCoordinator.refreshAllSubscriptionsWithQuota(getApplication())
-            _uiState.update { it.copy(toastMessage = "Updated $count configs") }
-            loadConfigsAndSubs()
-        }
-    }
-
-    fun importClipboardConfigs() {
-        val ctx = getApplication<Application>()
-        val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-        val text = cm.primaryClip?.getItemAt(0)?.text?.toString()?.trim().orEmpty()
-        if (text.isEmpty()) {
-            _uiState.update { it.copy(toastMessage = "Clipboard is empty") }
-            return
-        }
-        viewModelScope.launch(Dispatchers.IO) {
-            val (count, subCount) = AngConfigManager.importBatchConfig(text, "", false)
-            _uiState.update {
-                it.copy(toastMessage = "Imported $count configs ($subCount subscriptions)")
-            }
-            loadConfigsAndSubs()
-        }
-    }
-
-    fun toggleFilter(chip: ConfigFilterChip) {
         _uiState.update { st ->
-            val next = if (chip in st.activeFilters) st.activeFilters - chip else st.activeFilters + chip
-            st.copy(activeFilters = next)
+            val repinned = st.configs.sortedByDescending { it.guid == guid }
+            st.copy(selectedGuid = guid, configs = repinned)
         }
+        detectCdnForSelected()
     }
 
     fun setConfigSearch(query: String) {
@@ -458,17 +471,6 @@ class Qs3dViewModel(
         }
     }
 
-    fun deleteSingleConfig(guid: String) {
-        if (guid == MmkvManager.getSelectServer()) {
-            _uiState.update { it.copy(toastMessage = "Cannot delete the active configuration") }
-            return
-        }
-        viewModelScope.launch(Dispatchers.IO) {
-            MmkvManager.removeServer(guid)
-            loadConfigsAndSubs()
-        }
-    }
-
     fun testAllDelays() {
         if (_uiState.value.isDelayTestingAll) {
             dataSource.cancelAllPing()
@@ -491,48 +493,31 @@ class Qs3dViewModel(
 
     fun sortConfigsByDelay() {
         viewModelScope.launch(Dispatchers.IO) {
+            val activeGuid = MmkvManager.getSelectServer()
+            val sorted = _uiState.value.configs.sortedWith(
+                compareBy<ConfigUiRow>(
+                    { it.guid != activeGuid },
+                    { if (it.delayMillis > 0L) 0 else 1 },
+                    { if (it.delayMillis > 0L) it.delayMillis else Long.MAX_VALUE },
+                )
+            )
             AngConfigManager.sortByTestResultsForSub("")
-            loadConfigsAndSubs()
-        }
-    }
-
-    fun removeInvalidConfigs() {
-        viewModelScope.launch(Dispatchers.IO) {
-            val removed = MmkvManager.removeInvalidServer("")
-            _uiState.update { it.copy(toastMessage = "Removed $removed timed-out configs") }
-            loadConfigsAndSubs()
-        }
-    }
-
-    fun shareQrBitmap(guid: String): Bitmap? = AngConfigManager.share2QRCode(guid)
-
-    fun copyConfigToClipboard(guid: String) {
-        val res = AngConfigManager.share2Clipboard(getApplication(), guid)
-        if (res == 0) {
-            _uiState.update { it.copy(toastMessage = "Config copied to clipboard") }
+            _uiState.update { it.copy(configs = sorted) }
         }
     }
 
     fun filteredConfigs(): List<ConfigUiRow> {
         val st = _uiState.value
+        val activeGuid = st.selectedGuid
         val q = st.configSearchQuery.trim().lowercase()
-        val f = st.activeFilters
-        return st.configs.filter { row ->
-            val matchQuery = q.isEmpty() ||
-                row.remarks.lowercase().contains(q) ||
-                row.originDomain.lowercase().contains(q) ||
-                row.server.lowercase().contains(q)
-            val matchTls = ConfigFilterChip.TLS !in f || row.security.equals("tls", ignoreCase = true)
-            val matchXhttp = ConfigFilterChip.XHTTP !in f || row.network.equals("xhttp", ignoreCase = true)
-            val matchWs = ConfigFilterChip.WS !in f || row.network.equals("ws", ignoreCase = true)
-            val matchCf = ConfigFilterChip.CLOUDFLARE !in f || row.cdnHint == CdnType.CLOUDFLARE
-            val matchFront = ConfigFilterChip.CLOUDFRONT !in f || row.cdnHint == CdnType.CLOUDFRONT
-            val matchTested = ConfigFilterChip.TESTED !in f || row.delayMillis > 0L
-            matchQuery && matchTls && matchXhttp && matchWs && matchCf && matchFront && matchTested
+        val filtered = st.configs.filter { row ->
+            q.isEmpty() || row.remarks.lowercase().contains(q)
         }
+        // Always pin connected/active server at TOP regardless of sort
+        return filtered.sortedByDescending { it.guid == activeGuid }
     }
 
-    // ---------- CDN Range & Discovery Management ----------
+    // ---------- Range & Discovery Management (Cloudflare vs CloudFront strict separation) ----------
 
     fun selectRangeProvider(provider: CdnType) {
         _uiState.update { it.copy(activeRangeProvider = provider, rangeSearchQuery = "") }
@@ -556,41 +541,6 @@ class Qs3dViewModel(
         }
     }
 
-    fun addManualCidrs(rawInput: String, provider: CdnType = _uiState.value.activeRangeProvider) {
-        val tokens = rawInput.split('\n', ',', ';', ' ')
-            .map { it.trim() }
-            .filter { it.isNotEmpty() }
-        var added = 0
-        for (token in tokens) {
-            if (ProviderRangeStore.addManualCidr(getApplication(), provider, token)) {
-                added++
-            }
-        }
-        _uiState.update { it.copy(toastMessage = "Added $added CIDR ranges to ${provider.name}") }
-        loadRanges(provider)
-    }
-
-    fun toggleCidrEnabled(entry: ProviderRangeEntry) {
-        ProviderRangeStore.setCidrEnabled(getApplication(), entry.provider, entry.cidr, !entry.enabled)
-        loadRanges(entry.provider)
-    }
-
-    fun removeCidr(entry: ProviderRangeEntry) {
-        ProviderRangeStore.removeCidr(getApplication(), entry.provider, entry.cidr)
-        loadRanges(entry.provider)
-    }
-
-    fun resetCloudflareSeeds() {
-        ProviderRangeStore.resetCloudflareSeeds(getApplication())
-        _uiState.update { it.copy(toastMessage = "Restored all 46 Cloudflare seed ranges") }
-        loadRanges(CdnType.CLOUDFLARE)
-    }
-
-    fun clearDiscoveredRanges(provider: CdnType) {
-        ProviderRangeStore.clearDiscovered(getApplication(), provider)
-        loadRanges(provider)
-    }
-
     fun copyVisibleRangesToClipboard() {
         val q = _uiState.value.rangeSearchQuery.trim().lowercase()
         val matching = _uiState.value.rangeEntries.filter {
@@ -599,18 +549,20 @@ class Qs3dViewModel(
         val text = matching.joinToString("\n") { it.cidr }
         val cm = getApplication<Application>().getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         cm.setPrimaryClip(ClipData.newPlainText("CIDR Ranges", text))
-        _uiState.update { it.copy(toastMessage = "Copied ${matching.size} CIDRs") }
+        val ctx = getApplication<Application>()
+        _uiState.update { it.copy(toastMessage = ctx.getString(R.string.novapulse_copied_ranges_fmt, matching.size)) }
     }
 
     fun syncCloudFrontOfficialRanges() {
+        val ctx = getApplication<Application>()
         viewModelScope.launch(Dispatchers.IO) {
             _uiState.update { it.copy(isSyncingAws = true) }
-            val result = ProviderRangeStore.syncCloudFrontFromAws(getApplication())
+            val result = ProviderRangeStore.syncCloudFrontFromAws(ctx)
             result.onSuccess { cidrs ->
                 _uiState.update {
                     it.copy(
                         isSyncingAws = false,
-                        toastMessage = "Synced ${cidrs.size} official AWS CloudFront ranges"
+                        toastMessage = ctx.getString(R.string.novapulse_aws_synced_fmt, cidrs.size)
                     )
                 }
                 loadRanges(CdnType.CLOUDFRONT)
@@ -618,7 +570,7 @@ class Qs3dViewModel(
                 _uiState.update {
                     it.copy(
                         isSyncingAws = false,
-                        toastMessage = "AWS sync failed: ${err.message}"
+                        toastMessage = err.message ?: ctx.getString(R.string.novapulse_aws_sync_failed)
                     )
                 }
             }
@@ -626,9 +578,10 @@ class Qs3dViewModel(
     }
 
     fun startProviderDiscovery(provider: CdnType) {
+        val ctx = getApplication<Application>()
         val guid = MmkvManager.getSelectServer() ?: _uiState.value.configs.firstOrNull()?.guid
         if (guid.isNullOrBlank()) {
-            _uiState.update { it.copy(toastMessage = "Add or select a config first for Discovery") }
+            _uiState.update { it.copy(toastMessage = ctx.getString(R.string.novapulse_need_config_first)) }
             return
         }
         _uiState.update {
@@ -639,55 +592,13 @@ class Qs3dViewModel(
                 manualDiscoveryCidr = ""
             )
         }
-        if (provider == CdnType.CLOUDFRONT) {
-            CloudFrontScanner.discoverGoodCidrs(
-                context = getApplication(),
-                guid = guid,
-                onProgress = { done, total, cidr, _ ->
-                    _uiState.update {
-                        it.copy(
-                            manualDiscoveryDone = done,
-                            manualDiscoveryTotal = total,
-                            manualDiscoveryCidr = cidr
-                        )
-                    }
-                },
-                onFinish = { found ->
-                    _uiState.update {
-                        it.copy(
-                            isManualDiscoveryRunning = false,
-                            toastMessage = "CloudFront Discovery found ${found.size} good ranges"
-                        )
-                    }
-                    loadRanges(CdnType.CLOUDFRONT)
-                }
-            )
-        } else {
-            val ispName = com.v2ray.ang.senpai.IspManager.detectIspName(getApplication())
-            CloudflareScanner.discoverGoodCidrs(
-                context = getApplication(),
-                ispName = ispName,
-                guid = guid,
-                onProgress = { done, total, cidr, _ ->
-                    _uiState.update {
-                        it.copy(
-                            manualDiscoveryDone = done,
-                            manualDiscoveryTotal = total,
-                            manualDiscoveryCidr = cidr
-                        )
-                    }
-                },
-                onFinish = { found ->
-                    _uiState.update {
-                        it.copy(
-                            isManualDiscoveryRunning = false,
-                            toastMessage = "Cloudflare Discovery found ${found.size} good ranges"
-                        )
-                    }
-                    loadRanges(CdnType.CLOUDFLARE)
-                }
-            )
-        }
+        PostConnectDiscoveryRunner.startSequentialDiscovery(
+            context = ctx,
+            guid = guid,
+            providers = listOf(provider),
+            force = true
+        )
+        _uiState.update { it.copy(isManualDiscoveryRunning = false) }
     }
 
     fun stopManualDiscovery() {
@@ -697,28 +608,19 @@ class Qs3dViewModel(
         _uiState.update { it.copy(isManualDiscoveryRunning = false) }
     }
 
-    fun runSequentialDiscoveryNow() {
-        val guid = MmkvManager.getSelectServer() ?: _uiState.value.configs.firstOrNull()?.guid
-        if (guid.isNullOrBlank()) {
-            _uiState.update { it.copy(toastMessage = "Add or select a config first") }
-            return
-        }
-        PostConnectDiscoveryRunner.startSequentialDiscovery(getApplication(), guid, force = true)
-    }
-
     // ---------- Settings & Language ----------
 
     private fun refreshSmartSettings() {
-        val lang = MmkvManager.decodeSettingsString(AppConfig.PREF_LANGUAGE) ?: "auto"
+        val lang = MmkvManager.decodeSettingsString(AppConfig.PREF_LANGUAGE) ?: "fa"
         _uiState.update {
             it.copy(
                 autoPostConnectDiscovery = PostConnectDiscoveryRunner.isAutoDiscoveryEnabled(),
                 auto2hOptimize = SmartOptimizeWorker.isEnabled(),
+                speedDisplayEnabled = MmkvManager.decodeSettingsBool(AppConfig.PREF_SPEED_ENABLED, true),
                 lastOptimizeAt = MmkvManager.decodeSettingsLong(SmartOptimizeWorker.PREF_LAST_OPTIMIZE_AT, 0L),
                 lastOptimizeIp = MmkvManager.decodeSettingsString(SmartOptimizeWorker.PREF_LAST_OPTIMIZE_IP, "").orEmpty(),
                 lastOptimizeUploadKBps = MmkvManager.decodeSettingsLong(SmartOptimizeWorker.PREF_LAST_OPTIMIZE_UPLOAD, 0L),
-                backendBaseUrl = LicenseBackendClient.getBackendBaseUrl(),
-                currentLanguageCode = lang
+                currentLanguageCode = lang,
             )
         }
     }
@@ -729,18 +631,14 @@ class Qs3dViewModel(
     }
 
     fun setAuto2hOptimize(enabled: Boolean) {
+        MmkvManager.encodeSettings(PREF_OPTIMIZE_CONSENT_ASKED, true)
         SmartOptimizeWorker.setEnabled(getApplication(), enabled)
         _uiState.update { it.copy(auto2hOptimize = enabled) }
     }
 
-    fun saveBackendBaseUrl(url: String) {
-        LicenseBackendClient.setBackendBaseUrl(url)
-        _uiState.update {
-            it.copy(
-                backendBaseUrl = LicenseBackendClient.getBackendBaseUrl(),
-                toastMessage = "Backend URL saved"
-            )
-        }
+    fun setSpeedDisplayEnabled(enabled: Boolean) {
+        MmkvManager.encodeSettings(AppConfig.PREF_SPEED_ENABLED, enabled)
+        _uiState.update { it.copy(speedDisplayEnabled = enabled) }
     }
 
     fun setLanguage(code: String) {

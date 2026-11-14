@@ -2,6 +2,7 @@ package com.v2ray.ang.senpai
 
 import android.content.Context
 import com.v2ray.ang.dto.entities.ProfileItem
+import com.v2ray.ang.dto.entities.SubscriptionCache
 import com.v2ray.ang.dto.entities.SubscriptionItem
 import com.v2ray.ang.handler.AngConfigManager
 import com.v2ray.ang.handler.MmkvManager
@@ -50,27 +51,39 @@ data class SmartFlowState(
 )
 
 /**
- * End-to-end Smart Connect pipeline layered directly on top of stage-1's reference engine:
- * 1) Redeem license or import direct subscription link (with quota parsing)
- * 2) Pick eligible VLESS+TLS (`xhttp`/`ws`) config
- * 3) Ping/resolve config domain -> auto-classify [CdnType.CLOUDFLARE] vs [CdnType.CLOUDFRONT]
- * 4) Run matching untouched September 8 IP scanner -> [CloudflareScanner.applyBestIp]
- * 5) Hand off to VPN permission + [com.v2ray.ang.core.LauncherManager.startService]
- * 6) Trigger post-first-connect discovery and schedule 2-hour background optimization.
+ * End-to-end Smart Connect pipeline layered directly on top of the September 8 engine:
+ * 1) Redeem license code (subscription URLs rejected) and fetch server-filtered CDN configs + quota
+ * 2) Pick eligible VLESS+TLS (`xhttp`/`ws`/`splithttp`) config
+ * 3) On first connect (or explicit rescan), detect Cloudflare vs CloudFront via DoH/Ping and run
+ *    the untouched September 8 IP scanner -> [CloudflareScanner.applyBestIp]
+ * 4) On subsequent reconnects when a scanned edge IP is already applied, connect immediately
+ *    without re-scanning every toggle; let [SmartOptimizeWorker] refresh IP silently every 2h
+ * 5) Trigger one-time-forever provider-scoped Discovery and schedule 2-hour background optimization.
  */
 object SmartConnectCoordinator {
 
     private const val TAG = "SmartConnectCoordinator"
+    private const val PREF_SCANNED_GUID_PREFIX = "np_scanned_edge_ready_"
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var activeJob: Job? = null
 
     private val _state = MutableStateFlow(SmartFlowState())
     val state: StateFlow<SmartFlowState> = _state.asStateFlow()
 
+    fun hasSavedEdgeIp(guid: String, profile: ProfileItem): Boolean {
+        val flag = MmkvManager.decodeSettingsBool(PREF_SCANNED_GUID_PREFIX + guid, false)
+        val srv = profile.server.orEmpty().trim()
+        return flag && CloudflareSeedRanges.ipv4ToLong(srv) != null
+    }
+
+    private fun markEdgeIpScanned(guid: String) {
+        MmkvManager.encodeSettings(PREF_SCANNED_GUID_PREFIX + guid, true)
+    }
+
     fun redeemInputOnly(
         context: Context,
         rawInput: String,
-        remarksHint: String = "QuietStorm",
+        remarksHint: String = "NovaPulse",
         onComplete: (Result<Int>) -> Unit,
     ) {
         scope.launch {
@@ -79,27 +92,45 @@ object SmartConnectCoordinator {
         }
     }
 
+    fun refreshQuotaAndSubscription(
+        context: Context,
+        onComplete: (Result<Int>) -> Unit,
+    ) {
+        scope.launch {
+            val appCtx = context.applicationContext
+            val savedKey = LicenseBackendClient.getSavedLicenseKey()
+            val result = if (savedKey.isNotEmpty()) {
+                performRedeemAndImport(appCtx, savedKey, "NovaPulse", isStatusRefresh = true)
+            } else {
+                Result.success(refreshAllSubscriptionsWithQuota(appCtx))
+            }
+            onComplete(result)
+        }
+    }
+
     /**
-     * Prepares the best config, detects CDN via domain Ping, scans optimal edge IP with the
-     * untouched September 8 engine, applies `bestIp`, and invokes [onReadyToStartVpn] on Main
-     * so the host Activity can check `VpnService.prepare` and call `LauncherManager.startService`.
+     * Connects [explicitGuid] cleanly:
+     * - If [forceRescan] is false and the profile already has a verified scanned edge IPv4,
+     *   launches VPN immediately without redundant re-scanning.
+     * - Otherwise detects CDN via DoH/Ping, runs September 8 scanner, saves `bestIp`, and starts VPN.
      */
     fun runPrepareAndScan(
         context: Context,
         rawActivationInput: String? = null,
         explicitGuid: String? = null,
         forcedCdn: CdnType? = null,
+        forceRescan: Boolean = false,
         onReadyToStartVpn: (guid: String, state: SmartFlowState) -> Unit,
     ) {
         activeJob?.cancel()
         val appContext = context.applicationContext
         activeJob = scope.launch {
             try {
-                // 1) Optional license / subscription import
+                // 1) Optional license import if server list empty
                 val input = rawActivationInput?.trim().orEmpty()
                 if (input.isNotEmpty() && MmkvManager.decodeAllServerList().isEmpty()) {
                     _state.value = SmartFlowState(busy = true, step = SmartStep.RedeemingAccess)
-                    performRedeemAndImport(appContext, input, "QuietStorm").getOrThrow()
+                    performRedeemAndImport(appContext, input, "NovaPulse").getOrThrow()
                 } else if (MmkvManager.decodeAllServerList().isEmpty() &&
                     MmkvManager.decodeSubscriptions().isNotEmpty()
                 ) {
@@ -107,29 +138,56 @@ object SmartConnectCoordinator {
                     refreshAllSubscriptionsWithQuota(appContext)
                 }
 
-                // 2) Select target config
+                // 2) Pick eligible CDN config
                 _state.value = _state.value.copy(busy = true, step = SmartStep.SelectingProfile, errorMessage = null)
                 val targetGuid = resolveTargetGuid(explicitGuid)
-                    ?: error("No valid proxy profile found. Add a subscription or config first.")
+                    ?: error("هیچ کانفیگ CDN معتبری یافت نشد.")
                 val profile = MmkvManager.decodeServerConfig(targetGuid)
-                    ?: error("Selected configuration is missing.")
+                    ?: error("اطلاعات کانفیگ انتخاب‌شده یافت نشد.")
                 OriginDomainStore.rememberIfDomain(targetGuid, profile)
                 MmkvManager.setSelectServer(targetGuid)
 
-                // 3) Detect Cloudflare vs CloudFront by pinging origin domain
+                val cfCidrs = CdnPingClassifier.getAllCloudflareCidrs(appContext)
+                val frontCidrs = ProviderRangeStore.getEntries(appContext, CdnType.CLOUDFRONT)
+                    .map { it.cidr }
+                    .ifEmpty { ProviderRangeStore.loadBundledCloudFrontCidrs(appContext) }
+                val originDomain = OriginDomainStore.getOriginDomain(targetGuid, profile).orEmpty()
+
+                // Fast path: already scanned earlier and user simply toggled reconnect
+                if (!forceRescan && hasSavedEdgeIp(targetGuid, profile)) {
+                    val quickCdn = forcedCdn?.takeIf { it != CdnType.UNKNOWN }
+                        ?: CdnPingClassifier.inferQuickCdnType(profile, originDomain, frontCidrs, cfCidrs)
+                            .let { if (it == CdnType.UNKNOWN) CdnType.CLOUDFLARE else it }
+                    val fastState = _state.value.copy(
+                        busy = false,
+                        step = SmartStep.StartingVpn,
+                        activeGuid = targetGuid,
+                        activeRemarks = profile.remarks,
+                        originDomain = originDomain,
+                        detectedCdn = quickCdn,
+                        bestIp = profile.server,
+                    )
+                    _state.value = fastState
+                    kotlinx.coroutines.withContext(Dispatchers.Main) {
+                        onReadyToStartVpn(targetGuid, fastState)
+                    }
+                    return@launch
+                }
+
+                // 3) Detect Cloudflare vs CloudFront via DoH + domain ping + CIDR match
                 _state.value = _state.value.copy(
                     step = SmartStep.DetectingCdnViaPing,
                     activeGuid = targetGuid,
                     activeRemarks = profile.remarks,
-                    originDomain = OriginDomainStore.getOriginDomain(targetGuid, profile),
+                    originDomain = originDomain,
                 )
                 val detection = if (forcedCdn != null && forcedCdn != CdnType.UNKNOWN) {
                     CdnDetectionResult(
-                        domain = OriginDomainStore.getOriginDomain(targetGuid, profile).orEmpty(),
+                        domain = originDomain,
                         resolvedIp = null,
                         pingRttMs = null,
                         cdnType = forcedCdn,
-                        reason = "Manual CDN override"
+                        reason = "انتخاب دستی CDN"
                     )
                 } else {
                     CdnPingClassifier.detectForProfile(appContext, targetGuid, profile)
@@ -149,7 +207,7 @@ object SmartConnectCoordinator {
                     scanTotal = 30,
                 )
 
-                // 4) Run matching September 8 scanner core
+                // 4) Run matching untouched September 8 scanner core
                 val best = if (resolvedCdn == CdnType.CLOUDFRONT) {
                     awaitCloudFrontScan(appContext, targetGuid)
                 } else {
@@ -164,8 +222,9 @@ object SmartConnectCoordinator {
                         bestLatencyMs = best.latencyMs,
                     )
                     CloudflareScanner.applyBestIp(targetGuid, best.ip)
+                    markEdgeIpScanned(targetGuid)
                 } else if (profile.server.isNullOrBlank()) {
-                    error("No reachable CDN IP found during scan")
+                    error("آی‌پی مناسب در اسکن یافت نشد")
                 }
 
                 val readyState = _state.value.copy(
@@ -183,20 +242,21 @@ object SmartConnectCoordinator {
                 _state.value = _state.value.copy(
                     busy = false,
                     step = SmartStep.Error,
-                    errorMessage = e.message ?: "Smart connection failed",
+                    errorMessage = e.message ?: "خطا در آماده‌سازی اتصال",
                 )
             }
         }
     }
 
     /**
-     * Called when the VPN daemon confirms active running state (`MSG_STATE_RUNNING` /
-     * `MSG_STATE_START_SUCCESS`). Schedules 2-hour periodic optimization and starts first-connect
-     * sequential CloudFront -> Cloudflare ISP discovery on physical uplink.
+     * Called when VPN daemon confirms active running state. Schedules 2h periodic optimization
+     * (if consented) and triggers one-time-forever Discovery ONLY for CDN providers actually
+     * present in user configs.
      */
     fun notifyVpnConnected(context: Context, guid: String?) {
         val targetGuid = guid ?: MmkvManager.getSelectServer()
-        _state.value = _state.value.copy(
+        val prev = _state.value
+        _state.value = prev.copy(
             busy = false,
             step = SmartStep.Connected,
             activeGuid = targetGuid,
@@ -204,9 +264,35 @@ object SmartConnectCoordinator {
         )
         SmartOptimizeWorker.schedule(context)
         if (!targetGuid.isNullOrBlank()) {
-            val profile = MmkvManager.decodeServerConfig(targetGuid)
-            if (AutoConfigFilter.isCdnScanEligible(profile)) {
-                PostConnectDiscoveryRunner.maybeRunAfterFirstConnect(context, targetGuid)
+            scope.launch {
+                val appCtx = context.applicationContext
+                val profile = MmkvManager.decodeServerConfig(targetGuid) ?: return@launch
+                if (!AutoConfigFilter.isCdnScanEligible(profile)) return@launch
+
+                val cfCidrs = CdnPingClassifier.getAllCloudflareCidrs(appCtx)
+                val frontCidrs = ProviderRangeStore.getEntries(appCtx, CdnType.CLOUDFRONT)
+                    .map { it.cidr }
+                    .ifEmpty { ProviderRangeStore.loadBundledCloudFrontCidrs(appCtx) }
+
+                val allProviders = MmkvManager.decodeAllServerList().mapNotNull { g ->
+                    val p = MmkvManager.decodeServerConfig(g) ?: return@mapNotNull null
+                    val dom = OriginDomainStore.getOriginDomain(g, p) ?: p.server.orEmpty()
+                    CdnPingClassifier.inferQuickCdnType(p, dom, frontCidrs, cfCidrs)
+                }
+                val activeProvider = prev.detectedCdn.takeIf { it != CdnType.UNKNOWN }
+                    ?: CdnPingClassifier.inferQuickCdnType(
+                        profile,
+                        OriginDomainStore.getOriginDomain(targetGuid, profile) ?: profile.server.orEmpty(),
+                        frontCidrs,
+                        cfCidrs
+                    ).let { if (it == CdnType.UNKNOWN) CdnType.CLOUDFLARE else it }
+
+                PostConnectDiscoveryRunner.maybeRunAfterFirstConnect(
+                    context = appCtx,
+                    guid = targetGuid,
+                    activeProvider = activeProvider,
+                    subscriptionProviders = allProviders,
+                )
             }
         }
     }
@@ -231,22 +317,34 @@ object SmartConnectCoordinator {
                 userAgent = subCache.subscription.userAgent
             )
         }
+        purgeNonCdnConfigs()
         return totalConfigs
+    }
+
+    private fun purgeNonCdnConfigs() {
+        for (guid in MmkvManager.decodeAllServerList()) {
+            val profile = MmkvManager.decodeServerConfig(guid) ?: continue
+            if (!AutoConfigFilter.isCdnScanEligible(profile)) {
+                MmkvManager.removeServer(guid)
+            }
+        }
     }
 
     private fun performRedeemAndImport(
         context: Context,
         rawInput: String,
         remarksHint: String,
+        isStatusRefresh: Boolean = false,
     ): Result<Int> {
         val deviceId = runCatching { Utils.getDeviceIdForXUDPBaseKey() }.getOrDefault("")
-        return when (val redeemed = LicenseBackendClient.redeem(rawInput, remarksHint, deviceId)) {
+        val redeemed = if (isStatusRefresh) {
+            LicenseBackendClient.refreshStatus(rawInput, deviceId, remarksHint)
+        } else {
+            LicenseBackendClient.redeem(rawInput, remarksHint, deviceId)
+        }
+        return when (redeemed) {
             is LicenseResolutionResult.BackendEndpointRequired ->
-                Result.failure(
-                    IllegalStateException(
-                        "License saved (${redeemed.licenseKey}). Enter a direct subscription URL or configure Panel Backend URL in Settings."
-                    )
-                )
+                Result.failure(IllegalStateException("آدرس سرور لایسنس تنظیم نشده است."))
 
             is LicenseResolutionResult.Failure ->
                 Result.failure(IllegalStateException(redeemed.reason))
@@ -254,18 +352,21 @@ object SmartConnectCoordinator {
             is LicenseResolutionResult.ReadySubscription -> {
                 val existing = MmkvManager.decodeSubscriptions()
                     .firstOrNull { it.subscription.url.trim() == redeemed.subscriptionUrl.trim() }
+                    ?: MmkvManager.decodeSubscriptions().firstOrNull()
                 val subId = existing?.guid ?: Utils.getUuid()
                 val item = existing?.subscription?.apply {
                     enabled = true
-                    if (remarks.isBlank()) remarks = redeemed.remarks
+                    url = redeemed.subscriptionUrl
+                    remarks = redeemed.remarks
                 } ?: SubscriptionItem(
                     remarks = redeemed.remarks,
                     url = redeemed.subscriptionUrl,
                     enabled = true,
                 )
                 MmkvManager.encodeSubscription(subId, item)
-                val cache = com.v2ray.ang.dto.entities.SubscriptionCache(subId, item)
+                val cache = SubscriptionCache(subId, item)
                 val updateRes = AngConfigManager.updateConfigViaSub(cache)
+                purgeNonCdnConfigs()
                 if (redeemed.quota != null) {
                     SubscriptionQuotaStore.save(subId, redeemed.quota)
                 } else {
@@ -274,7 +375,7 @@ object SmartConnectCoordinator {
                 if (updateRes.configCount > 0) {
                     Result.success(updateRes.configCount)
                 } else {
-                    Result.failure(IllegalStateException("Subscription imported 0 valid configs"))
+                    Result.failure(IllegalStateException("هیچ کانفیگ CDN معتبری برای این لایسنس یافت نشد."))
                 }
             }
         }

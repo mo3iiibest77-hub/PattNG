@@ -165,7 +165,7 @@ class CfScanService : Service() {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
         return Notification.Builder(this, CHANNEL_ID)
-            .setContentTitle("QuietStorm Scanner")
+            .setContentTitle(getString(R.string.app_name))
             .setContentText(text)
             .setSmallIcon(R.drawable.ic_stat_name)
             .addAction(Notification.Action.Builder(null, "توقف", stopPi).build())
