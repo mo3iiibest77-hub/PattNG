@@ -148,7 +148,7 @@ object CloudFrontScanner {
         background: Boolean = true,
         onFinish: (List<QualifiedRange>) -> Unit = {},
     ): Boolean {
-        synchronized(discoveryLock) {
+        return synchronized(discoveryLock) {
             if (discoveryJob.isActive) return false
             val base: ProfileItem = MmkvManager.decodeServerConfig(guid) ?: run {
                 _discovery.update { it.copy(phase = DiscoveryPhase.Failed) }
