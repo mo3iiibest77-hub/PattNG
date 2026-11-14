@@ -123,7 +123,7 @@ object RangeSet {
      * audit). The old value of 64 silently truncated discovery results; a limit
      * that the real dataset can reach is a hidden cap, not a safety net.
      */
-    const val MAX_RANGES: Int = 1024
+    const val MAX_RANGES: Int = 4096
 
     /**
      * Normalises [raw] into a valid, distinct, best-first list.

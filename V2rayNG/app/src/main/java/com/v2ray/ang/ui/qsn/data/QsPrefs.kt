@@ -1,7 +1,10 @@
 package com.v2ray.ang.ui.qsn.data
 
 import com.v2ray.ang.handler.MmkvManager
+import com.v2ray.ang.ui.qsn.domain.AutoOptimizationPolicy
+import com.v2ray.ang.ui.qsn.domain.EdgeProvider
 import com.v2ray.ang.ui.qsn.domain.IpSelection
+import com.v2ray.ang.ui.qsn.domain.ProviderRangeBucket
 import com.v2ray.ang.ui.qsn.domain.QualifiedRange
 import com.v2ray.ang.ui.qsn.domain.RangeSet
 import com.v2ray.ang.ui.qsn.domain.ScanRange
@@ -35,6 +38,13 @@ object QsPrefs {
     private const val KEY_LAST_ISP = "qsn_last_isp"
     private const val KEY_RANGE_SELECTION = "qsn_range_selection_v1"
     private const val KEY_DISCOVERY_TARGET = "qsn_discovery_target_v1"
+    private const val KEY_SELECTED_PROVIDER = "qsn_selected_provider_v1"
+    private const val KEY_PROVIDER_BUCKET_PREFIX = "qsn_provider_bucket_v1_"
+    private const val KEY_AUTO_OPT_ENABLED = "qsn_auto_opt_enabled_v1"
+    private const val KEY_AUTO_OPT_HOURS = "qsn_auto_opt_hours_v1"
+    private const val KEY_LAST_AUTO_OPT_AT = "qsn_last_auto_opt_at_v1"
+    private const val KEY_LAST_AUTO_OPT_STATUS = "qsn_last_auto_opt_status_v1"
+    private const val KEY_CLOUDFRONT_SYNC_AT = "qsn_cloudfront_sync_at_v1"
 
     // ---------- Selected Cloudflare IP ----------
 
@@ -268,5 +278,57 @@ object QsPrefs {
 
     fun markScanned(at: Long) {
         MmkvManager.encodeSettings(KEY_LAST_SCAN_AT, at.toString())
+    }
+
+    // ---------- Providers, Auto-Optimization & CloudFront metadata ----------
+
+    fun selectedProvider(): EdgeProvider =
+        EdgeProvider.fromId(MmkvManager.decodeSettingsString(KEY_SELECTED_PROVIDER))
+
+    fun setSelectedProvider(provider: EdgeProvider) {
+        MmkvManager.encodeSettings(KEY_SELECTED_PROVIDER, provider.id)
+    }
+
+    fun loadProviderBucketJson(provider: EdgeProvider): String? =
+        MmkvManager.decodeSettingsString(KEY_PROVIDER_BUCKET_PREFIX + provider.id)
+
+    fun saveProviderBucketJson(provider: EdgeProvider, json: String) {
+        MmkvManager.encodeSettings(KEY_PROVIDER_BUCKET_PREFIX + provider.id, json)
+    }
+
+    fun autoOptimizeEnabled(): Boolean =
+        MmkvManager.decodeSettingsBool(KEY_AUTO_OPT_ENABLED, true)
+
+    fun setAutoOptimizeEnabled(enabled: Boolean) {
+        MmkvManager.encodeSettings(KEY_AUTO_OPT_ENABLED, enabled)
+    }
+
+    fun autoOptimizeIntervalHours(): Int {
+        val raw = MmkvManager.decodeSettingsString(KEY_AUTO_OPT_HOURS)?.toIntOrNull()
+            ?: AutoOptimizationPolicy.DEFAULT_INTERVAL_HOURS
+        return AutoOptimizationPolicy.clampIntervalHours(raw)
+    }
+
+    fun setAutoOptimizeIntervalHours(hours: Int) {
+        val clamped = AutoOptimizationPolicy.clampIntervalHours(hours)
+        MmkvManager.encodeSettings(KEY_AUTO_OPT_HOURS, clamped.toString())
+    }
+
+    fun lastAutoOptimizeAt(): Long =
+        MmkvManager.decodeSettingsString(KEY_LAST_AUTO_OPT_AT)?.toLongOrNull() ?: 0L
+
+    fun lastAutoOptimizeStatus(): String =
+        MmkvManager.decodeSettingsString(KEY_LAST_AUTO_OPT_STATUS).orEmpty()
+
+    fun markAutoOptimized(at: Long, status: String) {
+        MmkvManager.encodeSettings(KEY_LAST_AUTO_OPT_AT, at.toString())
+        MmkvManager.encodeSettings(KEY_LAST_AUTO_OPT_STATUS, status)
+    }
+
+    fun cloudFrontLastSyncedAt(): Long =
+        MmkvManager.decodeSettingsString(KEY_CLOUDFRONT_SYNC_AT)?.toLongOrNull() ?: 0L
+
+    fun markCloudFrontSynced(at: Long) {
+        MmkvManager.encodeSettings(KEY_CLOUDFRONT_SYNC_AT, at.toString())
     }
 }

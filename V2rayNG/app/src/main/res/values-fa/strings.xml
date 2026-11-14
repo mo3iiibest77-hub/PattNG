@@ -825,4 +825,46 @@
     <string name="qs_delete_selected">حذف (%1$d)</string>
     <string name="qs_bulk_delete_title">کانفیگ‌های انتخاب‌شده حذف شوند؟</string>
     <string name="qs_bulk_delete_body">%1$d کانفیگ از دستگاه حذف می‌شود. کانفیگ در حال استفاده یا انتخاب‌شده نگه داشته می‌شود. بقیه در به‌روزرسانی بعدی اشتراک برمی‌گردند.</string>
+
+    <!-- Smart VPN & Multi-Provider Architecture -->
+    <string name="qs_license_status_unconfigured">اشتراک مستقیم فعال است (آماده اتصال به بک‌اند)</string>
+    <string name="qs_license_status_active">لایسنس فعال است</string>
+    <string name="qs_license_status_expired">لایسنس منقضی شده است</string>
+    <string name="qs_license_status_invalid">لایسنس نامعتبر است</string>
+    <string name="qs_license_status_error">خطا در بررسی لایسنس</string>
+    <string name="qs_seeds_restored">۴۶ رنج پایه Cloudflare بازیابی شد.</string>
+    <string name="qs_cloudfront_synced_count">%1$d رنج رسمی CloudFront همگام‌سازی شد.</string>
+    <string name="qs_cloudfront_sync_failed">خطا در همگام‌سازی CloudFront: %1$s</string>
+    <string name="qs_cloudfront_discovery_done">کشف CloudFront پایان یافت: %1$d رنج معتبر.</string>
+    <string name="qs_auto_opt_triggered">بهینه‌سازی خودکار در پس‌زمینه شروع شد.</string>
+    <string name="qs_smart_title">هوشمندسازی اتصال VPN</string>
+    <string name="qs_smart_provider_label">سرویس‌دهنده فعال CDN</string>
+    <string name="qs_provider_cloudflare">Cloudflare</string>
+    <string name="qs_provider_cloudfront">Amazon CloudFront</string>
+    <string name="qs_smart_quick_connect">اتصال سریع تک‌کلیک</string>
+    <string name="qs_smart_auto_optimize">بهینه‌سازی دوره‌ای خودکار</string>
+    <string name="qs_smart_interval_hours">هر %1$d ساعت</string>
+    <string name="qs_smart_optimize_now">بهینه‌سازی الان</string>
+    <string name="qs_smart_last_optimize">آخرین بهینه‌سازی: %1$s</string>
+    <string name="qs_smart_last_optimize_status">وضعیت: %1$s</string>
+    <string name="qs_smart_never_optimized">هنوز بهینه‌سازی خودکار اجرا نشده است</string>
+    <string name="qs_smart_network_type">شبکه فیزیکی: %1$s</string>
+    <string name="qs_smart_backend_label">لایسنس / بک‌اند: %1$s</string>
+    <string name="qs_managed_ranges_title">رنج‌های ذخیره‌شده %1$s (%2$d)</string>
+    <string name="qs_managed_ranges_breakdown">پایه %1$d · کشف‌شده %2$d · دستی %3$d</string>
+    <string name="qs_ranges_search_hint">جستجوی رنج CIDR (مثلاً 104.16)</string>
+    <string name="qs_copy_all">کپی همه</string>
+    <string name="qs_copied_all_count">%1$d رنج در حافظه کپی شد.</string>
+    <string name="qs_restore_seeds">بازیابی ۴۶ رنج پایه</string>
+    <string name="qs_origin_seed">پایه</string>
+    <string name="qs_origin_discovered">کشف‌شده</string>
+    <string name="qs_origin_manual">دستی</string>
+    <string name="qs_origin_fetched">AWS</string>
+    <string name="qs_cloudfront_panel_title">رنج‌های رسمی Amazon CloudFront</string>
+    <string name="qs_cloudfront_sync_btn">دریافت رنج‌های AWS</string>
+    <string name="qs_cloudfront_syncing">در حال دریافت رنج‌های AWS…</string>
+    <string name="qs_cloudfront_last_sync">آخرین همگام‌سازی AWS: %1$s</string>
+    <string name="qs_cloudfront_never_synced">رنج‌های CloudFront هنوز دریافت نشده‌اند</string>
+    <string name="qs_cloudfront_discover_btn">کشف رنج CloudFront</string>
+    <string name="qs_discovery_physical_badge">اجرا مستقیماً روی اینترنت فیزیکی (بدون عبور از تونل VPN)</string>
 </resources>

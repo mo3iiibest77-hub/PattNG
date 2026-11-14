@@ -38,6 +38,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -46,16 +47,20 @@ import androidx.compose.ui.unit.dp
 import com.v2ray.ang.R
 import com.v2ray.ang.senpai.IspProfile
 import com.v2ray.ang.ui.qsn.domain.DiscoveryPhase
-import com.v2ray.ang.ui.qsn.domain.RangeOutcome
-import com.v2ray.ang.ui.qsn.domain.RangeState
-import com.v2ray.ang.ui.qsn.domain.ScanCandidate
 import com.v2ray.ang.ui.qsn.domain.DiscoveryStatus
+import com.v2ray.ang.ui.qsn.domain.EdgeProvider
+import com.v2ray.ang.ui.qsn.domain.ManagedRange
 import com.v2ray.ang.ui.qsn.domain.MetricFormat
 import com.v2ray.ang.ui.qsn.domain.QualifiedRange
+import com.v2ray.ang.ui.qsn.domain.RangeOrigin
+import com.v2ray.ang.ui.qsn.domain.RangeOutcome
+import com.v2ray.ang.ui.qsn.domain.RangeState
 import com.v2ray.ang.ui.qsn.domain.RangesSummary
+import com.v2ray.ang.ui.qsn.domain.ScanCandidate
 import com.v2ray.ang.ui.qsn.domain.ScanRange
 import com.v2ray.ang.ui.qsn.domain.ScanRangeParser
 import com.v2ray.ang.ui.qsn.domain.ScanRangePlanner
+import com.v2ray.ang.util.Utils
 
 /**
  * The IP Ranges tab.
@@ -84,8 +89,28 @@ fun QsRangesScreen(
     onRemoveManual: (String) -> Unit,
     onToggleRange: (String) -> Unit,
     onOpenDiscovery: () -> Unit,
+    onSelectProvider: (EdgeProvider) -> Unit = {},
+    onRangeSearchChange: (String) -> Unit = {},
+    onToggleManagedRange: (EdgeProvider, String) -> Unit = { _, _ -> },
+    onRemoveManagedRange: (EdgeProvider, String) -> Unit = { _, _ -> },
+    onRestoreSeeds: () -> Unit = {},
+    onSyncCloudFront: () -> Unit = {},
+    onStartCloudFrontDiscovery: () -> Unit = {},
+    onStopCloudFrontDiscovery: () -> Unit = {},
 ) {
+    val context = LocalContext.current
     var input by rememberSaveable { mutableStateOf("") }
+    val activeManaged = if (state.selectedProvider == EdgeProvider.CLOUDFRONT) {
+        state.cloudFrontRanges
+    } else {
+        state.providerRanges
+    }
+    val filteredManaged = if (state.rangeSearchQuery.isBlank()) {
+        activeManaged
+    } else {
+        val needle = state.rangeSearchQuery.trim()
+        activeManaged.filter { it.cidr.contains(needle, ignoreCase = true) }
+    }
     val enabled = RangesSummary.enabled(state.ranges)
     val total = RangesSummary.total(state.ranges)
     val estimated = minOf(
@@ -170,6 +195,25 @@ fun QsRangesScreen(
             }
         }
 
+        item(key = "provider-selector") {
+            ProviderSelectorCard(
+                selected = state.selectedProvider,
+                onSelect = onSelectProvider,
+            )
+        }
+
+        if (state.selectedProvider == EdgeProvider.CLOUDFRONT) {
+            item(key = "cloudfront-panel") {
+                CloudFrontPanelCard(
+                    state = state,
+                    onSync = onSyncCloudFront,
+                    onStartDiscovery = onStartCloudFrontDiscovery,
+                    onStopDiscovery = onStopCloudFrontDiscovery,
+                    onScanNow = onScanNow,
+                )
+            }
+        }
+
         item(key = "isp-discovery") {
             IspDiscoveryCard(
                 state = state,
@@ -218,12 +262,13 @@ fun QsRangesScreen(
                     Spacer(Modifier.height(8.dp))
                     OutlinedButton(
                         onClick = onScanNow,
-                        // Stage 2 measures the ISP's stored ranges, so a user who
-                        // never added a manual range must still be able to scan
-                        // after discovery qualified some.
+                        // Stage 2 measures the ISP's stored ranges or active provider's
+                        // managed ranges (46 seeds / synced CloudFront), so first-run scan
+                        // works immediately without blocking on discovery.
                         enabled = !state.scanningNow &&
                             (enabled > 0 || state.discovery.qualified > 0 ||
-                                state.manualRanges.isNotEmpty()),
+                                state.manualRanges.isNotEmpty() ||
+                                activeManaged.any { it.enabled }),
                         modifier = Modifier.fillMaxWidth(),
                     ) {
                         Text(
@@ -351,9 +396,314 @@ fun QsRangesScreen(
             }
         }
 
+        item(key = "managed-ranges-header") {
+            ManagedRangesHeaderCard(
+                provider = state.selectedProvider,
+                allRanges = activeManaged,
+                filteredRanges = filteredManaged,
+                searchQuery = state.rangeSearchQuery,
+                onSearchChange = onRangeSearchChange,
+                onCopyAll = {
+                    val text = filteredManaged.joinToString("\n") { it.cidr }
+                    if (text.isNotEmpty()) {
+                        Utils.setClipboard(context, text)
+                    }
+                },
+                onRestoreSeeds = onRestoreSeeds,
+            )
+        }
+
+        items(
+            items = filteredManaged,
+            key = { item -> "mgr-" + item.provider.id + "-" + item.cidr },
+        ) { item ->
+            ManagedRangeRow(
+                range = item,
+                editable = !state.scanningNow,
+                onCopy = { Utils.setClipboard(context, item.cidr) },
+                onToggle = { onToggleManagedRange(item.provider, item.cidr) },
+                onRemove = { onRemoveManagedRange(item.provider, item.cidr) },
+            )
+        }
+
         item(key = "rescan") {
             TextButton(onClick = onRescanNext, modifier = Modifier.fillMaxWidth()) {
                 Text(stringResource(R.string.qs_range_rescan))
+            }
+        }
+    }
+}
+
+@Composable
+private fun ProviderSelectorCard(
+    selected: EdgeProvider,
+    onSelect: (EdgeProvider) -> Unit,
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                text = stringResource(R.string.qs_smart_provider_label),
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (selected == EdgeProvider.CLOUDFLARE) {
+                    Button(
+                        onClick = { onSelect(EdgeProvider.CLOUDFLARE) },
+                        modifier = Modifier.weight(1f),
+                    ) { Text(stringResource(R.string.qs_provider_cloudflare)) }
+                    OutlinedButton(
+                        onClick = { onSelect(EdgeProvider.CLOUDFRONT) },
+                        modifier = Modifier.weight(1f),
+                    ) { Text(stringResource(R.string.qs_provider_cloudfront)) }
+                } else {
+                    OutlinedButton(
+                        onClick = { onSelect(EdgeProvider.CLOUDFLARE) },
+                        modifier = Modifier.weight(1f),
+                    ) { Text(stringResource(R.string.qs_provider_cloudflare)) }
+                    Button(
+                        onClick = { onSelect(EdgeProvider.CLOUDFRONT) },
+                        modifier = Modifier.weight(1f),
+                    ) { Text(stringResource(R.string.qs_provider_cloudfront)) }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CloudFrontPanelCard(
+    state: QsUiState,
+    onSync: () -> Unit,
+    onStartDiscovery: () -> Unit,
+    onStopDiscovery: () -> Unit,
+    onScanNow: () -> Unit,
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                text = stringResource(R.string.qs_cloudfront_panel_title),
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = if (state.cloudFrontLastSyncedAt > 0L) {
+                    stringResource(
+                        R.string.qs_cloudfront_last_sync,
+                        formatTimestamp(state.cloudFrontLastSyncedAt),
+                    )
+                } else {
+                    stringResource(R.string.qs_cloudfront_never_synced)
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(
+                    onClick = onSync,
+                    enabled = !state.cloudFrontSyncing,
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text(
+                        text = stringResource(
+                            if (state.cloudFrontSyncing) {
+                                R.string.qs_cloudfront_syncing
+                            } else {
+                                R.string.qs_cloudfront_sync_btn
+                            },
+                        ),
+                    )
+                }
+                if (state.cloudFrontDiscovery.isActive) {
+                    OutlinedButton(
+                        onClick = onStopDiscovery,
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text(stringResource(R.string.qs_discovery_stop))
+                    }
+                } else {
+                    OutlinedButton(
+                        onClick = onStartDiscovery,
+                        enabled = state.cloudFrontRanges.isNotEmpty() || !state.cloudFrontSyncing,
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text(stringResource(R.string.qs_cloudfront_discover_btn))
+                    }
+                }
+            }
+            if (state.cloudFrontDiscovery.total > 0) {
+                Spacer(Modifier.height(8.dp))
+                val fraction = (state.cloudFrontDiscovery.done.toFloat() /
+                    state.cloudFrontDiscovery.total.toFloat()).coerceIn(0f, 1f)
+                LinearProgressIndicator(
+                    progress = { fraction },
+                    modifier = Modifier.fillMaxWidth().height(4.dp),
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    text = stringResource(
+                        R.string.qs_discovery_counts,
+                        state.cloudFrontDiscovery.qualified,
+                        state.cloudFrontDiscovery.failed,
+                        state.cloudFrontDiscovery.errors,
+                        state.cloudFrontDiscovery.done,
+                        state.cloudFrontDiscovery.total,
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Spacer(Modifier.height(6.dp))
+            OutlinedButton(
+                onClick = onScanNow,
+                enabled = !state.scanningNow && state.cloudFrontRanges.any { it.enabled },
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(
+                    text = if (state.scanningNow) {
+                        stringResource(R.string.qs_scanning)
+                    } else {
+                        stringResource(R.string.qs_scan_now)
+                    },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ManagedRangesHeaderCard(
+    provider: EdgeProvider,
+    allRanges: List<ManagedRange>,
+    filteredRanges: List<ManagedRange>,
+    searchQuery: String,
+    onSearchChange: (String) -> Unit,
+    onCopyAll: () -> Unit,
+    onRestoreSeeds: () -> Unit,
+) {
+    val providerLabel = stringResource(
+        if (provider == EdgeProvider.CLOUDFRONT) R.string.qs_provider_cloudfront else R.string.qs_provider_cloudflare,
+    )
+    val seedCount = allRanges.count { it.origin == RangeOrigin.SEED || it.origin == RangeOrigin.FETCHED }
+    val discCount = allRanges.count { it.origin == RangeOrigin.DISCOVERED }
+    val manualCount = allRanges.count { it.origin == RangeOrigin.MANUAL }
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                text = stringResource(R.string.qs_managed_ranges_title, providerLabel, allRanges.size),
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = stringResource(
+                    R.string.qs_managed_ranges_breakdown,
+                    seedCount,
+                    discCount,
+                    manualCount,
+                ),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(8.dp))
+            OutlinedTextField(
+                value = searchQuery,
+                onValueChange = onSearchChange,
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                placeholder = { Text(stringResource(R.string.qs_ranges_search_hint)) },
+            )
+            Spacer(Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(
+                    onClick = onCopyAll,
+                    enabled = filteredRanges.isNotEmpty(),
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text(stringResource(R.string.qs_copy_all))
+                }
+                if (provider == EdgeProvider.CLOUDFLARE) {
+                    OutlinedButton(
+                        onClick = onRestoreSeeds,
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text(stringResource(R.string.qs_restore_seeds))
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ManagedRangeRow(
+    range: ManagedRange,
+    editable: Boolean,
+    onCopy: () -> Unit,
+    onToggle: () -> Unit,
+    onRemove: () -> Unit,
+) {
+    val originText = when (range.origin) {
+        RangeOrigin.SEED -> stringResource(R.string.qs_origin_seed)
+        RangeOrigin.DISCOVERED -> stringResource(R.string.qs_origin_discovered)
+        RangeOrigin.MANUAL -> stringResource(R.string.qs_origin_manual)
+        RangeOrigin.FETCHED -> stringResource(R.string.qs_origin_fetched)
+    }
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(14.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = range.cidr,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Medium,
+                )
+                Text(
+                    text = if (range.uploadKBps > 0L) {
+                        "$originText · ↑ ${range.uploadKBps} KB/s · ${range.latencyMs} ms"
+                    } else {
+                        originText
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            TextButton(onClick = onCopy) {
+                Text(stringResource(R.string.qs_copy))
+            }
+            Switch(
+                checked = range.enabled,
+                enabled = editable,
+                onCheckedChange = { onToggle() },
+            )
+            IconButton(onClick = onRemove, enabled = editable) {
+                Icon(
+                    painter = painterResource(R.drawable.ic_delete_24dp),
+                    contentDescription = stringResource(R.string.qs_manual_remove, range.cidr),
+                )
             }
         }
     }

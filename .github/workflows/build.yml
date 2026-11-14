@@ -10,6 +10,7 @@ on:
     branches:
       - master
       - feature/minimal-cloudflare-vpn
+      - feat/smart-vpn-ref-engine
     paths:
       # Run the Android build + app tests only when the application or a
       # build-critical input changes. Documentation-only changes (CLAUDE.md,

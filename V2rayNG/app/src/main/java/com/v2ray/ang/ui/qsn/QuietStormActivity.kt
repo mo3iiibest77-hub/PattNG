@@ -282,6 +282,13 @@ class QuietStormActivity : HelperBaseComponentActivity() {
                                 onOpenAddConfig = { qsViewModel.openImport() },
                                 onCloseAddConfig = { qsViewModel.closeImport() },
                                 onAddConfig = { qsViewModel.importManualConfig(it) },
+                                onSelectProvider = { qsViewModel.selectProvider(it) },
+                                onSetQuickConnectEnabled = { qsViewModel.setQuickConnectEnabled(it) },
+                                onSetAutoOptimizeEnabled = { qsViewModel.setAutoOptimizeEnabled(it) },
+                                onSetAutoOptimizeIntervalHours = {
+                                    qsViewModel.setAutoOptimizeIntervalHours(it)
+                                },
+                                onTriggerAutoOptimizeNow = { qsViewModel.triggerAutoOptimizeNow() },
                             )
                         }
 
@@ -357,6 +364,18 @@ class QuietStormActivity : HelperBaseComponentActivity() {
                             onRemoveManual = { qsViewModel.removeManualRange(it) },
                             onToggleRange = { qsViewModel.toggleRangeSelection(it) },
                             onOpenDiscovery = { qsViewModel.openDiscovery() },
+                            onSelectProvider = { qsViewModel.selectProvider(it) },
+                            onRangeSearchChange = { qsViewModel.onRangeSearchChange(it) },
+                            onToggleManagedRange = { provider, cidr ->
+                                qsViewModel.toggleManagedRange(provider, cidr)
+                            },
+                            onRemoveManagedRange = { provider, cidr ->
+                                qsViewModel.removeManagedRange(provider, cidr)
+                            },
+                            onRestoreSeeds = { qsViewModel.restoreCloudflareSeeds() },
+                            onSyncCloudFront = { qsViewModel.syncCloudFrontRanges() },
+                            onStartCloudFrontDiscovery = { qsViewModel.startCloudFrontDiscovery() },
+                            onStopCloudFrontDiscovery = { qsViewModel.stopCloudFrontDiscovery() },
                         )
 
                         else -> QsAppsScreen(

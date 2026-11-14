@@ -28,6 +28,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -43,6 +44,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.v2ray.ang.R
+import com.v2ray.ang.ui.qsn.domain.EdgeProvider
 import com.v2ray.ang.ui.qsn.domain.MetricFormat
 import com.v2ray.ang.util.Utils
 
@@ -70,6 +72,11 @@ fun QsConnectScreen(
     onOpenAddConfig: () -> Unit,
     onCloseAddConfig: () -> Unit,
     onAddConfig: (String) -> Unit,
+    onSelectProvider: (EdgeProvider) -> Unit = {},
+    onSetQuickConnectEnabled: (Boolean) -> Unit = {},
+    onSetAutoOptimizeEnabled: (Boolean) -> Unit = {},
+    onSetAutoOptimizeIntervalHours: (Int) -> Unit = {},
+    onTriggerAutoOptimizeNow: () -> Unit = {},
 ) {
     Column(
         modifier = Modifier
@@ -118,6 +125,15 @@ fun QsConnectScreen(
         if (state.status == QsStatus.Connected) {
             QsDetailsCard(state = state)
         }
+
+        QsSmartControlsCard(
+            state = state,
+            onSelectProvider = onSelectProvider,
+            onSetQuickConnectEnabled = onSetQuickConnectEnabled,
+            onSetAutoOptimizeEnabled = onSetAutoOptimizeEnabled,
+            onSetAutoOptimizeIntervalHours = onSetAutoOptimizeIntervalHours,
+            onTriggerAutoOptimizeNow = onTriggerAutoOptimizeNow,
+        )
     }
 
     // Shared with the Configurations screen: one dialog, one import path.
@@ -402,6 +418,146 @@ private fun QsSubscriptionCard(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+        }
+    }
+}
+
+@Composable
+private fun QsSmartControlsCard(
+    state: QsUiState,
+    onSelectProvider: (EdgeProvider) -> Unit,
+    onSetQuickConnectEnabled: (Boolean) -> Unit,
+    onSetAutoOptimizeEnabled: (Boolean) -> Unit,
+    onSetAutoOptimizeIntervalHours: (Int) -> Unit,
+    onTriggerAutoOptimizeNow: () -> Unit,
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainer,
+        ),
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                text = stringResource(R.string.qs_smart_title),
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(8.dp))
+            Text(
+                text = stringResource(R.string.qs_smart_provider_label),
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(6.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                val cfSelected = state.selectedProvider == EdgeProvider.CLOUDFLARE
+                if (cfSelected) {
+                    Button(
+                        onClick = { onSelectProvider(EdgeProvider.CLOUDFLARE) },
+                        modifier = Modifier.weight(1f),
+                    ) { Text(stringResource(R.string.qs_provider_cloudflare)) }
+                    OutlinedButton(
+                        onClick = { onSelectProvider(EdgeProvider.CLOUDFRONT) },
+                        modifier = Modifier.weight(1f),
+                    ) { Text(stringResource(R.string.qs_provider_cloudfront)) }
+                } else {
+                    OutlinedButton(
+                        onClick = { onSelectProvider(EdgeProvider.CLOUDFLARE) },
+                        modifier = Modifier.weight(1f),
+                    ) { Text(stringResource(R.string.qs_provider_cloudflare)) }
+                    Button(
+                        onClick = { onSelectProvider(EdgeProvider.CLOUDFRONT) },
+                        modifier = Modifier.weight(1f),
+                    ) { Text(stringResource(R.string.qs_provider_cloudfront)) }
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = stringResource(R.string.qs_smart_quick_connect),
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.weight(1f),
+                )
+                Switch(
+                    checked = state.quickConnectEnabled,
+                    onCheckedChange = onSetQuickConnectEnabled,
+                )
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = stringResource(R.string.qs_smart_auto_optimize),
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.weight(1f),
+                )
+                Switch(
+                    checked = state.autoOptimizeEnabled,
+                    onCheckedChange = onSetAutoOptimizeEnabled,
+                )
+            }
+            if (state.autoOptimizeEnabled) {
+                Spacer(Modifier.height(6.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    listOf(2, 3).forEach { hours ->
+                        val active = state.autoOptimizeIntervalHours == hours
+                        if (active) {
+                            Button(onClick = { onSetAutoOptimizeIntervalHours(hours) }) {
+                                Text(stringResource(R.string.qs_smart_interval_hours, hours))
+                            }
+                        } else {
+                            OutlinedButton(onClick = { onSetAutoOptimizeIntervalHours(hours) }) {
+                                Text(stringResource(R.string.qs_smart_interval_hours, hours))
+                            }
+                        }
+                    }
+                    Spacer(Modifier.weight(1f))
+                    TextButton(onClick = onTriggerAutoOptimizeNow) {
+                        Text(stringResource(R.string.qs_smart_optimize_now))
+                    }
+                }
+            }
+            Spacer(Modifier.height(6.dp))
+            Text(
+                text = if (state.lastAutoOptimizeAt > 0L) {
+                    stringResource(R.string.qs_smart_last_optimize, formatTimestamp(state.lastAutoOptimizeAt))
+                } else {
+                    stringResource(R.string.qs_smart_never_optimized)
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            if (state.lastAutoOptimizeStatus.isNotBlank()) {
+                Text(
+                    text = stringResource(R.string.qs_smart_last_optimize_status, state.lastAutoOptimizeStatus),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            if (state.physicalNetworkLabel.isNotBlank()) {
+                Text(
+                    text = stringResource(R.string.qs_smart_network_type, state.physicalNetworkLabel),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            if (state.licenseStatusLabel.isNotBlank()) {
+                Text(
+                    text = stringResource(R.string.qs_smart_backend_label, state.licenseStatusLabel),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
     }
 }

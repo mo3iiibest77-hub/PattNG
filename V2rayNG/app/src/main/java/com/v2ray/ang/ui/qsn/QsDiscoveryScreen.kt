@@ -83,6 +83,14 @@ fun QsDiscoveryScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
                     )
+                    if (status.background) {
+                        Text(
+                            text = stringResource(R.string.qs_discovery_physical_badge),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            maxLines = 2,
+                        )
+                    }
                 }
                 Text(
                     text = phaseLabel(status.phase),

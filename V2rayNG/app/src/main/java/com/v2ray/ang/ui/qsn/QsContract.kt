@@ -2,11 +2,14 @@ package com.v2ray.ang.ui.qsn
 
 import com.v2ray.ang.senpai.IspProfile
 import com.v2ray.ang.ui.connect.AutoConnectState
+import com.v2ray.ang.ui.qsn.domain.AutoOptimizationPolicy
 import com.v2ray.ang.ui.qsn.domain.ConfigChoice
 import com.v2ray.ang.ui.qsn.domain.ConfigFilter
 import com.v2ray.ang.ui.qsn.domain.ConfigFilterEngine
 import com.v2ray.ang.ui.qsn.domain.ConfigRow
 import com.v2ray.ang.ui.qsn.domain.DiscoveryStatus
+import com.v2ray.ang.ui.qsn.domain.EdgeProvider
+import com.v2ray.ang.ui.qsn.domain.ManagedRange
 import com.v2ray.ang.ui.qsn.domain.QualifiedRange
 import com.v2ray.ang.ui.qsn.domain.ScanCandidate
 import com.v2ray.ang.ui.qsn.domain.ScanRange
@@ -165,6 +168,31 @@ data class QsUiState(
     val languageCode: String = "en",
     /** Configurations sections the user collapsed, by stable group key. */
     val collapsedGroups: Set<String> = emptySet(),
+    /** Active edge provider (`Cloudflare` or `Amazon CloudFront`). */
+    val selectedProvider: EdgeProvider = EdgeProvider.CLOUDFLARE,
+    /** Persistent managed Cloudflare ranges (46 Seed + Discovered + Manual). */
+    val providerRanges: List<ManagedRange> = emptyList(),
+    /** Persistent managed CloudFront ranges (Fetched + Discovered + Manual). */
+    val cloudFrontRanges: List<ManagedRange> = emptyList(),
+    /** Live CloudFront discovery progress kept apart from Cloudflare. */
+    val cloudFrontDiscovery: DiscoveryStatus = DiscoveryStatus(ispName = EdgeProvider.CLOUDFRONT.id),
+    /** True while downloading AWS CloudFront official ip-ranges.json. */
+    val cloudFrontSyncing: Boolean = false,
+    /** Timestamp of last successful AWS CloudFront range sync. */
+    val cloudFrontLastSyncedAt: Long = 0L,
+    /** Search filter applied on the IP Ranges screen. */
+    val rangeSearchQuery: String = "",
+    /** Periodic WorkManager auto-optimization state. */
+    val autoOptimizeEnabled: Boolean = true,
+    val autoOptimizeIntervalHours: Int = AutoOptimizationPolicy.DEFAULT_INTERVAL_HOURS,
+    val lastAutoOptimizeAt: Long = 0L,
+    val lastAutoOptimizeStatus: String = "",
+    /** Active physical underlying network label (Wi-Fi / Cellular). */
+    val physicalNetworkLabel: String = "",
+    /** Zero-friction quick-connect toggle (auto-picks best config & best upload IP). */
+    val quickConnectEnabled: Boolean = true,
+    /** Clean interface-ready status for future license / subscription backend. */
+    val licenseStatusLabel: String = "",
     /**
      * Cause of the previous process death, when one was recorded. Shown so a
      * crash is never again an unexplained close.

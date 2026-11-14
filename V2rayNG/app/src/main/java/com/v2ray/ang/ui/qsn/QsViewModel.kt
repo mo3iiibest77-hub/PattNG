@@ -16,6 +16,7 @@ import com.v2ray.ang.handler.AngConfigManager
 import com.v2ray.ang.handler.AppLocaleManager
 import com.v2ray.ang.handler.MmkvManager
 import com.v2ray.ang.handler.SpeedtestManager
+import com.v2ray.ang.senpai.CloudFrontScanner
 import com.v2ray.ang.senpai.CloudflareScanner
 import com.v2ray.ang.senpai.IspManager
 import com.v2ray.ang.senpai.IspProfile
@@ -23,13 +24,20 @@ import com.v2ray.ang.service.CfScanService
 import com.v2ray.ang.ui.connect.AutoConfigFilter
 import com.v2ray.ang.ui.connect.AutoConnectResult
 import com.v2ray.ang.ui.connect.AutoConnectState
+import com.v2ray.ang.ui.connect.AutoOptimizeScheduler
 import com.v2ray.ang.ui.connect.ConnectionOrchestrator
 import com.v2ray.ang.ui.connect.Ineligibility
 import com.v2ray.ang.ui.main.MainDataSource
 import com.v2ray.ang.ui.main.MainServiceEvent
+import com.v2ray.ang.ui.qsn.backend.LicenseStatus
+import com.v2ray.ang.ui.qsn.backend.LocalDefaultLicenseProvider
+import com.v2ray.ang.ui.qsn.data.CloudFrontRangeProvider
+import com.v2ray.ang.ui.qsn.data.ProviderRangeStore
 import com.v2ray.ang.ui.qsn.data.QsCrashRecorder
 import com.v2ray.ang.ui.qsn.data.QsPrefs
 import com.v2ray.ang.ui.qsn.data.QualifiedRangeStore
+import com.v2ray.ang.ui.qsn.data.UnderlyingNetworkProvider
+import com.v2ray.ang.ui.qsn.domain.AutoOptimizationPolicy
 import com.v2ray.ang.ui.qsn.domain.ConfigFilter
 import com.v2ray.ang.ui.qsn.domain.ConfigFilterEngine
 import com.v2ray.ang.ui.qsn.domain.ConfigRow
@@ -37,6 +45,7 @@ import com.v2ray.ang.ui.qsn.domain.ConfigSelection
 import com.v2ray.ang.ui.qsn.domain.ConfigSource
 import com.v2ray.ang.ui.qsn.domain.CrashReport
 import com.v2ray.ang.ui.qsn.domain.DiscoveryStatus
+import com.v2ray.ang.ui.qsn.domain.EdgeProvider
 import com.v2ray.ang.ui.qsn.domain.LanguageToggle
 import com.v2ray.ang.ui.qsn.domain.ManualConfigRules
 import com.v2ray.ang.ui.qsn.domain.ManualRangePolicy
@@ -107,6 +116,7 @@ class QsViewModel(
     val uiState: StateFlow<QsUiState> = _uiState.asStateFlow()
 
     private val orchestrator = ConnectionOrchestrator()
+    private val licenseProvider = LocalDefaultLicenseProvider()
     private var flowJob: Job? = null
     private var stopWatchJob: Job? = null
     private var scanJob: Job? = null
@@ -150,7 +160,22 @@ class QsViewModel(
                 } else {
                     _uiState.value.qualifiedRanges
                 }
-                _uiState.update { it.copy(discovery = status, qualifiedRanges = qualified) }
+                val cfRanges = if (
+                    status.qualified != previous.qualified || status.isTerminal
+                ) {
+                    withContext(Dispatchers.IO) {
+                        ProviderRangeStore.snapshot(EdgeProvider.CLOUDFLARE).allCidrs
+                    }
+                } else {
+                    _uiState.value.providerRanges
+                }
+                _uiState.update {
+                    it.copy(
+                        discovery = status,
+                        qualifiedRanges = qualified,
+                        providerRanges = cfRanges,
+                    )
+                }
                 // The persisted profile is the source for the saved-ISP list
                 // and for a screen recreated after the run ended. Reading it on
                 // every row would parse the whole file 600 times, so it is
@@ -159,6 +184,43 @@ class QsViewModel(
                     refreshIspProfiles()
                 }
             }
+        }
+        viewModelScope.launch {
+            CloudFrontScanner.discovery.collect { status ->
+                val previous = _uiState.value.cloudFrontDiscovery
+                val frontRanges = if (
+                    status.qualified != previous.qualified || status.isTerminal
+                ) {
+                    withContext(Dispatchers.IO) {
+                        ProviderRangeStore.snapshot(EdgeProvider.CLOUDFRONT).allCidrs
+                    }
+                } else {
+                    _uiState.value.cloudFrontRanges
+                }
+                _uiState.update {
+                    it.copy(
+                        cloudFrontDiscovery = status,
+                        cloudFrontRanges = frontRanges,
+                    )
+                }
+            }
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            val licenseLabel = when (licenseProvider.validate()) {
+                is LicenseStatus.Unconfigured -> getString(R.string.qs_license_status_unconfigured)
+                is LicenseStatus.Active -> getString(R.string.qs_license_status_active)
+                is LicenseStatus.Expired -> getString(R.string.qs_license_status_expired)
+                is LicenseStatus.Invalid -> getString(R.string.qs_license_status_invalid)
+                is LicenseStatus.Error -> getString(R.string.qs_license_status_error)
+            }
+            val transport = UnderlyingNetworkProvider.activePhysicalTransport(getApplication())
+            _uiState.update {
+                it.copy(
+                    licenseStatusLabel = licenseLabel,
+                    physicalNetworkLabel = transport.id,
+                )
+            }
+            AutoOptimizeScheduler.syncSchedule(getApplication())
         }
         viewModelScope.launch(Dispatchers.IO) {
             try {
@@ -323,7 +385,10 @@ class QsViewModel(
                     pendingIp = null,
                 )
             }
-            val result = orchestrator.autoConnect(getApplication()) { orchestratorState ->
+            val result = orchestrator.autoConnect(
+                context = getApplication(),
+                quickConnect = _uiState.value.quickConnectEnabled,
+            ) { orchestratorState ->
                 applyOrchestratorState(orchestratorState)
             }
             applyConnectResult(result)
@@ -1198,8 +1263,9 @@ class QsViewModel(
 
             is ManualRangeResult.Added -> {
                 IspManager.addManualCidr(getApplication(), isp, result.cidr)
+                ProviderRangeStore.addManual(EdgeProvider.CLOUDFLARE, result.cidr)
                 _uiState.update { it.copy(manualRangeError = null) }
-                refreshIspProfiles(isp)
+                refreshRanges()
             }
         }
     }
@@ -1208,6 +1274,7 @@ class QsViewModel(
     fun removeManualRange(cidr: String) {
         val isp = _uiState.value.selectedIsp.ifBlank { IspManager.DEFAULT_ISP }
         IspManager.removeManualCidr(getApplication(), isp, cidr)
+        ProviderRangeStore.removeRange(EdgeProvider.CLOUDFLARE, cidr)
         val selection = QsPrefs.selectedRanges(isp) - cidr
         QsPrefs.setSelectedRanges(isp, selection)
         _uiState.update { it.copy(manualRangeError = null) }
@@ -1284,6 +1351,7 @@ class QsViewModel(
                 guid = target.first,
                 profile = target.second,
                 ispName = _uiState.value.selectedIsp,
+                provider = _uiState.value.selectedProvider,
             ) { state ->
                 when (state) {
                     is AutoConnectState.ScanProgress -> _uiState.update {
@@ -1330,6 +1398,168 @@ class QsViewModel(
                     )
                 }
             }
+        }
+    }
+
+    // ---------- Smart VPN: Providers, CloudFront & Auto-Optimization ----------
+
+    fun selectProvider(provider: EdgeProvider) {
+        QsPrefs.setSelectedProvider(provider)
+        _uiState.update { it.copy(selectedProvider = provider, rangeError = null) }
+    }
+
+    fun onRangeSearchChange(query: String) {
+        _uiState.update { it.copy(rangeSearchQuery = query) }
+    }
+
+    fun addManagedManualRange(provider: EdgeProvider, input: String) {
+        val bucket = ProviderRangeStore.snapshot(provider)
+        val existing = bucket.allCidrs.map { it.cidr }
+        when (val result = ManualRangePolicy.classify(input, existing)) {
+            is ManualRangeResult.Invalid -> {
+                val text = when (result.error) {
+                    RangeError.EMPTY -> getString(R.string.qs_manual_range_empty)
+                    RangeError.BAD_IP -> getString(R.string.qs_manual_range_bad_ip)
+                    RangeError.BAD_PREFIX -> getString(R.string.qs_manual_range_bad_prefix)
+                    RangeError.TOO_LARGE -> getString(R.string.qs_manual_range_too_large)
+                    RangeError.BAD_FORMAT -> getString(R.string.qs_manual_range_bad_format)
+                }
+                _uiState.update { it.copy(manualRangeError = text) }
+            }
+
+            is ManualRangeResult.Duplicate -> {
+                _uiState.update {
+                    it.copy(manualRangeError = getString(R.string.qs_manual_range_duplicate, result.cidr))
+                }
+            }
+
+            is ManualRangeResult.Added -> {
+                ProviderRangeStore.addManual(provider, result.cidr)
+                if (provider == EdgeProvider.CLOUDFLARE) {
+                    val isp = _uiState.value.selectedIsp.ifBlank { IspManager.DEFAULT_ISP }
+                    IspManager.addManualCidr(getApplication(), isp, result.cidr)
+                }
+                _uiState.update { it.copy(manualRangeError = null) }
+                refreshRanges()
+            }
+        }
+    }
+
+    fun toggleManagedRange(provider: EdgeProvider, cidr: String) {
+        ProviderRangeStore.toggleEnabled(provider, cidr)
+        QsPrefs.clearSelection()
+        refreshRanges()
+    }
+
+    fun removeManagedRange(provider: EdgeProvider, cidr: String) {
+        ProviderRangeStore.removeRange(provider, cidr)
+        if (provider == EdgeProvider.CLOUDFLARE) {
+            val isp = _uiState.value.selectedIsp.ifBlank { IspManager.DEFAULT_ISP }
+            IspManager.removeManualCidr(getApplication(), isp, cidr)
+        }
+        QsPrefs.clearSelection()
+        refreshRanges()
+    }
+
+    fun restoreCloudflareSeeds() {
+        ProviderRangeStore.restoreCloudflareSeeds()
+        refreshRanges()
+        _uiState.update { it.copy(message = getString(R.string.qs_seeds_restored)) }
+    }
+
+    fun syncCloudFrontRanges() {
+        if (_uiState.value.cloudFrontSyncing) return
+        viewModelScope.launch {
+            _uiState.update { it.copy(cloudFrontSyncing = true, rangeError = null) }
+            when (val res = CloudFrontRangeProvider.fetchOfficialRanges(getApplication())) {
+                is CloudFrontRangeProvider.FetchResult.Success -> {
+                    refreshRanges()
+                    _uiState.update {
+                        it.copy(
+                            cloudFrontSyncing = false,
+                            cloudFrontLastSyncedAt = res.syncedAt,
+                            message = getString(R.string.qs_cloudfront_synced_count, res.cidrs.size),
+                        )
+                    }
+                }
+
+                is CloudFrontRangeProvider.FetchResult.Failure -> {
+                    _uiState.update {
+                        it.copy(
+                            cloudFrontSyncing = false,
+                            rangeError = getString(R.string.qs_cloudfront_sync_failed, res.reason),
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    fun startCloudFrontDiscovery() {
+        if (CloudFrontScanner.isDiscoveryActive) return
+        val target = connectTarget()
+        if (target == null) {
+            _uiState.update { it.copy(rangeError = getString(R.string.qs_range_scan_needs_config)) }
+            return
+        }
+        _uiState.update { it.copy(rangeError = null) }
+        CloudFrontScanner.discoverRanges(
+            context = getApplication(),
+            guid = target.first,
+            background = false,
+        ) { found ->
+            refreshRanges()
+            _uiState.update {
+                it.copy(message = getString(R.string.qs_cloudfront_discovery_done, found.size))
+            }
+        }
+    }
+
+    fun stopCloudFrontDiscovery() {
+        CloudFrontScanner.stopDiscovery()
+    }
+
+    fun setAutoOptimizeEnabled(enabled: Boolean) {
+        QsPrefs.setAutoOptimizeEnabled(enabled)
+        AutoOptimizeScheduler.reschedule(
+            getApplication(),
+            enabled,
+            _uiState.value.autoOptimizeIntervalHours,
+        )
+        _uiState.update { it.copy(autoOptimizeEnabled = enabled) }
+    }
+
+    fun setAutoOptimizeIntervalHours(hours: Int) {
+        val clamped = AutoOptimizationPolicy.clampIntervalHours(hours)
+        QsPrefs.setAutoOptimizeIntervalHours(clamped)
+        AutoOptimizeScheduler.reschedule(
+            getApplication(),
+            _uiState.value.autoOptimizeEnabled,
+            clamped,
+        )
+        _uiState.update { it.copy(autoOptimizeIntervalHours = clamped) }
+    }
+
+    fun triggerAutoOptimizeNow() {
+        AutoOptimizeScheduler.runNow(getApplication())
+        _uiState.update { it.copy(message = getString(R.string.qs_auto_opt_triggered)) }
+    }
+
+    fun setQuickConnectEnabled(enabled: Boolean) {
+        _uiState.update { it.copy(quickConnectEnabled = enabled) }
+    }
+
+    fun refreshSmartMetadata() {
+        val transport = UnderlyingNetworkProvider.activePhysicalTransport(getApplication())
+        _uiState.update {
+            it.copy(
+                autoOptimizeEnabled = QsPrefs.autoOptimizeEnabled(),
+                autoOptimizeIntervalHours = QsPrefs.autoOptimizeIntervalHours(),
+                lastAutoOptimizeAt = QsPrefs.lastAutoOptimizeAt(),
+                lastAutoOptimizeStatus = QsPrefs.lastAutoOptimizeStatus(),
+                cloudFrontLastSyncedAt = QsPrefs.cloudFrontLastSyncedAt(),
+                physicalNetworkLabel = transport.id,
+            )
         }
     }
 
@@ -1608,10 +1838,22 @@ class QsViewModel(
     }
 
     private fun refreshRanges() {
+        val cfBucket = ProviderRangeStore.snapshot(EdgeProvider.CLOUDFLARE)
+        val frontBucket = ProviderRangeStore.snapshot(EdgeProvider.CLOUDFRONT)
+        val transport = UnderlyingNetworkProvider.activePhysicalTransport(getApplication())
         _uiState.update {
             it.copy(
                 ranges = QsPrefs.loadRanges(),
                 qualifiedRanges = QualifiedRangeStore.snapshot(),
+                selectedProvider = QsPrefs.selectedProvider(),
+                providerRanges = cfBucket.allCidrs,
+                cloudFrontRanges = frontBucket.allCidrs,
+                cloudFrontLastSyncedAt = QsPrefs.cloudFrontLastSyncedAt(),
+                autoOptimizeEnabled = QsPrefs.autoOptimizeEnabled(),
+                autoOptimizeIntervalHours = QsPrefs.autoOptimizeIntervalHours(),
+                lastAutoOptimizeAt = QsPrefs.lastAutoOptimizeAt(),
+                lastAutoOptimizeStatus = QsPrefs.lastAutoOptimizeStatus(),
+                physicalNetworkLabel = transport.id,
             )
         }
         refreshIspProfiles()

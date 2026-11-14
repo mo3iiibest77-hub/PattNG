@@ -825,4 +825,46 @@
     <string name="qs_delete_selected">Delete (%1$d)</string>
     <string name="qs_bulk_delete_title">Delete selected configurations?</string>
     <string name="qs_bulk_delete_body">%1$d configuration(s) will be removed from this device. The one currently selected or connected is kept. A subscription can restore the rest on the next update.</string>
+
+    <!-- Smart VPN & Multi-Provider Architecture -->
+    <string name="qs_license_status_unconfigured">Direct subscription active (backend API ready)</string>
+    <string name="qs_license_status_active">License active</string>
+    <string name="qs_license_status_expired">License expired</string>
+    <string name="qs_license_status_invalid">License invalid</string>
+    <string name="qs_license_status_error">License check error</string>
+    <string name="qs_seeds_restored">46 Cloudflare seed ranges restored.</string>
+    <string name="qs_cloudfront_synced_count">Synced %1$d official CloudFront ranges.</string>
+    <string name="qs_cloudfront_sync_failed">CloudFront sync failed: %1$s</string>
+    <string name="qs_cloudfront_discovery_done">CloudFront discovery finished: %1$d qualified range(s).</string>
+    <string name="qs_auto_opt_triggered">Auto-optimization started in the background.</string>
+    <string name="qs_smart_title">Smart VPN Automation</string>
+    <string name="qs_smart_provider_label">Active CDN provider</string>
+    <string name="qs_provider_cloudflare">Cloudflare</string>
+    <string name="qs_provider_cloudfront">Amazon CloudFront</string>
+    <string name="qs_smart_quick_connect">1-Tap Quick Connect</string>
+    <string name="qs_smart_auto_optimize">Periodic Auto-Optimization</string>
+    <string name="qs_smart_interval_hours">Every %1$dh</string>
+    <string name="qs_smart_optimize_now">Optimize Now</string>
+    <string name="qs_smart_last_optimize">Last optimize: %1$s</string>
+    <string name="qs_smart_last_optimize_status">Status: %1$s</string>
+    <string name="qs_smart_never_optimized">Not auto-optimized yet</string>
+    <string name="qs_smart_network_type">Physical uplink: %1$s</string>
+    <string name="qs_smart_backend_label">Backend / License: %1$s</string>
+    <string name="qs_managed_ranges_title">%1$s Saved Ranges (%2$d)</string>
+    <string name="qs_managed_ranges_breakdown">Seed %1$d · Discovered %2$d · Manual %3$d</string>
+    <string name="qs_ranges_search_hint">Search CIDR (e.g. 104.16)</string>
+    <string name="qs_copy_all">Copy All</string>
+    <string name="qs_copied_all_count">Copied %1$d range(s) to clipboard.</string>
+    <string name="qs_restore_seeds">Restore 46 Seeds</string>
+    <string name="qs_origin_seed">Seed</string>
+    <string name="qs_origin_discovered">Discovered</string>
+    <string name="qs_origin_manual">Manual</string>
+    <string name="qs_origin_fetched">AWS</string>
+    <string name="qs_cloudfront_panel_title">Amazon CloudFront Official Ranges</string>
+    <string name="qs_cloudfront_sync_btn">Sync AWS Ranges</string>
+    <string name="qs_cloudfront_syncing">Syncing AWS ranges…</string>
+    <string name="qs_cloudfront_last_sync">Last AWS sync: %1$s</string>
+    <string name="qs_cloudfront_never_synced">AWS CloudFront ranges not synced yet</string>
+    <string name="qs_cloudfront_discover_btn">Discover CloudFront</string>
+    <string name="qs_discovery_physical_badge">Running directly on physical network (bypassing VPN)</string>
 </resources>

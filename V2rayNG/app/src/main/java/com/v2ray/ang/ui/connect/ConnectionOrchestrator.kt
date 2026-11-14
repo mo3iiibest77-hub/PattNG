@@ -14,12 +14,14 @@ import com.v2ray.ang.handler.MmkvManager
 import com.v2ray.ang.handler.SettingsManager
 import com.v2ray.ang.helper.MessageHelper
 import com.v2ray.ang.senpai.CandidateResult
+import com.v2ray.ang.senpai.CloudFrontScanner
 import com.v2ray.ang.senpai.CloudflareScanner
 import com.v2ray.ang.senpai.DiscoveryOutcome
 import com.v2ray.ang.senpai.IspManager
 import com.v2ray.ang.senpai.ProbeProfile
 import com.v2ray.ang.senpai.ScanCallback
 import com.v2ray.ang.ui.qsn.data.IpHealthChecker
+import com.v2ray.ang.ui.qsn.data.ProviderRangeStore
 import com.v2ray.ang.ui.qsn.data.QualifiedRangeStore
 import com.v2ray.ang.ui.qsn.data.QsPrefs
 import com.v2ray.ang.ui.qsn.domain.CandidateSelection
@@ -28,6 +30,8 @@ import com.v2ray.ang.ui.qsn.domain.ConnectDecision
 import com.v2ray.ang.ui.qsn.domain.ConnectMode
 import com.v2ray.ang.ui.qsn.domain.ConnectPolicy
 import com.v2ray.ang.ui.qsn.domain.EdgeApplication
+import com.v2ray.ang.ui.qsn.domain.EdgeProvider
+import com.v2ray.ang.ui.qsn.domain.EdgeRollbackSnapshot
 import com.v2ray.ang.ui.qsn.domain.IpAddress
 import com.v2ray.ang.ui.qsn.domain.IpFingerprint
 import com.v2ray.ang.ui.qsn.domain.IpSelection
@@ -283,6 +287,7 @@ class ConnectionOrchestrator {
      */
     suspend fun autoConnect(
         context: Context,
+        quickConnect: Boolean = true,
         onState: (AutoConnectState) -> Unit = {},
     ): AutoConnectResult {
         // Single-flight: a second concurrent attempt is rejected, not queued.
@@ -296,7 +301,7 @@ class ConnectionOrchestrator {
             // The subscription fetch is blocking network I/O, so the flow must
             // never run on the caller thread (a caller on Dispatchers.Main
             // would ANR). Dispatching here makes that impossible to get wrong.
-            withContext(Dispatchers.IO) { runFlow(context, onState) }
+            withContext(Dispatchers.IO) { runFlow(context, quickConnect, onState) }
         } catch (e: CancellationException) {
             // The caller went away mid-flow (activity destroyed, scope
             // cancelled). CloudflareScanner runs in its own scope, so it must be
@@ -380,6 +385,7 @@ class ConnectionOrchestrator {
         guid: String,
         profile: ProfileItem,
         ispName: String? = null,
+        provider: EdgeProvider = QsPrefs.selectedProvider(),
         onState: (AutoConnectState) -> Unit = {},
     ): CandidateResult? {
         if (!mutex.tryLock()) {
@@ -391,27 +397,23 @@ class ConnectionOrchestrator {
         return try {
             withContext(Dispatchers.IO) {
                 onState(AutoConnectState.ScanningCloudflareIps)
-                // Stage 2 measures the ranges that really qualified for the
-                // chosen ISP. The global store is the fallback for a connection
-                // started before any ISP was named; the user's manual ranges are
-                // the last resort and stay supported.
-                val isp = ispName?.trim()?.ifEmpty { null } ?: QsPrefs.lastIsp()
-                // Named ispProfile: "profile" is this function's ProfileItem.
-                val ispProfile = isp?.let { IspManager.getProfile(context, it) }
-                // Stage 2 measures what the user picked for this ISP: the
-                // selection when there is one, otherwise its good ranges. A
-                // failed or unchecked range never joins on its own, and another
-                // ISP's ranges can never leak in.
-                val ranges = if (ispProfile != null) {
-                    Stage2Ranges.resolve(
-                        good = ispProfile.goodCidrs,
-                        manual = ispProfile.manualCidrs,
-                        selected = QsPrefs.selectedRanges(ispProfile.name),
-                    )
+                val ranges = if (provider == EdgeProvider.CLOUDFRONT) {
+                    ProviderRangeStore.snapshot(EdgeProvider.CLOUDFRONT).enabledScanCidrs
                 } else {
-                    RangeSet.cidrs(QualifiedRangeStore.snapshot())
+                    val isp = ispName?.trim()?.ifEmpty { null } ?: QsPrefs.lastIsp()
+                    val ispProfile = isp?.let { IspManager.getProfile(context, it) }
+                    if (ispProfile != null && (ispProfile.goodCidrs.isNotEmpty() || ispProfile.manualCidrs.isNotEmpty())) {
+                        Stage2Ranges.resolve(
+                            good = ispProfile.goodCidrs,
+                            manual = ispProfile.manualCidrs,
+                            selected = QsPrefs.selectedRanges(ispProfile.name),
+                        )
+                    } else {
+                        RangeSet.cidrs(QualifiedRangeStore.snapshot())
+                            .ifEmpty { ProviderRangeStore.snapshot(EdgeProvider.CLOUDFLARE).enabledScanCidrs }
+                    }
                 }
-                val winner = scanForBestIp(context, guid, onState, ranges) { }
+                val winner = scanForBestIp(context, guid, onState, ranges, provider) { }
                     ?: return@withContext null
                 // Persist the winner so the next connect can reuse it; the
                 // cache TTL and health check still apply.
@@ -450,6 +452,7 @@ class ConnectionOrchestrator {
     fun cancel() {
         cancelled = true
         CloudflareScanner.cancel()
+        CloudFrontScanner.cancelScan()
         scanDeferred?.complete(null)
         discoveryDeferred?.let { deferred ->
             if (!deferred.isCompleted) {
@@ -586,6 +589,7 @@ class ConnectionOrchestrator {
 
     private suspend fun runFlow(
         context: Context,
+        quickConnect: Boolean,
         onState: (AutoConnectState) -> Unit,
     ): AutoConnectResult {
         // 1. An explicitly selected configuration wins over every subscription.
@@ -612,7 +616,7 @@ class ConnectionOrchestrator {
                     LogUtil.i(TAG, "Pinned configuration is not Cloudflare-eligible; using the subscription path")
                 }
 
-                else -> return connectSelected(context, pinnedGuid, pinned, onState, ConnectMode.Automatic)
+                else -> return connectSelected(context, pinnedGuid, pinned, onState, ConnectMode.Automatic, quickConnect)
             }
         }
 
@@ -671,12 +675,23 @@ class ConnectionOrchestrator {
         val choices = eligible.map { (guid, profile) ->
             ConfigChoice.from(guid, profile, subscriptionName)
         }
-        onState(AutoConnectState.AwaitingConfigChoice(choices, choices.firstOrNull()?.guid))
-        val pickedGuid = awaitConfigChoice()
-        if (cancelled || pickedGuid == null) return cancelResult(onState)
-        val picked = eligible.firstOrNull { it.first == pickedGuid }
-            ?: return AutoConnectResult.Failure("Selected configuration is gone")
-        return connectSelected(context, picked.first, picked.second, onState, ConnectMode.Automatic)
+        val picked = if (quickConnect && eligible.isNotEmpty()) {
+            eligible.first()
+        } else {
+            onState(AutoConnectState.AwaitingConfigChoice(choices, choices.firstOrNull()?.guid))
+            val pickedGuid = awaitConfigChoice()
+            if (cancelled || pickedGuid == null) return cancelResult(onState)
+            eligible.firstOrNull { it.first == pickedGuid }
+                ?: return AutoConnectResult.Failure("Selected configuration is gone")
+        }
+        return connectSelected(
+            context = context,
+            selectedGuid = picked.first,
+            selected = picked.second,
+            onState = onState,
+            mode = ConnectMode.Automatic,
+            quickConnect = quickConnect,
+        )
     }
 
     /**
@@ -693,6 +708,7 @@ class ConnectionOrchestrator {
         selected: ProfileItem,
         onState: (AutoConnectState) -> Unit,
         mode: ConnectMode,
+        quickConnect: Boolean = false,
     ): AutoConnectResult {
         MmkvManager.setSelectServer(selectedGuid)
         if (cancelled) return cancelResult(onState)
@@ -712,18 +728,32 @@ class ConnectionOrchestrator {
         }
 
         // Automatic optimisation: resolve an edge, then start.
+        val provider = QsPrefs.selectedProvider()
         val fingerprint = fingerprintFor(selectedGuid, selected)
-        val bestIp = resolveEdgeIp(context, selectedGuid, selected, fingerprint, onState)
+        val bestIp = resolveEdgeIp(
+            context = context,
+            guid = selectedGuid,
+            profile = selected,
+            fingerprint = fingerprint,
+            onState = onState,
+            quickConnect = quickConnect,
+            provider = provider,
+        )
         if (cancelled) return cancelResult(onState)
         if (bestIp == null) {
-            return AutoConnectResult.Failure("Cloudflare scan found no working IP")
+            val providerName = if (provider == EdgeProvider.CLOUDFRONT) "CloudFront" else "Cloudflare"
+            return AutoConnectResult.Failure("$providerName scan found no working IP")
         }
+
+        // Capture a deterministic rollback snapshot before mutating any config edge.
+        val rollback = captureRollbackSnapshot(selectedGuid, selected)
 
         // Write the confirmed edge to every eligible config of the scope: the
         // whole subscription, or just this manual config.
         onState(AutoConnectState.SelectingBestIp(bestIp))
         val applied = applyEdgeToScope(selectedGuid, selected, bestIp)
         if (!applied.selectedApplied) {
+            restoreRollbackSnapshot(rollback)
             // The tunnel would dial the old address: this is a real failure,
             // not a partial success.
             return AutoConnectResult.Failure("Failed to apply the edge to the selected configuration")
@@ -741,14 +771,16 @@ class ConnectionOrchestrator {
 
         val result = startTunnel(context, selectedGuid, onState)
         if (result is AutoConnectResult.Success) {
-            // The tunnel is confirmed: keep collecting ranges in the background.
-            // The scheduler only writes the range database, never the profile
-            // the tunnel is using.
+            // The tunnel is confirmed: keep collecting ranges in the background
+            // and keep the periodic optimizer armed.
             DiscoveryScheduler.start(
                 context,
                 selectedGuid,
                 QsPrefs.lastIsp() ?: DiscoveryScheduler.DEFAULT_ISP,
             )
+            AutoOptimizeScheduler.syncSchedule(context)
+        } else if (result is AutoConnectResult.Failure) {
+            restoreRollbackSnapshot(rollback)
         }
         return result
     }
@@ -837,6 +869,7 @@ class ConnectionOrchestrator {
         guid: String,
         onState: (AutoConnectState) -> Unit,
         cidrs: List<String> = emptyList(),
+        provider: EdgeProvider = QsPrefs.selectedProvider(),
         onCandidate: (ScanCandidate) -> Unit,
     ): CandidateResult? {
         val deferred = CompletableDeferred<CandidateResult?>()
@@ -861,9 +894,19 @@ class ConnectionOrchestrator {
             }
         }
 
-        if (cidrs.isEmpty()) {
-            // Empty means the scanner falls back to the bundled Cloudflare
-            // ranges; a non-empty list means the user configured ranges.
+        if (provider == EdgeProvider.CLOUDFRONT) {
+            val effectiveCidrs = cidrs.ifEmpty {
+                ProviderRangeStore.snapshot(EdgeProvider.CLOUDFRONT).enabledScanCidrs
+            }
+            CloudFrontScanner.scanRanges(
+                context = context,
+                guid = guid,
+                cidrs = effectiveCidrs,
+                callback = callback,
+            )
+        } else if (cidrs.isEmpty()) {
+            // Empty means the scanner falls back to the stored seed/qualified
+            // Cloudflare ranges; a non-empty list means caller-specified ranges.
             CloudflareScanner.scan(
                 context = context,
                 guid = guid,
@@ -885,6 +928,7 @@ class ConnectionOrchestrator {
             // Timed out: stop the orphaned scan before returning.
             LogUtil.w(TAG, "scanForBestIp: timed out, cancelling scan")
             CloudflareScanner.cancel()
+            CloudFrontScanner.cancelScan()
         }
         scanDeferred = null
         // Persisting the selection is the caller's job: the user may still
@@ -893,12 +937,8 @@ class ConnectionOrchestrator {
     }
 
     /**
-     * Reuses the saved edge when it is still valid, otherwise scans.
-     *
-     * The cache key covers the transport identity of the profile and the
-     * enabled range set, so editing the config or changing the ranges
-     * invalidates it. A fresh selection is reused with no network round trip,
-     * which is what makes a reconnect cheap.
+     * Reuses the saved edge when it is still valid, otherwise scans immediately
+     * using Seed / valid ranges without blocking on full ISP discovery.
      */
     private suspend fun resolveEdgeIp(
         context: Context,
@@ -906,23 +946,24 @@ class ConnectionOrchestrator {
         profile: ProfileItem,
         fingerprint: String,
         onState: (AutoConnectState) -> Unit,
+        quickConnect: Boolean = false,
+        provider: EdgeProvider = QsPrefs.selectedProvider(),
     ): String? {
         val port = profile.serverPort?.toIntOrNull() ?: 0
         val saved = QsPrefs.loadSelection()
         val now = System.currentTimeMillis()
         val savedUsable = saved != null && saved.isUsable(now, fingerprint)
         val storedRanges = QualifiedRangeStore.snapshot()
+        val providerRanges = ProviderRangeStore.snapshot(provider).enabledScanCidrs
 
         // The decision table lives in ConnectPolicy so it is a test, not a set
-        // of booleans scattered through the flow. The refresh flag is read once
-        // here: it is a one-shot request, and reading it inside decide() would
-        // make the later discovery condition untestable.
+        // of booleans scattered through the flow.
         val refresh = QsPrefs.consumeRangeRefresh()
         val decision = ConnectPolicy.decide(
             mode = ConnectMode.Automatic,
             guid = guid,
             savedEdgeUsable = savedUsable,
-            hasQualifiedRanges = storedRanges.isNotEmpty(),
+            hasQualifiedRanges = storedRanges.isNotEmpty() || providerRanges.isNotEmpty(),
             refreshRequested = refresh,
         )
 
@@ -942,32 +983,28 @@ class ConnectionOrchestrator {
             QsPrefs.clearSelection()
         }
 
-        // Stage 1 and Stage 2 are independent. A discovery run that is already
-        // active is left running: starting the candidate scan is not a reason
-        // to cancel it, and its results are persisted as they arrive.
-
-        // The chosen ISP's qualified ranges are the canonical source. The
-        // global store covers a connection made before an ISP was named, and a
-        // user who configured ranges by hand keeps them as the last fallback.
-        val isp = QsPrefs.lastIsp()
-        val ispRanges = isp
-            ?.let { IspManager.getProfile(context, it)?.goodCidrs }
-            .orEmpty()
         val manual = ScanRangePlanner.dedupe(QsPrefs.loadRanges()).map { it.cidr }
-        var ranges = ispRanges
-            .ifEmpty { RangeSet.cidrs(storedRanges) }
-            .ifEmpty { manual }
+        var ranges = if (provider == EdgeProvider.CLOUDFRONT) {
+            providerRanges.ifEmpty {
+                com.v2ray.ang.ui.qsn.data.CloudFrontRangeProvider.fetchOfficialRanges(context)
+                ProviderRangeStore.snapshot(EdgeProvider.CLOUDFRONT).enabledScanCidrs
+            }.ifEmpty { manual }
+        } else {
+            val isp = QsPrefs.lastIsp()
+            val ispRanges = isp
+                ?.let { IspManager.getProfile(context, it)?.goodCidrs }
+                .orEmpty()
+            ispRanges
+                .ifEmpty { RangeSet.cidrs(storedRanges) }
+                .ifEmpty { providerRanges }
+                .ifEmpty { manual }
+        }
 
-        // Stage 1 runs only when there is nothing to scan with, or when the
-        // user explicitly asked for a refresh. A saved edge that failed its
-        // health check does not restart discovery while the range database
-        // still has entries.
-        if (refresh || ranges.isEmpty()) {
+        // Only block for Stage 1 Discovery if there is literally no Seed/valid range
+        // available (or for Cloudflare when the user explicitly requested refresh).
+        if (provider == EdgeProvider.CLOUDFLARE && (refresh || ranges.isEmpty())) {
             onState(AutoConnectState.DiscoveringRanges)
-            val ispName = isp ?: DiscoveryScheduler.DEFAULT_ISP
-            // A first connection must not wait for the whole dataset. The run
-            // starts in the background and the flow takes the first range that
-            // passes the real quality gate; the run then keeps measuring.
+            val ispName = QsPrefs.lastIsp() ?: DiscoveryScheduler.DEFAULT_ISP
             CloudflareScanner.discoverRanges(
                 context = context,
                 guid = guid,
@@ -980,9 +1017,8 @@ class ConnectionOrchestrator {
             ranges = if (first != null) {
                 listOf(first.cidr)
             } else {
-                // Nothing qualified in time: use what the run already stored
-                // (or the manual ranges) rather than scanning unrelated data.
                 RangeSet.cidrs(discoverRanges(context, guid, onState, force = false))
+                    .ifEmpty { providerRanges }
                     .ifEmpty { manual }
             }
             if (cancelled) return null
@@ -990,22 +1026,16 @@ class ConnectionOrchestrator {
 
         onState(AutoConnectState.ScanningCloudflareIps)
         val measured = ArrayList<ScanCandidate>()
-        val winner = scanForBestIp(context, guid, onState, ranges) { measured.add(it) }
+        val winner = scanForBestIp(context, guid, onState, ranges, provider) { measured.add(it) }
         val early = consumeEarlyPick()
         if (cancelled) return null
 
-        // The ranker needs a reachable candidate. If it has none but the scan
-        // still measured something that answered (a timeout keeps partial
-        // results), the user chooses from those: a finished scan is not a
-        // failed connection, and the flow stays in a valid waiting state.
         val suggestion = CandidateSelection.suggestion(winner?.ip, measured)
         if (!CandidateSelection.canContinue(winner?.ip, measured, early)) {
             LogUtil.w(TAG, "Scan finished without a single answering candidate")
             return null
         }
 
-        // A stable order: score first, then latency, then address. The UI shows
-        // this order and marks the first row as the suggestion.
         val ranked = measured
             .distinctBy { it.ip }
             .sortedWith(
@@ -1014,15 +1044,21 @@ class ConnectionOrchestrator {
                     .thenBy { it.ip },
             )
 
-        val chosen = if (early != null) {
-            // The user confirmed while the scan was running. That choice wins
-            // over the ranker, and no later callback can replace it.
-            ranked.firstOrNull { it.ip == early && it.answered }
-        } else {
-            onState(AutoConnectState.AwaitingIpChoice(ranked, suggestion))
-            val chosenIp = awaitIpChoice()
-            if (cancelled || chosenIp == null) return null
-            ranked.firstOrNull { it.ip == chosenIp && it.answered }
+        val chosen = when {
+            early != null -> {
+                ranked.firstOrNull { it.ip == early && it.answered }
+            }
+            quickConnect -> {
+                winner?.ip?.let { w -> ranked.firstOrNull { it.ip == w && it.answered } }
+                    ?: ranked.firstOrNull { it.ip == suggestion && it.answered }
+                    ?: ranked.firstOrNull { it.answered }
+            }
+            else -> {
+                onState(AutoConnectState.AwaitingIpChoice(ranked, suggestion))
+                val chosenIp = awaitIpChoice()
+                if (cancelled || chosenIp == null) return null
+                ranked.firstOrNull { it.ip == chosenIp && it.answered }
+            }
         }
         if (chosen == null) return null
 
@@ -1171,6 +1207,40 @@ class ConnectionOrchestrator {
             "applyEdgeToScope: " + applied + " applied, " + failed + " failed, scope=" + scope,
         )
         return EdgeApplyResult(applied, failed, selectedApplied)
+    }
+
+    private fun captureRollbackSnapshot(
+        selectedGuid: String,
+        selected: ProfileItem,
+    ): EdgeRollbackSnapshot {
+        val scope = edgeScopeOf(selectedGuid, selected)
+        val guids = when (scope) {
+            is EdgeApplication.Scope.Single -> listOf(selectedGuid)
+            is EdgeApplication.Scope.Subscription ->
+                MmkvManager.decodeServerList(scope.subscriptionId).distinct()
+        }
+        val targets = guids
+            .filterNot { ProbeProfile.isProbe(it) }
+            .mapNotNull { guid ->
+                val profile = if (guid == selectedGuid) selected else MmkvManager.decodeServerConfig(guid)
+                profile?.let { EdgeApplication.Target(guid, it) }
+            }
+        val inScope = EdgeApplication.targets(scope, targets, AutoConfigFilter::isEligible)
+        val previousEdges = inScope.associate { it.guid to it.profile.qsEdgeIp }
+        return EdgeRollbackSnapshot(
+            previousSelection = QsPrefs.loadSelection(),
+            previousEdgesByGuid = previousEdges,
+        )
+    }
+
+    private fun restoreRollbackSnapshot(snapshot: EdgeRollbackSnapshot) {
+        snapshot.previousEdgesByGuid.forEach { (guid, prevEdge) ->
+            val profile = MmkvManager.decodeServerConfig(guid) ?: return@forEach
+            profile.qsEdgeIp = prevEdge
+            MmkvManager.encodeServerConfig(guid, profile)
+        }
+        snapshot.previousSelection?.let { QsPrefs.saveSelection(it) }
+            ?: QsPrefs.clearSelection()
     }
 
     /**

@@ -1,5 +1,6 @@
 package com.v2ray.ang.ui.qsn.data
 
+import com.v2ray.ang.ui.qsn.domain.EdgeProvider
 import com.v2ray.ang.ui.qsn.domain.QualifiedRange
 import com.v2ray.ang.ui.qsn.domain.RangeSet
 
@@ -31,6 +32,7 @@ object QualifiedRangeStore {
         return synchronized(this) {
             val merged = RangeSet.merge(QsPrefs.loadQualifiedRanges(), found)
             QsPrefs.saveQualifiedRanges(merged)
+            ProviderRangeStore.mergeDiscovered(EdgeProvider.CLOUDFLARE, found)
             merged
         }
     }

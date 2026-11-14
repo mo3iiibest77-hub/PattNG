@@ -6,9 +6,9 @@ import com.v2ray.ang.core.CoreConfigManager
 import com.v2ray.ang.core.CoreNativeManager
 import com.v2ray.ang.dto.entities.ProfileItem
 import com.v2ray.ang.handler.MmkvManager
+import com.v2ray.ang.ui.qsn.data.CloudflareRangeProvider
+import com.v2ray.ang.ui.qsn.data.ProviderRangeStore
 import com.v2ray.ang.ui.qsn.data.QualifiedRangeStore
-import com.v2ray.ang.ui.qsn.domain.CandidateMetrics
-import com.v2ray.ang.ui.qsn.domain.CandidateRanker
 import com.v2ray.ang.ui.qsn.domain.DiscoveryEngine
 import com.v2ray.ang.ui.qsn.domain.DiscoveryPhase
 import com.v2ray.ang.ui.qsn.domain.DiscoveryQuality
@@ -16,10 +16,12 @@ import com.v2ray.ang.ui.qsn.domain.DiscoveryRunSummary
 import com.v2ray.ang.ui.qsn.domain.DiscoverySnapshot
 import com.v2ray.ang.ui.qsn.domain.DiscoveryStatus
 import com.v2ray.ang.ui.qsn.domain.DiscoveryStore
+import com.v2ray.ang.ui.qsn.domain.EdgeProvider
 import com.v2ray.ang.ui.qsn.domain.QualifiedRange
 import com.v2ray.ang.ui.qsn.domain.RangeMeasurement
 import com.v2ray.ang.ui.qsn.domain.RangeOutcome
 import com.v2ray.ang.ui.qsn.domain.RangeState
+import com.v2ray.ang.ui.qsn.domain.ReferenceCandidateSelector
 import com.v2ray.ang.ui.qsn.domain.Statistics
 import com.v2ray.ang.util.LogUtil
 import kotlinx.coroutines.CancellationException
@@ -106,7 +108,8 @@ object CloudflareScanner {
     private const val DEFAULT_CONCURRENCY = 4
     private const val IPS_PER_CIDR = 2
     private const val MAX_CANDIDATES = 30
-    private const val LATENCY_SAMPLES = 3
+    /** Exact September 8 (c489a5aa) behavior: 1 outbound delay probe before mandatory speed test. */
+    private const val LATENCY_SAMPLES = 1
 
     /** Run ids keep a discovery probe and a Stage 2 probe for the same IP apart. */
     private const val RUN_DISCOVERY = "d"
@@ -197,6 +200,11 @@ object CloudflareScanner {
     // ---------- Candidate generation ----------
 
     private fun generateCandidates(context: Context): List<String> {
+        val storedEnabled = ProviderRangeStore.snapshot(EdgeProvider.CLOUDFLARE).enabledScanCidrs
+        if (storedEnabled.isNotEmpty()) {
+            val fromStore = candidatesFromRanges(storedEnabled, MAX_CANDIDATES)
+            if (fromStore.isNotEmpty()) return fromStore
+        }
         val candidates = mutableListOf<String>()
         try {
             val lines = context.assets.open("cf_ranges_v4.txt")
@@ -356,17 +364,28 @@ object CloudflareScanner {
         }
     }
 
-    /** Samples [IPS_PER_CIDR] addresses from every range, bounded by [MAX_CANDIDATES]. */
-    private fun candidatesFromRanges(cidrs: List<String>): List<String> {
+    /** Samples [ipsPerCidr] addresses from each CIDR up to [maxCandidates]. */
+    internal fun candidatesFromRanges(
+        cidrs: List<String>,
+        ipsPerCidr: Int = IPS_PER_CIDR,
+        maxCandidates: Int = MAX_CANDIDATES,
+    ): List<String> {
         val candidates = LinkedHashSet<String>()
         cidrs.shuffled().forEach { cidr ->
-            if (candidates.size >= MAX_CANDIDATES) return@forEach
+            if (candidates.size >= maxCandidates) return@forEach
             val parts = cidr.trim().split("/")
             if (parts.size != 2) return@forEach
             val prefix = parts[1].toIntOrNull() ?: return@forEach
-            candidates.addAll(randomIpsFromCidr(parts[0], prefix, IPS_PER_CIDR))
+            candidates.addAll(randomIpsFromCidr(parts[0], prefix, ipsPerCidr))
         }
-        return candidates.take(MAX_CANDIDATES)
+        return candidates.take(maxCandidates)
+    }
+
+    internal fun sampleIpsForRange(cidr: String, count: Int = DiscoveryQuality.IPS_PER_RANGE): List<String> {
+        val parts = cidr.trim().split("/")
+        if (parts.size != 2) return emptyList()
+        val prefix = parts[1].toIntOrNull() ?: return emptyList()
+        return randomIpsFromCidr(parts[0], prefix, count)
     }
 
     /**
@@ -710,16 +729,8 @@ object CloudflareScanner {
         )
     }
 
-    private fun readRangeAsset(context: Context): List<String> = try {
-        context.assets.open("cf_ranges_v4.txt").bufferedReader().useLines { lines ->
-            lines.map { it.trim() }
-                .filter { it.isNotEmpty() && !it.startsWith("#") }
-                .toList()
-        }
-    } catch (e: Exception) {
-        LogUtil.e(TAG, "Failed to load cf_ranges_v4.txt: " + e.javaClass.simpleName)
-        emptyList()
-    }
+    private fun readRangeAsset(context: Context): List<String> =
+        CloudflareRangeProvider.loadDiscoveryDataset(context)
 
     /**
      * Store adapter for the pure engine.
@@ -859,34 +870,15 @@ object CloudflareScanner {
         }
         try {
             joinAll(*jobs.toTypedArray())
-            val metrics = results.map { result ->
-                CandidateMetrics(
-                    ip = result.ip,
-                    reachable = result.isSuccess,
-                    latencySamples = result.latencySamples,
-                    downloadKBps = if (result.hasTraffic) result.downloadKBps else null,
-                    uploadKBps = if (result.hasTraffic) result.uploadKBps else null,
-                    successes = result.latencySamples.size,
-                    failures = result.failures,
-                    timeouts = result.timeouts,
-                )
-            }
-            val scored = CandidateRanker.best(metrics)
-            val best = scored?.let { winner ->
-                results.firstOrNull { it.ip == winner.ip }?.copy(
-                    score = winner.score,
-                    confidence = winner.confidence,
-                )
-            }
+            val scored = ReferenceCandidateSelector.scoreForDisplay(results)
+            val best = ReferenceCandidateSelector.selectBest(scored)
             LogUtil.i(
                 TAG,
-                "Done. Candidates=" + metrics.size + " reachable=" + metrics.count { it.reachable } +
-                    " best=" + best?.ip + " score=" + (scored?.score?.toInt() ?: -1) +
-                    " conf=" + (scored?.confidence ?: -1) +
-                    " p50=" + (best?.latencyMs ?: -1) + "ms" +
-                    " jitter=" + (best?.jitterMs ?: -1) + "ms" +
-                    " down=" + (best?.downloadKBps ?: -1) + "KB/s" +
-                    " up=" + (best?.uploadKBps ?: -1) + "KB/s",
+                "Done. Candidates=" + results.size + " passed=" + ReferenceCandidateSelector.eligible(scored).size +
+                    " best=" + best?.ip +
+                    " latency=" + (best?.latencyMs ?: -1) + "ms" +
+                    " up=" + (best?.uploadKBps ?: -1) + "KB/s" +
+                    " dn=" + (best?.downloadKBps ?: -1) + "KB/s",
             )
             callback.onFinish(best)
         } catch (_: CancellationException) {
@@ -896,6 +888,19 @@ object CloudflareScanner {
             callback.onFinish(null)
         }
     }
+
+    /**
+     * Exact September 8 (`c489a5aa`) candidate probe with non-destructive [ProbeProfile] isolation:
+     * 1x outbound delay test followed by mandatory [RealTrafficSpeedTest]. Shared by both
+     * [CloudflareScanner] and [CloudFrontScanner].
+     */
+    internal suspend fun probeCandidate(
+        context: Context,
+        baseGuid: String,
+        base: ProfileItem,
+        ip: String,
+        runId: String,
+    ): CandidateResult = testCandidate(context, baseGuid, base, ip, runId)
 
     private suspend fun testCandidate(
         context: Context,
@@ -908,14 +913,9 @@ object CloudflareScanner {
         return@withContext try {
             // Keep scanner validation identical to the configuration that
             // applyBestIp() writes to the real production profile.
-            // qsEdgeIp must be cleared: the temporary profile dials the
-            // candidate directly, and a stale edge from a previous run would
-            // silently be substituted for it in the outbound builder.
             val temp = base.copy(
                 server = ip,
                 qsEdgeIp = null,
-                // Probe profiles live in their own index, so they can never be
-                // listed as a user configuration while the scan runs.
                 subscriptionId = ProbeProfile.SUBSCRIPTION_ID,
             ).apply {
                 fingerPrint = "unsafe"
@@ -923,9 +923,6 @@ object CloudflareScanner {
                 if (cipherSuites.isNullOrBlank()) cipherSuites = PRODUCTION_CIPHERSUITES
             }
             MmkvManager.encodeServerConfig(tempGuid, temp)
-            // encodeServerConfig selects the profile when nothing is selected
-            // yet. A throw-away probe must never become the user's selection,
-            // so put the real config back before measuring.
             if (MmkvManager.getSelectServer() == tempGuid) {
                 MmkvManager.setSelectServer(baseGuid)
             }
@@ -935,49 +932,39 @@ object CloudflareScanner {
                 return@withContext CandidateResult(ip, failures = 1, configError = true)
             }
 
-            // Repeated probes: a single sample cannot express jitter, and one
-            // lucky number must not decide the winner.
-            val samples = ArrayList<Long>(LATENCY_SAMPLES)
-            var failures = 0
-            repeat(LATENCY_SAMPLES) {
-                val latency = CoreNativeManager.measureOutboundDelay(cfg.content, TEST_URL)
-                if (latency >= 0) samples.add(latency) else failures++
-            }
-            if (samples.isEmpty()) {
-                LogUtil.d(TAG, ip + " -> FAIL (no latency sample)")
-                return@withContext CandidateResult(ip, failures = failures, timeouts = failures)
+            // Reference c489a5aa gate step 1: 1x outbound delay check.
+            val latency = CoreNativeManager.measureOutboundDelay(cfg.content, TEST_URL)
+            if (latency < 0) {
+                LogUtil.d(TAG, ip + " -> FAIL (latency)")
+                return@withContext CandidateResult(ip, failures = 1, timeouts = 1)
             }
 
-            // Bounded 1 MiB up + 1 MiB down through the tested config. A
-            // failure here leaves throughput unknown (null for the ranker); it
-            // must not invalidate an edge that clearly answered.
+            // Reference c489a5aa gate step 2: mandatory real-traffic speedtest (1 MiB up + 1 MiB down).
             val traffic = try {
                 com.v2ray.ang.service.RealTrafficSpeedTest.run(cfg.content)
-            } catch (e: Exception) {
+            } catch (_: Exception) {
                 null
             }
-            val uploadKBps = (traffic?.uploadBytesPerSecond ?: 0L) / 1024
-            val downloadKBps = (traffic?.downloadBytesPerSecond ?: 0L) / 1024
-            LogUtil.i(
-                TAG,
-                ip + " -> p50=" + (Statistics.median(samples) ?: -1) + "ms jitter=" +
-                    Statistics.medianAbsoluteDeviation(samples) + "ms dn=" + downloadKBps +
-                    "KB/s up=" + uploadKBps + "KB/s traffic=" + (traffic != null),
-            )
+            if (traffic == null) {
+                LogUtil.d(TAG, ip + " -> FAIL (upload/download traffic test failed)")
+                return@withContext CandidateResult(ip, failures = 1, hasTraffic = false)
+            }
+
+            val uploadKBps = traffic.uploadBytesPerSecond / 1024
+            val downloadKBps = traffic.downloadBytesPerSecond / 1024
+            LogUtil.i(TAG, "$ip -> ${latency}ms up=${uploadKBps}KB/s dn=${downloadKBps}KB/s")
             CandidateResult(
                 ip = ip,
-                latencySamples = samples,
+                latencySamples = listOf(latency),
                 uploadKBps = uploadKBps,
                 downloadKBps = downloadKBps,
-                failures = failures,
+                failures = 0,
                 timeouts = 0,
-                hasTraffic = traffic != null,
+                hasTraffic = true,
             )
         } catch (e: CancellationException) {
             throw e
         } catch (t: Throwable) {
-            // The probe runs native code in this process. An Error here used to
-            // escape every catch(Exception) and kill the app during a scan.
             LogUtil.e(TAG, ip + " -> probe failed: " + t.javaClass.name)
             CandidateResult(ip, failures = 1, configError = true)
         } finally {
