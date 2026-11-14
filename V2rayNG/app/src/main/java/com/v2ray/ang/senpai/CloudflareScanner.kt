@@ -208,11 +208,24 @@ object CloudflareScanner {
             }
             try {
                 joinAll(*jobs.toTypedArray())
-                val allGood = (alreadyFound + newGoodCidrs.sortedByDescending { it.second }.map { it.first }).distinct().take(30)
-                IspManager.saveProfile(context, IspProfile(ispName, allGood, lastScannedIndex = 0))
+                val allGood = synchronized(lock) {
+                    (alreadyFound + newGoodCidrs.sortedByDescending { it.second }.map { it.first }).distinct()
+                }
+                IspManager.saveProfile(
+                    context,
+                    IspProfile(
+                        name = ispName,
+                        goodCidrs = allGood,
+                        manualCidrs = existing?.manualCidrs ?: emptyList(),
+                        lastScannedIndex = 0,
+                        createdAt = existing?.createdAt ?: System.currentTimeMillis(),
+                    )
+                )
                 withContext(Dispatchers.Main) { onFinish(allGood) }
             } catch (_: CancellationException) {
-                val partial = (alreadyFound + newGoodCidrs.map { it.first }).distinct()
+                val partial = synchronized(lock) {
+                    (alreadyFound + newGoodCidrs.map { it.first }).distinct()
+                }
                 IspManager.savePartialProgress(context, ispName, partial, done)
                 withContext(Dispatchers.Main) { onFinish(partial) }
             }

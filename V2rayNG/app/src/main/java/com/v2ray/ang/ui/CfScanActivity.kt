@@ -1,10 +1,13 @@
 package com.v2ray.ang.ui
 
 import android.content.BroadcastReceiver
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.animation.AnimatedVisibility
@@ -16,6 +19,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -23,6 +27,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -550,13 +555,36 @@ private fun SavedIspCard(
                     Spacer(Modifier.height(6.dp))
                 }
                 if (profile.goodCidrs.isNotEmpty()) {
-                    Text("رنج‌های کشف‌شده (${profile.goodCidrs.size}):", color = S_Green, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                    Spacer(Modifier.height(4.dp))
-                    profile.goodCidrs.take(10).forEach { cidr ->
-                        Text("• $cidr", color = S_TextSec, fontSize = 11.sp, modifier = Modifier.padding(vertical = 1.dp))
+                    val ctx = LocalContext.current
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            "رنج‌های کشف‌شده (${profile.goodCidrs.size}):",
+                            color = S_Green, fontSize = 11.sp, fontWeight = FontWeight.Bold
+                        )
+                        TextButton(
+                            onClick = {
+                                val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                cm.setPrimaryClip(ClipData.newPlainText("cf_cidrs", profile.goodCidrs.joinToString("\n")))
+                                Toast.makeText(ctx, "${profile.goodCidrs.size} رنج کپی شد", Toast.LENGTH_SHORT).show()
+                            },
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                            modifier = Modifier.height(28.dp)
+                        ) {
+                            Text("کپی همه", color = S_Gold, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
                     }
-                    if (profile.goodCidrs.size > 10)
-                        Text("... و ${profile.goodCidrs.size - 10} رنج دیگه", color = S_TextSec.copy(.5f), fontSize = 10.sp)
+                    Spacer(Modifier.height(4.dp))
+                    SelectionContainer {
+                        Column {
+                            profile.goodCidrs.forEach { cidr ->
+                                Text("• $cidr", color = S_TextSec, fontSize = 11.sp, modifier = Modifier.padding(vertical = 1.dp))
+                            }
+                        }
+                    }
                 }
                 Spacer(Modifier.height(8.dp))
                 if (showAddCidr) {

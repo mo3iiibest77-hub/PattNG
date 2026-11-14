@@ -9,6 +9,7 @@ on:
   push:
     branches:
       - master
+      - recovery/qsn-ref-stage1
 
 permissions:
   contents: write
@@ -100,6 +101,25 @@ jobs:
         chmod 755 gradlew
         ./gradlew licenseFdroidReleaseReport
         ./gradlew assembleRelease -Pandroid.injected.signing.store.file=${{ steps.android_keystore.outputs.filePath }} -Pandroid.injected.signing.store.password=${{ secrets.APP_KEYSTORE_PASSWORD }} -Pandroid.injected.signing.key.alias=${{ secrets.APP_KEYSTORE_ALIAS }} -Pandroid.injected.signing.key.password=${{ secrets.APP_KEY_PASSWORD }}
+
+    - name: Verify APK signature and upgrade compatibility
+      run: |
+        set -euo pipefail
+        cd ${{ github.workspace }}/V2rayNG
+        BUILD_TOOLS=$(ls -d "${ANDROID_HOME}"/build-tools/* | sort -V | tail -n 1)
+        APK="app/build/outputs/apk/playstore/release/QuietStormNG_2.3.4-ref1_arm64-v8a.apk"
+        test -f "${APK}"
+        badging=$("${BUILD_TOOLS}/aapt2" dump badging "${APK}")
+        line=$(printf '%s\n' "${badging}" | awk 'NR==1')
+        echo "${line}"
+        echo "${line}" | grep -q "name='com.quietstorm.ng'"
+        echo "${line}" | grep -q "versionCode='4000745'"
+        certs=$("${BUILD_TOOLS}/apksigner" verify --print-certs "${APK}" 2>&1)
+        printf '%s\n' "${certs}"
+        cert_sha256=$(printf '%s\n' "${certs}" | sed -n 's/.*SHA-256 digest: *//p' | tr -d ' \r' | awk 'NR==1')
+        echo "Cert SHA-256: ${cert_sha256}"
+        test "${cert_sha256}" = "a016c9bf4d8e7341efd565f7fc1959235fcdf74c63feb1e31dbaee86a9c22ae1"
+        sha256sum "${APK}"
     
     - name: Upload arm64-v8a APK
       uses: actions/upload-artifact@v7
