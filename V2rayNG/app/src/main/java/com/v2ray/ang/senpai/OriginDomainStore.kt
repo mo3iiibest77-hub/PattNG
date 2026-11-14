@@ -13,7 +13,7 @@ object OriginDomainStore {
     private const val KEY_PREFIX = "qsn_origin_domain_"
 
     fun rememberIfDomain(guid: String, profile: ProfileItem) {
-        val candidates = listOf(profile.host, profile.sni, profile.server)
+        val candidates = listOf(profile.server, profile.sni, profile.host)
         for (raw in candidates) {
             val clean = normalizeHost(raw) ?: continue
             if (!Utils.isPureIpAddress(clean)) {
@@ -36,13 +36,13 @@ object OriginDomainStore {
     }
 
     fun resolveDomainFromProfile(profile: ProfileItem): String? {
-        val host = normalizeHost(profile.host)
-        if (host != null && !Utils.isPureIpAddress(host)) return host
-        val sni = normalizeHost(profile.sni)
-        if (sni != null && !Utils.isPureIpAddress(sni)) return sni
         val server = normalizeHost(profile.server)
         if (server != null && !Utils.isPureIpAddress(server)) return server
-        return host ?: sni ?: server
+        val sni = normalizeHost(profile.sni)
+        if (sni != null && !Utils.isPureIpAddress(sni)) return sni
+        val host = normalizeHost(profile.host)
+        if (host != null && !Utils.isPureIpAddress(host)) return host
+        return server ?: sni ?: host
     }
 
     private fun normalizeHost(raw: String?): String? {
