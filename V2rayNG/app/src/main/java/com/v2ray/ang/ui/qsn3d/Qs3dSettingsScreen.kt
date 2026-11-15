@@ -38,6 +38,8 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import android.os.Build
+import com.v2ray.ang.BuildConfig
 import com.v2ray.ang.R
 import com.v2ray.ang.dto.AppInfo
 import com.v2ray.ang.ui.compose.AppListItem
@@ -65,6 +67,8 @@ fun Qs3dSettingsScreen(
     onScanLicenseQr: () -> Unit,
     onOpenMySubscription: () -> Unit,
     onOpenAboutPromo: () -> Unit,
+    onCheckUpdates: () -> Unit,
+    onOpenAvailableUpdate: () -> Unit,
     onLogoutLicense: () -> Unit,
 ) {
     var showChangeLicenseDialog by remember { mutableStateOf(false) }
@@ -203,6 +207,73 @@ fun Qs3dSettingsScreen(
                         color = QsColors.AuroraMint,
                         fontWeight = FontWeight.SemiBold
                     )
+                }
+            }
+        }
+
+        // 1.7 App Version & Self-Updater Card
+        item {
+            val deviceAbi = Build.SUPPORTED_ABIS?.firstOrNull() ?: "arm64-v8a"
+            val updateInfo = state.availableUpdate
+            Glass3dCard(beamSeed = 23, glowColor = QsColors.ElectricCyan.copy(alpha = 0.42f)) {
+                Text(
+                    text = stringResource(R.string.novapulse_update_card_title),
+                    color = QsColors.TextPrimary,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 15.sp
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    text = stringResource(
+                        R.string.novapulse_update_current_ver_fmt,
+                        "v${BuildConfig.VERSION_NAME}",
+                        deviceAbi
+                    ),
+                    color = QsColors.TextSecondary,
+                    fontSize = 12.sp
+                )
+                if (updateInfo?.hasUpdate == true && !updateInfo.latestVersion.isNullOrBlank()) {
+                    Spacer(Modifier.height(8.dp))
+                    Button(
+                        onClick = onOpenAvailableUpdate,
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Text(
+                            text = stringResource(
+                                R.string.novapulse_update_available_banner_fmt,
+                                updateInfo.latestVersion
+                            ),
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                } else {
+                    Spacer(Modifier.height(10.dp))
+                    OutlinedButton(
+                        onClick = onCheckUpdates,
+                        enabled = !state.isCheckingUpdate,
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        if (state.isCheckingUpdate) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(16.dp),
+                                strokeWidth = 2.dp,
+                                color = QsColors.ElectricCyan
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                text = stringResource(R.string.novapulse_update_checking),
+                                color = QsColors.ElectricCyan
+                            )
+                        } else {
+                            Text(
+                                text = stringResource(R.string.novapulse_update_check_btn),
+                                color = QsColors.ElectricCyan,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                    }
                 }
             }
         }

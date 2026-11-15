@@ -13,14 +13,21 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.v2ray.ang.AngApplication
 import com.v2ray.ang.AppConfig
+import com.v2ray.ang.BuildConfig
 import com.v2ray.ang.R
 import com.v2ray.ang.core.LauncherManager
+import com.v2ray.ang.dto.ApkAssetOption
+import com.v2ray.ang.dto.CheckUpdateResult
 import com.v2ray.ang.dto.TestServiceMessage
 import com.v2ray.ang.dto.entities.ProfileItem
 import com.v2ray.ang.extension.toSpeedString
 import com.v2ray.ang.handler.AngConfigManager
+import com.v2ray.ang.handler.ApkInstallResult
 import com.v2ray.ang.handler.AppLocaleManager
 import com.v2ray.ang.handler.MmkvManager
+import com.v2ray.ang.handler.NovaPulseApkDownloader
+import com.v2ray.ang.handler.UpdateCheckerManager
+import java.io.File
 import com.v2ray.ang.senpai.AutoConfigFilter
 import com.v2ray.ang.senpai.CdnDetectionResult
 import com.v2ray.ang.senpai.CdnPingClassifier
@@ -123,6 +130,13 @@ data class Qs3dUiState(
     val lastOptimizeIp: String = "",
     val lastOptimizeUploadKBps: Long = 0L,
     val currentLanguageCode: String = "fa",
+    // Self-Updater
+    val isCheckingUpdate: Boolean = false,
+    val availableUpdate: CheckUpdateResult? = null,
+    val showUpdateDialog: Boolean = false,
+    val updateDownloadProgress: Int? = null,
+    val readyUpdateApkPath: String? = null,
+    val updateNeedsInstallPerm: Boolean = false,
 ) {
     val liveDownloadFormatted: String get() = liveDownloadBps.toSpeedString()
     val liveUploadFormatted: String get() = liveUploadBps.toSpeedString()
@@ -152,6 +166,10 @@ class Qs3dViewModel(
         collectServiceEvents()
         collectCoordinatorFlows()
         refreshAllData(fetchRemoteQuota = true)
+        viewModelScope.launch(Dispatchers.IO) {
+            delay(1500L)
+            checkForAppUpdates(silent = true)
+        }
     }
 
     private fun collectServiceEvents() {
@@ -813,6 +831,122 @@ class Qs3dViewModel(
     fun setLanguage(code: String) {
         AppLocaleManager.setApplicationLanguage(code)
         _uiState.update { it.copy(currentLanguageCode = code) }
+    }
+
+    // ---------- Self-Update Checker & Installer ----------
+
+    fun checkForAppUpdates(silent: Boolean = false) {
+        if (_uiState.value.isCheckingUpdate) return
+        val app = getApplication<Application>()
+        viewModelScope.launch(Dispatchers.IO) {
+            _uiState.update { it.copy(isCheckingUpdate = true) }
+            try {
+                val res = UpdateCheckerManager.checkForUpdate(includePreRelease = false)
+                if (res.hasUpdate) {
+                    _uiState.update {
+                        it.copy(
+                            isCheckingUpdate = false,
+                            availableUpdate = res,
+                            showUpdateDialog = true
+                        )
+                    }
+                } else {
+                    _uiState.update { it.copy(isCheckingUpdate = false, availableUpdate = null) }
+                    if (!silent) {
+                        val ver = BuildConfig.VERSION_NAME
+                        _uiState.update {
+                            it.copy(toastMessage = app.getString(R.string.novapulse_update_up_to_date, ver))
+                        }
+                    }
+                }
+            } catch (_: Exception) {
+                _uiState.update { it.copy(isCheckingUpdate = false) }
+                if (!silent) {
+                    _uiState.update { it.copy(toastMessage = app.getString(R.string.toast_failure)) }
+                }
+            }
+        }
+    }
+
+    fun openUpdateDialog(open: Boolean) {
+        _uiState.update { it.copy(showUpdateDialog = open) }
+    }
+
+    fun downloadAndInstallAppUpdate(option: ApkAssetOption) {
+        if (_uiState.value.updateDownloadProgress != null) return
+        val app = getApplication<Application>()
+        viewModelScope.launch(Dispatchers.IO) {
+            _uiState.update {
+                it.copy(
+                    updateDownloadProgress = 0,
+                    readyUpdateApkPath = null,
+                    updateNeedsInstallPerm = false,
+                )
+            }
+            try {
+                val apkFile = NovaPulseApkDownloader.downloadApk(
+                    context = app,
+                    downloadUrl = option.downloadUrl,
+                    fileName = option.fileName,
+                    expectedSha256 = option.sha256,
+                ) { pct ->
+                    _uiState.update { it.copy(updateDownloadProgress = pct) }
+                }
+                _uiState.update {
+                    it.copy(
+                        updateDownloadProgress = null,
+                        readyUpdateApkPath = apkFile.absolutePath,
+                    )
+                }
+                when (NovaPulseApkDownloader.launchApkInstaller(app, apkFile)) {
+                    is ApkInstallResult.NeedsUnknownSourcesPermission -> {
+                        _uiState.update {
+                            it.copy(
+                                updateNeedsInstallPerm = true,
+                                toastMessage = app.getString(R.string.novapulse_update_perm_needed)
+                            )
+                        }
+                        app.startActivity(NovaPulseApkDownloader.buildUnknownSourcesSettingsIntent(app))
+                    }
+                    is ApkInstallResult.Failed -> {
+                        _uiState.update {
+                            it.copy(toastMessage = app.getString(R.string.toast_failure))
+                        }
+                    }
+                    ApkInstallResult.LaunchedInstaller -> Unit
+                }
+            } catch (e: Exception) {
+                _uiState.update {
+                    it.copy(
+                        updateDownloadProgress = null,
+                        toastMessage = app.getString(R.string.novapulse_update_failed_fmt, e.message ?: "error")
+                    )
+                }
+            }
+        }
+    }
+
+    fun installReadyUpdateApk() {
+        val path = _uiState.value.readyUpdateApkPath ?: return
+        val app = getApplication<Application>()
+        val file = File(path)
+        when (NovaPulseApkDownloader.launchApkInstaller(app, file)) {
+            is ApkInstallResult.NeedsUnknownSourcesPermission -> {
+                _uiState.update {
+                    it.copy(
+                        updateNeedsInstallPerm = true,
+                        toastMessage = app.getString(R.string.novapulse_update_perm_needed)
+                    )
+                }
+                app.startActivity(NovaPulseApkDownloader.buildUnknownSourcesSettingsIntent(app))
+            }
+            is ApkInstallResult.Failed -> {
+                _uiState.update { it.copy(toastMessage = app.getString(R.string.toast_failure)) }
+            }
+            ApkInstallResult.LaunchedInstaller -> {
+                _uiState.update { it.copy(updateNeedsInstallPerm = false) }
+            }
+        }
     }
 
     override fun onCleared() {

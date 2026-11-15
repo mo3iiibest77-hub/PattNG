@@ -1,40 +1,26 @@
-**v2rayNG 隐私权政策**
+# NovaPulse Privacy Policy / سیاست حفظ حریم خصوصی نواپالس
 
-本政策自2023年11月17日起施行
+## English
 
-2dust 将 v2rayNG 应用程序构建为开源应用程序。 本服务由 2dust 免费提供，并且旨在按原样使用。
+NovaPulse (`com.quietstorm.ng`) is a license-driven encrypted VPN client powered by Xray-core.
 
-v2rayNG 尊重并保护所有用户的个人隐私权，为此我们向大众公开这份隐私权政策。**您使用 v2rayNG 即代表您以阅读并同意了这份条款，如果您不同意这份条款请立即停止使用并卸载 v2rayNG。**
+1. **Minimal Local Storage**: NovaPulse stores your active license session token, subscription profile list, discovered CDN IP ranges, and preferences locally on your device using encrypted storage (`MMKV`).
+2. **License & Update Requests**:
+   - License activation and quota status checks communicate exclusively with the configured NovaPulse license backend (`nova.dontbedumb.ir`) using an anonymous app-scoped device identifier.
+   - Update checks query the NovaPulse release feed (`nova.dontbedumb.ir` / official GitHub releases) solely to compare app version metadata.
+3. **No Traffic Logging or Analytics**: NovaPulse does not collect, sell, or log browsing history, DNS queries, or tunneled traffic on third-party analytics servers.
+4. **User-Initiated Diagnostics**: If you manually export logs (`Logcat`) to send to support, you choose whether and how to share that file.
+5. **Support**: Contact Telegram support at `@Mo3i_Best` (`https://t.me/Mo3i_Best`).
 
-**信息收集**
+---
 
-v2rayNG 软件自身不会发送任何信息到开发者，但是您下载软件的应用市场（如 Google Play）可能会收集关于应用运行状态的相关信息并提供给 v2rayNG 开发者。有关这些信息，请阅读您使用的应用市场所提供的隐私权政策。
+## فارسی
 
-v2rayNG 软件中可能包含需要通过 IAP 支付解锁的功能，您的支付信息将由相关的 IAP 渠道进行处理，而我们对支付信息没有访问权。
+اپلیکیشن **نواپالس (NovaPulse)** با شناسه بسته `com.quietstorm.ng` یک کلاینت رمزنگاری‌شده VPN مبتنی بر Xray-core است:
 
-当您向 v2rayNG 开发者反馈软件运行中的错误时，开发者可能会要求您提供软件以及系统的日志以帮助确认问题的原因。因日志中可能包括敏感信息，此类信息只能由您自己操作发送。**我们不对任何传输服务的安全性和隐私性做任何明示或暗示的担保，请您在传送相关信息时选择可以您自身可以接受的方式。**
-
-**信息共享**
-
-我们不会向任何第三方出售收集到的用户数据。我们可能向外部开发者提供信息以协助软件的开发，但是在提供信息之前我们会传达相关保密义务并确定其可以遵守。
-
-**信息存留**
-
-除非有相关法律规定，我们会在 30 天内清除不需要继续使用的用户数据，或将统计数据整合为无法识别单个用户的综合报告。
-
-**信息泄露**
-
-我们会使用合理的技术和安全手段尽力保护用户的数据，但是无法保证数据的绝对安全。如果我们确认数据发生了泄露，我们会在 7 天内通过可用的渠道通知用户。**您同意不向我们追责任何因不可抗力而造成的损失。**
-
-**儿童隐私**
-
-这些服务不针对 13 岁以下的任何人。我不会故意收集 13 岁以下儿童的个人身份信息。 如果我发现 13 岁以下的儿童向我提供了个人信息，我会立即从我们的服务器中删除该信息。 如果您是父母或监护人，并且您知道您的孩子向我们提供了个人信息，请与我联系，以便我能够采取必要的行动。
-
-**条款修改**
-
-我们保留修改这份隐私权政策的权利，但是会确保在更新条款前至少 30 天通过我们的可用渠道和应用内提示来通知用户。**在新条款生效后继续使用软件即表示您同意修改后的隐私权政策。**
-
-**联系我们**
-
-如果您对我的隐私政策有任何疑问或建议，请随时通过 CaptainIronng@protonmail.com 与我联系。
-
+1. **ذخیره‌سازی محلی محدود**: توکن جلسه لایسنس، سرورهای دریافتی، رنج‌های کشف‌شده و تنظیمات برنامه صرفاً به‌صورت محلی در حافظه گوشی (`MMKV`) نگهداری می‌شوند.
+2. **ارتباط با سرور لایسنس و بروزرسانی**:
+   - بررسی اعتبار لایسنس و حجم باقیمانده فقط با سرور اختصاصی نواپالس انجام می‌شود.
+   - بررسی نسخه جدید فقط شماره نسخه و لینک فایل نصب هماهنگ با پردازنده دستگاه را دریافت می‌کند.
+3. **عدم ثبت ترافیک کاربران**: هیچ تاریخچه مرور، DNS یا ترافیک عبوری کاربران در سرویس‌های تحلیلی یا تبلیغاتی ذخیره نمی‌شود.
+4. **پشتیبانی مستقیم**: آیدی تلگرام [`@Mo3i_Best`](https://t.me/Mo3i_Best)

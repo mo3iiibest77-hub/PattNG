@@ -1,5 +1,5 @@
-blank_issues_enabled: false
+blank_issues_enabled: true
 contact_links:
-  - name: V2Ray程序问题
-    url: https://github.com/v2fly/v2ray-core/
-    about: 如果您有V2Ray而非v2rayNG的问题，请至这个链接讨论。
+  - name: NovaPulse Telegram Support
+    url: https://t.me/Mo3i_Best
+    about: Direct support & license inquiries on Telegram (@Mo3i_Best)

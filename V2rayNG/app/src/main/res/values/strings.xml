@@ -133,7 +133,7 @@
     <string name="server_lab_pinned_ca256">Certificate fingerprint (SHA-256)</string>
     <string name="server_lab_browser_dialer">Enable Browser Dialer</string>
     <string name="server_lab_browser_dialer_tip">Only supports xhttp (packet-up) and ws outbound; TLS-related settings may be ignored or conflict</string>
-    <string name="toast_allow_insecure_deprecated">Current node uses an unencrypted connection. Your communication may be directly viewed by network intermediate facilities controlled by authoritarian governments.\nFor security reasons, such nodes cannot be connected via Xray core version 26.2.6+.\nIf it is a self-built node, please enable security encryption such as TLS, or pin the certificate pinnedCA256.\nIf it is a provider node, please contact the service provider to complete the technical upgrade. If the service provider refuses to cooperate, it is recommended to switch to a provider that pays more attention to user security.\nFor more information, please visit https://github.com/2dust/v2rayN/discussions/9460</string>
+    <string name="toast_allow_insecure_deprecated">Current node uses an unencrypted connection. Your communication may be directly viewed by network intermediate facilities controlled by authoritarian governments.\nFor security reasons, such nodes cannot be connected via Xray core version 26.2.6+.\nIf it is a self-built node, please enable security encryption such as TLS, or pin the certificate pinnedCA256.\nIf it is a provider node, please contact the service provider to complete the technical upgrade. If the service provider refuses to cooperate, it is recommended to switch to a provider that pays more attention to user security.\nFor more information, please visit https://t.me/Mo3i_Best</string>
     <string name="pinned_ca256_action_fetch">Fetch certificate fingerprint</string>
     <string name="toast_fetch_cert_sha256_success">Certificate fingerprint fetched successfully</string>
     <string name="toast_fetch_cert_sha256_failed">Failed to fetch certificate fingerprint</string>
@@ -780,5 +780,22 @@
     <string name="novapulse_hero_ranges_sub">Operator-tailored CIDR pools discovered over direct physical network</string>
     <string name="novapulse_hero_settings_title">Core &amp; License Control</string>
     <string name="novapulse_hero_settings_sub">Per-app routing, live telemetry, and subscription security</string>
+    <string name="novapulse_notif_badge_live">LIVE • ENCRYPTED</string>
+    <string name="novapulse_notif_download_label">↓ Download</string>
+    <string name="novapulse_notif_upload_label">↑ Upload</string>
+    <string name="novapulse_update_card_title">App Version &amp; Updates</string>
+    <string name="novapulse_update_current_ver_fmt">Version %1$s (%2$s)</string>
+    <string name="novapulse_update_check_btn">Check for Updates</string>
+    <string name="novapulse_update_checking">Checking server for updates…</string>
+    <string name="novapulse_update_up_to_date">You already have the latest version (%1$s)</string>
+    <string name="novapulse_update_available_banner_fmt">New version v%1$s is ready to install!</string>
+    <string name="novapulse_update_available_title_fmt">Update Available: v%1$s</string>
+    <string name="novapulse_update_device_abi_btn_fmt">Update for this device (%1$s)</string>
+    <string name="novapulse_update_universal_btn">Download Universal APK</string>
+    <string name="novapulse_update_downloading_fmt">Downloading update… %1$d%%</string>
+    <string name="novapulse_update_install_now_btn">Install Now</string>
+    <string name="novapulse_update_perm_needed">Please allow "Install unknown apps" for NovaPulse, then tap Install Now.</string>
+    <string name="novapulse_update_failed_fmt">Update failed: %1$s</string>
+    <string name="novapulse_update_later_btn">Later</string>
 
 </resources>

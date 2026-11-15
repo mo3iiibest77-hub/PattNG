@@ -1,84 +1,35 @@
-# v2rayNG — Agent guide
+# NovaPulse — Engineering & Build Guide
 
-## Build
+## Build & Flavor Rules
+
+- Only the `playstore` distribution flavor exists (`applicationId = "com.quietstorm.ng"`, `DISTRIBUTION = "NovaPulse Official"`). **F-Droid (`fdroid`) builds are permanently removed and blocked in CI.**
+- Kotlin `2.4.0`, AGP `9.2.1`, Java `17`, Gradle Kotlin DSL (`V2rayNG/app/build.gradle.kts`).
 
 ```sh
 cd V2rayNG
-./gradlew assembleFdroidDebug    # or assemblePlaystoreDebug
+./gradlew assemblePlaystoreDebug
+./gradlew assemblePlaystoreRelease
 ```
 
-Kotlin 2.4.0, AGP 9.2.1, Gradle Kotlin DSL. No lint/format/typecheck tasks configured.
-
-## Test
+## Unit Tests
 
 ```sh
-cd V2rayNG && ./gradlew test
+cd V2rayNG
+./gradlew testPlaystoreDebugUnitTest --no-daemon
 ```
 
-JUnit 4 + Mockito. Unit tests only under `app/src/test/java/`. No instrumented tests beyond defaults.
+Unit tests under `app/src/test/java/` must run cleanly on pure JVM (`LogUtil` and `Utils` fall back gracefully without `android.util.Log` mocking).
 
-## Project structure
+## Core Project Layout
 
-```
-V2rayNG/
-  app/
-    src/main/java/com/v2ray/ang/
-      AngApplication.kt          # extends MultiDexApplication, inits MMKV + WorkManager
-      AppConfig.kt                # all constants, pref keys, URLs, ports, tags
-      core/                       # v2ray core integration
-        CoreServiceManager.kt      # start/stop core, traffic stats, delay measurement
-        CoreConfigManager.kt       # generates JSON config for v2ray core
-        CoreNativeManager.kt       # JNI bridge to libv2ray AAR
-        CoreOutboundBuilder.kt     # outbound config construction
-        CoreConfigContextBuilder.kt
-      service/                    # Android foreground services
-        CoreVpnService.kt          # VPN mode (VpnService)
-        CoreProxyOnlyService.kt    # proxy-only mode (no VPN)
-        CoreTestService.kt         # delay test
-        TProxyService.kt
-        DialerNativeService.kt / DialerWebviewService.kt   # browser dialer
-        RealPingWorkerService.kt   # WorkManager-based real ping
-        QSTileService.kt           # quick settings tile
-        ProcessService.kt
-      handler/                    # business logic
-        MmkvManager.kt             # all MMKV CRUD (servers, subs, settings, routing)
-        SettingsManager.kt         # preference defaults, config generation (633 lines)
-        AngConfigManager.kt        # server config operations
-        NotificationManager.kt
-        SpeedtestManager.kt
-        SubscriptionUpdater.kt
-        WebDavManager.kt
-        UpdateCheckerManager.kt
-        CertificateFingerprintManager.kt
-        SettingsChangeManager.kt
-      ui/                         # activities, adapters, fragments
-        MainActivity.kt            # main screen with drawer + tabs
-        ServerActivity.kt          # edit server config
-        ServerCustomConfigActivity.kt / ServerGroupActivity.kt / ServerProxyChainActivity.kt
-        SettingsActivity.kt / PerAppProxyActivity.kt / AppPickerActivity.kt
-        ScannerActivity.kt / LogcatActivity.kt
-        RoutingSettingActivity.kt / RoutingEditActivity.kt
-        SubSettingActivity.kt / SubEditActivity.kt
-        UserAssetActivity.kt / UserAssetUrlActivity.kt
-        TaskerActivity.kt / UrlSchemeActivity.kt
-        BackupActivity.kt / CheckUpdateActivity.kt / AboutActivity.kt
-      fmt/                        # protocol URL parsers (VMESS, VLESS, TROJAN, SS, SOCKS, etc.)
-      dto/                        # data classes + entities/
-      enums/                      # EConfigType, Language, RoutingType, etc.
-      extension/_Ext.kt           # extension functions (toast, traffic string, etc.)
-      util/                       # Utils, JsonUtil, HttpUtil, LogUtil, etc.
-      receiver/                   # BootReceiver, TaskerReceiver, WidgetProvider
-      contracts/                  # interfaces (ServiceControl, Tun2SocksControl)
-      helper/                     # QRCodeScannerHelper, PermissionHelper, FileChooserHelper etc.
-```
+- `com.v2ray.ang.AppConfig` — package constants, `NOVAPULSE_VPN_CH_V2`, GitHub (`mo3iiibest77-hub/PattNG`), support Telegram (`https://t.me/Mo3i_Best`), and server updater endpoint.
+- `com.v2ray.ang.senpai.*` — CDN classifier (`Cloudflare`/`CloudFront`), physical-network clean-IP scanners, 100+ seed/curated Cloudflare CIDRs, smart-connect orchestrator, and license entitlement client (`https://nova.dontbedumb.ir`).
+- `com.v2ray.ang.handler.NotificationManager` — custom `RemoteViews` dark-glass foreground/speed notification (`notif_novapulse_collapsed.xml`, `notif_novapulse_expanded.xml`).
+- `com.v2ray.ang.handler.UpdateCheckerManager` & `NovaPulseApkDownloader` — server + GitHub Releases updater with device ABI matching (`arm64-v8a`, `armeabi-v7a`, `x86_64`, `x86`, `universal`) and `FileProvider` APK installer.
+- `com.v2ray.ang.ui.qsn3d.*` — Jetpack Compose UI (`QuietStormActivity`, `Qs3dViewModel`, `Qs3dConnectScreen`, `Qs3dConfigsScreen`, `Qs3dRangesScreen`, `Qs3dSubscriptionScreen`, `Qs3dSettingsScreen`, `Qs3dLicenseScreen`, `Qs3dAboutPromoScreen`).
 
-## Key facts
+## Critical Guardrails
 
-- **Storage**: MMKV exclusively — never SharedPreferences. `MmkvManager` is the data layer.
-- **Core**: Native AAR (`libv2ray`) from [AndroidLibV2rayLite](https://github.com/2dust/AndroidLibV2rayLite) or [AndroidLibXrayLite](https://github.com/2dust/AndroidLibXrayLite). Prebuilt `.aar` files go in `app/libs/`.
-- **Services** run in dedicated process `:RunSoLibV2RayDaemon`. `CoreServiceManager` controls start/stop lifecycle.
-- **Two modes**: VPN (`CoreVpnService`, uses `VpnService.Builder`) or proxy-only (`CoreProxyOnlyService`, local SOCKS/HTTP).
-- **Flavors**: `fdroid` (suffix `.fdroid`) and `playstore` (no suffix). ABI version codes differ per flavor.
-- **hev-socks5-tunnel**: Optional tun2socks binary. Build with `./compile-hevtun.sh` (requires `NDK_HOME`).
-- **ViewBinding** enabled, no DataBinding.
-- **No CI**, no pre-commit hooks, no lint/format enforcement.
+- Keep `applicationId = "com.quietstorm.ng"` and signing keystore intact; `versionCode` must stay strictly monotonic (`4000748+`).
+- Never expose `savedLicenseKey` or raw server protocol/host/port strings in UI models or logs.
+- Use `MMKV` (`MmkvManager`) exclusively for persistence; never introduce `SharedPreferences`.

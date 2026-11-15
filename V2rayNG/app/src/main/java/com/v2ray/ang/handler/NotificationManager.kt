@@ -11,6 +11,8 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.os.Build
+import android.view.View
+import android.widget.RemoteViews
 import androidx.annotation.RequiresApi
 import androidx.core.app.NotificationCompat
 import com.v2ray.ang.AppConfig
@@ -41,6 +43,9 @@ object NotificationManager {
     private var mBuilder: NotificationCompat.Builder? = null
     private var speedNotificationJob: Job? = null
     private var mNotificationManager: NotificationManager? = null
+    private var activeServerLabel: String = ""
+    private var stopPendingIntent: PendingIntent? = null
+    private var restartPendingIntent: PendingIntent? = null
     @Volatile
     private var cachedBrandIcon: Bitmap? = null
 
@@ -95,6 +100,9 @@ object NotificationManager {
         restartV2RayIntent.putExtra("key", AppConfig.MSG_STATE_RESTART)
         val restartV2RayPendingIntent = PendingIntent.getBroadcast(service, NOTIFICATION_PENDING_INTENT_RESTART_V2RAY, restartV2RayIntent, flags)
 
+        stopPendingIntent = stopV2RayPendingIntent
+        restartPendingIntent = restartV2RayPendingIntent
+
         val channelId =
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 createNotificationChannel()
@@ -105,6 +113,7 @@ object NotificationManager {
             }
 
         val configTitle = currentConfig?.remarks?.takeIf { it.isNotBlank() }
+        activeServerLabel = configTitle ?: service.getString(R.string.novapulse_notif_subtext)
         val fullTitle = if (configTitle != null) {
             "${service.getString(R.string.app_name)} • $configTitle"
         } else {
@@ -125,17 +134,8 @@ object NotificationManager {
             .setShowWhen(false)
             .setOnlyAlertOnce(true)
             .setContentIntent(contentPendingIntent)
-            .addAction(
-                R.drawable.ic_stop_24dp,
-                service.getString(R.string.novapulse_notif_action_disconnect),
-                stopV2RayPendingIntent
-            )
-            .addAction(
-                R.drawable.ic_restore_24dp,
-                service.getString(R.string.novapulse_notif_action_reconnect),
-                restartV2RayPendingIntent
-            )
 
+        applyCustomNotificationViews(service, downSpeed = "0 B/s", upSpeed = "0 B/s", directLine = null)
         service.startForeground(NOTIFICATION_ID, mBuilder?.build())
     }
 
@@ -170,7 +170,7 @@ object NotificationManager {
         speedNotificationJob?.let {
             it.cancel()
             speedNotificationJob = null
-            updateNotification("", 0, 0)
+            updateNotification("0 B/s", "0 B/s", null, "", 0, 0)
         }
     }
 
@@ -201,7 +201,52 @@ object NotificationManager {
      * @param proxyTraffic The proxy traffic.
      * @param directTraffic The direct traffic.
      */
-    private fun updateNotification(contentText: String?, proxyTraffic: Long, directTraffic: Long) {
+    private fun applyCustomNotificationViews(
+        service: Service,
+        downSpeed: String,
+        upSpeed: String,
+        directLine: String?,
+    ) {
+        val builder = mBuilder ?: return
+        val appName = service.getString(R.string.app_name)
+        val serverName = activeServerLabel.ifBlank { service.getString(R.string.novapulse_notif_subtext) }
+
+        val collapsed = RemoteViews(service.packageName, R.layout.notif_novapulse_collapsed).apply {
+            setTextViewText(R.id.np_notif_server_title, "$appName • $serverName")
+            setTextViewText(R.id.np_notif_down_compact, "↓ $downSpeed")
+            setTextViewText(R.id.np_notif_up_compact, "↑ $upSpeed")
+            stopPendingIntent?.let { setOnClickPendingIntent(R.id.np_notif_btn_stop_compact, it) }
+        }
+
+        val expanded = RemoteViews(service.packageName, R.layout.notif_novapulse_expanded).apply {
+            setTextViewText(R.id.np_notif_exp_title, appName)
+            setTextViewText(R.id.np_notif_exp_subtitle, serverName)
+            setTextViewText(R.id.np_notif_exp_down_val, downSpeed)
+            setTextViewText(R.id.np_notif_exp_up_val, upSpeed)
+            if (directLine.isNullOrBlank()) {
+                setViewVisibility(R.id.np_notif_exp_direct, View.GONE)
+            } else {
+                setViewVisibility(R.id.np_notif_exp_direct, View.VISIBLE)
+                setTextViewText(R.id.np_notif_exp_direct, directLine)
+            }
+            stopPendingIntent?.let { setOnClickPendingIntent(R.id.np_notif_btn_stop, it) }
+            restartPendingIntent?.let { setOnClickPendingIntent(R.id.np_notif_btn_reconnect, it) }
+        }
+
+        builder.setCustomContentView(collapsed)
+        builder.setCustomBigContentView(expanded)
+        builder.setCustomHeadsUpContentView(collapsed)
+    }
+
+    private fun updateNotification(
+        downSpeed: String,
+        upSpeed: String,
+        directLine: String?,
+        contentText: String?,
+        proxyTraffic: Long,
+        directTraffic: Long,
+    ) {
+        val svc = getService() ?: return
         if (mBuilder != null) {
             if (proxyTraffic < NOTIFICATION_ICON_THRESHOLD && directTraffic < NOTIFICATION_ICON_THRESHOLD) {
                 mBuilder?.setSmallIcon(R.drawable.ic_stat_name)
@@ -210,8 +255,8 @@ object NotificationManager {
             } else {
                 mBuilder?.setSmallIcon(R.drawable.ic_stat_direct)
             }
-            mBuilder?.setStyle(NotificationCompat.BigTextStyle().bigText(contentText))
             mBuilder?.setContentText(contentText)
+            applyCustomNotificationViews(svc, downSpeed, upSpeed, directLine)
             getNotificationManager()?.notify(NOTIFICATION_ID, mBuilder?.build())
         }
     }
@@ -288,13 +333,20 @@ object NotificationManager {
             val svc = getService()
             val tunnelLabel = svc?.getString(R.string.novapulse_notif_tunnel_label) ?: "Tunnel"
             val directLabel = svc?.getString(R.string.novapulse_notif_direct_label) ?: "Direct"
+            val downFmt = proxyDownBps.toSpeedString()
+            val upFmt = proxyUpBps.toSpeedString()
+            val directLine = if (directTotal > 0L) {
+                "$directLabel:  ↓ ${directDownBps.toSpeedString()}   ↑ ${directUpBps.toSpeedString()}"
+            } else {
+                null
+            }
             val text = buildString {
-                append("$tunnelLabel:  ↓ ${proxyDownBps.toSpeedString()}   ↑ ${proxyUpBps.toSpeedString()}")
-                if (directTotal > 0L) {
-                    append("\n$directLabel:  ↓ ${directDownBps.toSpeedString()}   ↑ ${directUpBps.toSpeedString()}")
+                append("$tunnelLabel:  ↓ $downFmt   ↑ $upFmt")
+                if (directLine != null) {
+                    append("\n$directLine")
                 }
             }
-            updateNotification(text, proxyTotal, directTotal)
+            updateNotification(downFmt, upFmt, directLine, text, proxyTotal, directTotal)
         }
         lastQueryTime = queryTime
         return zeroSpeed

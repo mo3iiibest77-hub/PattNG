@@ -27,9 +27,11 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -206,12 +208,21 @@ class QuietStormActivity : BaseComponentActivity() {
                         containerColor = Color.Transparent,
                         snackbarHost = { SnackbarHost(snackbarHost) },
                         topBar = {
-                            NovaPulseTopBar(
-                                isRunning = state.coreRunning,
-                                onOpenSubscription = { viewModel.openSubscriptionDetails(true) },
-                                onOpenPromo = { viewModel.openAboutPromo(true) },
-                                onRefresh = { viewModel.refreshAllData(fetchRemoteQuota = true) }
-                            )
+                            Column {
+                                NovaPulseTopBar(
+                                    isRunning = state.coreRunning,
+                                    onOpenSubscription = { viewModel.openSubscriptionDetails(true) },
+                                    onOpenPromo = { viewModel.openAboutPromo(true) },
+                                    onRefresh = { viewModel.refreshAllData(fetchRemoteQuota = true) }
+                                )
+                                val upd = state.availableUpdate
+                                if (upd?.hasUpdate == true && !upd.latestVersion.isNullOrBlank()) {
+                                    UpdateAvailableStrip(
+                                        latestVersion = upd.latestVersion,
+                                        onClick = { viewModel.openUpdateDialog(true) }
+                                    )
+                                }
+                            }
                         },
                         bottomBar = {
                             NovaPulseBottomNavBar(
@@ -327,6 +338,8 @@ class QuietStormActivity : BaseComponentActivity() {
                                         },
                                         onOpenMySubscription = { viewModel.openSubscriptionDetails(true) },
                                         onOpenAboutPromo = { viewModel.openAboutPromo(true) },
+                                        onCheckUpdates = { viewModel.checkForAppUpdates(silent = false) },
+                                        onOpenAvailableUpdate = { viewModel.openUpdateDialog(true) },
                                         onLogoutLicense = viewModel::logoutLicense
                                     )
                                 }
@@ -352,9 +365,137 @@ class QuietStormActivity : BaseComponentActivity() {
                         )
                     }
                 }
+
+                val updateInfo = state.availableUpdate
+                if (state.showUpdateDialog && updateInfo != null && updateInfo.hasUpdate) {
+                    NovaPulseUpdateDialog(
+                        state = state,
+                        onDownloadOption = viewModel::downloadAndInstallAppUpdate,
+                        onInstallReady = viewModel::installReadyUpdateApk,
+                        onDismiss = { viewModel.openUpdateDialog(false) }
+                    )
+                }
             }
         }
     }
+}
+
+@Composable
+private fun UpdateAvailableStrip(
+    latestVersion: String,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 14.dp, vertical = 2.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(QsColors.AuroraMint.copy(alpha = 0.16f))
+            .border(0.9.dp, QsColors.AuroraMint.copy(alpha = 0.50f), RoundedCornerShape(10.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 6.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = stringResource(R.string.novapulse_update_available_banner_fmt, latestVersion),
+            color = QsColors.AuroraMint,
+            fontSize = 11.5.sp,
+            fontWeight = FontWeight.Bold,
+            maxLines = 1
+        )
+        Text(
+            text = stringResource(R.string.update_now),
+            color = QsColors.ElectricCyan,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.ExtraBold
+        )
+    }
+}
+
+@Composable
+private fun NovaPulseUpdateDialog(
+    state: Qs3dUiState,
+    onDownloadOption: (com.v2ray.ang.dto.ApkAssetOption) -> Unit,
+    onInstallReady: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val result = state.availableUpdate ?: return
+    val versionStr = result.latestVersion ?: ""
+    val recommended = result.availableAssets.firstOrNull { it.isDeviceMatch }
+        ?: result.availableAssets.firstOrNull()
+    val universal = result.availableAssets.firstOrNull { it.isUniversal && it != recommended }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                text = stringResource(R.string.novapulse_update_available_title_fmt, versionStr),
+                fontWeight = FontWeight.Bold
+            )
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                if (!result.releaseNotes.isNullOrBlank()) {
+                    Text(
+                        text = result.releaseNotes,
+                        fontSize = 12.5.sp
+                    )
+                }
+                when {
+                    state.updateDownloadProgress != null -> {
+                        val pct = state.updateDownloadProgress
+                        LinearProgressIndicator(
+                            progress = { pct / 100f },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Text(
+                            text = stringResource(R.string.novapulse_update_downloading_fmt, pct),
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+
+                    state.readyUpdateApkPath != null -> {
+                        Button(
+                            onClick = onInstallReady,
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Text(stringResource(R.string.novapulse_update_install_now_btn))
+                        }
+                    }
+
+                    else -> {
+                        recommended?.let { opt ->
+                            Button(
+                                onClick = { onDownloadOption(opt) },
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(12.dp)
+                            ) {
+                                Text(stringResource(R.string.novapulse_update_device_abi_btn_fmt, opt.abi))
+                            }
+                        }
+                        universal?.let { opt ->
+                            OutlinedButton(
+                                onClick = { onDownloadOption(opt) },
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(12.dp)
+                            ) {
+                                Text(stringResource(R.string.novapulse_update_universal_btn))
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.novapulse_update_later_btn))
+            }
+        }
+    )
 }
 
 @Composable
