@@ -111,7 +111,7 @@ object LicenseBackendClient {
 
     fun sanitizeForDisplay(raw: String?): String {
         var text = raw.orEmpty()
-        val saved = getSavedLicenseKey()
+        val saved = runCatching { getSavedLicenseKey() }.getOrDefault("")
         if (saved.length >= 4) {
             text = text.replace(saved, "[***]", ignoreCase = true)
         }

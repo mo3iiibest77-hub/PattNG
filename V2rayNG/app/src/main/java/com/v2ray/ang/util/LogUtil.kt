@@ -41,9 +41,14 @@ object LogUtil {
             if (current != CACHE_UNSET) {
                 current
             } else {
-                parsePriority(MmkvManager.decodeSettingsString(AppConfig.PREF_LOGLEVEL, DEFAULT_LEVEL)).also {
-                    cachedMinPriority = it
+                val level = runCatching {
+                    MmkvManager.decodeSettingsString(AppConfig.PREF_LOGLEVEL, DEFAULT_LEVEL)
+                }.getOrNull()
+                val parsed = parsePriority(level ?: DEFAULT_LEVEL)
+                if (level != null) {
+                    cachedMinPriority = parsed
                 }
+                parsed
             }
         }
     }

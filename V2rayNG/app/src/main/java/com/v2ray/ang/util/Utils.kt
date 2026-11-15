@@ -163,6 +163,14 @@ object Utils {
                 return isIpv4Address(addr)
             }
 
+            if (addr.startsWith("[") && addr.contains("]:")) {
+                val closeIdx = addr.indexOf("]:")
+                val portPart = addr.substring(closeIdx + 2)
+                if (portPart.toIntOrNull() != null) {
+                    addr = addr.substring(1, closeIdx)
+                }
+            }
+
             return isIpv6Address(addr)
         } catch (e: Exception) {
             LogUtil.e(AppConfig.TAG, "Failed to validate IP address", e)
