@@ -88,6 +88,20 @@ class CoreVpnService : VpnService(), ServiceControl {
             return START_NOT_STICKY
         }
         LogUtil.i(AppConfig.TAG, "StartCore-VPN: Service command received, systemVpnStart=$isSystemVpnStart")
+        if (com.v2ray.ang.senpai.AppSecurityGuard.isRuntimeTampered() ||
+            !com.v2ray.ang.senpai.LicenseBackendClient.isLicenseSessionActive()
+        ) {
+            LogUtil.w(AppConfig.TAG, "StartCore-VPN: Blocked VPN start without active license/integrity")
+            unlockStart()
+            com.v2ray.ang.helper.MessageHelper.sendMsg2UI(
+                this,
+                AppConfig.MSG_STATE_START_FAILURE,
+                getString(R.string.novapulse_license_force_revoked)
+            )
+            NotificationManager.cancelNotification()
+            stopSelf()
+            return START_NOT_STICKY
+        }
         if (!setupVpnService()) {
             unlockStart()
             com.v2ray.ang.helper.MessageHelper.sendMsg2UI(

@@ -42,6 +42,15 @@ class CoreRootService : Service(), ServiceControl {
         NotificationManager.ensureForeground()
         LogUtil.i(AppConfig.TAG, "StartCore-Root: command received")
 
+        if (com.v2ray.ang.senpai.AppSecurityGuard.isRuntimeTampered() ||
+            !com.v2ray.ang.senpai.LicenseBackendClient.isLicenseSessionActive()
+        ) {
+            LogUtil.w(AppConfig.TAG, "StartCore-Root: Blocked start without active license/integrity")
+            NotificationManager.cancelNotification()
+            stopSelf()
+            return START_NOT_STICKY
+        }
+
         if (CoreServiceManager.isRunning()) {
             LogUtil.i(AppConfig.TAG, "StartCore-Root: Core is already running")
             return START_STICKY

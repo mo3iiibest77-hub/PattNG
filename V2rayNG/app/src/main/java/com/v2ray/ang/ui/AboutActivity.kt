@@ -115,6 +115,12 @@ fun AboutScreen(onBackClick: () -> Unit) {
                 AndroidView(
                     factory = { ctx ->
                         WebView(ctx).apply {
+                            settings.javaScriptEnabled = false
+                            settings.allowContentAccess = false
+                            @Suppress("DEPRECATION")
+                            settings.allowFileAccessFromFileURLs = false
+                            @Suppress("DEPRECATION")
+                            settings.allowUniversalAccessFromFileURLs = false
                             loadUrl("file:///android_asset/open_source_licenses.html")
                         }
                     },

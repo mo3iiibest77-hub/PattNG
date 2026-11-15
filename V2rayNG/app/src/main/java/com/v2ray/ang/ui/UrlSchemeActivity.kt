@@ -24,7 +24,9 @@ class UrlSchemeActivity : BaseComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         try {
-            if (!LicenseBackendClient.isLicenseSessionActive()) {
+            if (com.v2ray.ang.senpai.AppSecurityGuard.isRuntimeTampered() ||
+                !LicenseBackendClient.isLicenseSessionActive()
+            ) {
                 toastError(R.string.novapulse_license_enter_prompt)
                 startActivity(
                     Intent(this, QuietStormActivity::class.java).apply {
@@ -82,7 +84,6 @@ class UrlSchemeActivity : BaseComponentActivity() {
         if (uriString.isNullOrEmpty()) {
             return
         }
-        LogUtil.i(AppConfig.TAG, uriString)
 
         var decodedUrl = URLDecoder.decode(uriString, "UTF-8")
         val uri = Uri.parse(decodedUrl)
@@ -90,7 +91,7 @@ class UrlSchemeActivity : BaseComponentActivity() {
             if (uri.fragment.isNullOrEmpty() && !fragment.isNullOrEmpty()) {
                 decodedUrl += "#${fragment}"
             }
-            LogUtil.i(AppConfig.TAG, decodedUrl)
+            LogUtil.i(AppConfig.TAG, "Importing URL scheme: ${uri.scheme ?: "unknown"}")
             lifecycleScope.launch(Dispatchers.IO) {
                 val (count, countSub) = AngConfigManager.importBatchConfig(decodedUrl, "", false)
                 withContext(Dispatchers.Main) {

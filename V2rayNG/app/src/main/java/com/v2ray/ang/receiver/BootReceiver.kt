@@ -45,6 +45,13 @@ class BootReceiver : BroadcastReceiver() {
             }
         }
 
+        if (com.v2ray.ang.senpai.AppSecurityGuard.isRuntimeTampered() ||
+            !com.v2ray.ang.senpai.LicenseBackendClient.isLicenseSessionActive()
+        ) {
+            LogUtil.w(AppConfig.TAG, "BootReceiver: License/integrity inactive, skipping auto-start")
+            return
+        }
+
         if (!MmkvManager.decodeStartOnBoot()) {
             LogUtil.i(AppConfig.TAG, "BootReceiver: Auto-start on boot is disabled")
             return

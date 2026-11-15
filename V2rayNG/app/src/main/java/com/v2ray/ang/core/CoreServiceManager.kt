@@ -134,6 +134,9 @@ object CoreServiceManager {
         LogUtil.i(AppConfig.TAG, "StartCore-Manager: Starting core loop for ${config.remarks}")
         val result = CoreConfigManager.getV2rayConfig(service, guid)
         LogUtil.d(AppConfig.TAG, result.content)
+        if (com.v2ray.ang.senpai.AppSecurityGuard.isRuntimeTampered()) {
+            error("Application signature integrity check failed")
+        }
         if (!result.status) {
             error(result.errorMessage.ifBlank { "Failed to get V2Ray config" })
         }

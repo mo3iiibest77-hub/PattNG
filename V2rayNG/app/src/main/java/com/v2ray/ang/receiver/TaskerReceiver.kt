@@ -6,6 +6,8 @@ import android.content.Intent
 import android.text.TextUtils
 import com.v2ray.ang.AppConfig
 import com.v2ray.ang.core.LauncherManager
+import com.v2ray.ang.senpai.AppSecurityGuard
+import com.v2ray.ang.senpai.LicenseBackendClient
 import com.v2ray.ang.util.LogUtil
 
 class TaskerReceiver : BroadcastReceiver() {
@@ -27,6 +29,10 @@ class TaskerReceiver : BroadcastReceiver() {
             if (switch == null || TextUtils.isEmpty(guid)) {
                 return
             } else if (switch) {
+                if (AppSecurityGuard.isRuntimeTampered() || !LicenseBackendClient.isLicenseSessionActive()) {
+                    LogUtil.w(AppConfig.TAG, "Ignored Tasker start broadcast: license/integrity inactive")
+                    return
+                }
                 if (guid == AppConfig.TASKER_DEFAULT_GUID) {
                     LauncherManager.startServiceFromToggle(context)
                 } else {

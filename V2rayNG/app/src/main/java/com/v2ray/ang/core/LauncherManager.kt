@@ -73,6 +73,11 @@ object LauncherManager {
         // Note: isRunning check is removed here to avoid loading Native libraries in the UI process.
         // The check is performed in CoreServiceManager when the service starts in the daemon process.
 
+        if (com.v2ray.ang.senpai.AppSecurityGuard.isRuntimeTampered()) {
+            LogUtil.w(AppConfig.TAG, "LauncherManager: Blocked start due to APK integrity check failure")
+            error("Application signature integrity check failed")
+        }
+
         if (!com.v2ray.ang.senpai.LicenseBackendClient.isLicenseSessionActive()) {
             LogUtil.w(AppConfig.TAG, "LauncherManager: Blocked start without active license session")
             error(context.getString(R.string.novapulse_license_enter_prompt))

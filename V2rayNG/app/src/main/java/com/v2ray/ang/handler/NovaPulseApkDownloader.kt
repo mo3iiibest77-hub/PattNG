@@ -2,11 +2,14 @@ package com.v2ray.ang.handler
 
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
 import androidx.core.content.FileProvider
 import com.v2ray.ang.AppConfig
+import com.v2ray.ang.BuildConfig
+import com.v2ray.ang.senpai.AppSecurityGuard
 import com.v2ray.ang.util.LogUtil
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -41,7 +44,7 @@ object NovaPulseApkDownloader {
         val gatewayBase = serverLatestUrl.trim().removeSuffix("/latest").trimEnd('/')
         val gatewayUrl = if (gatewayBase.isNotEmpty()) "$gatewayBase/files/$safeName" else ""
         return linkedSetOf(gatewayUrl, downloadUrl.trim())
-            .filter { it.startsWith("http://", ignoreCase = true) || it.startsWith("https://", ignoreCase = true) }
+            .filter { it.startsWith("https://", ignoreCase = true) }
     }
 
     suspend fun downloadApk(
@@ -112,6 +115,11 @@ object NovaPulseApkDownloader {
             }
         }
 
+        if (!BuildConfig.DEBUG && !verifyApkSigningCertificate(context, tempFile)) {
+            tempFile.delete()
+            throw IllegalStateException("APK signing certificate verification failed")
+        }
+
         if (targetFile.exists()) targetFile.delete()
         if (!tempFile.renameTo(targetFile)) {
             tempFile.copyTo(targetFile, overwrite = true)
@@ -175,6 +183,110 @@ object NovaPulseApkDownloader {
             .get()
             .build()
         return client.newCall(req).execute()
+    }
+
+    internal fun certificateSha256Hex(certBytes: ByteArray): String? {
+        if (certBytes.isEmpty()) return null
+        val md = MessageDigest.getInstance("SHA-256")
+        return md.digest(certBytes).joinToString("") { "%02x".format(it) }
+    }
+
+    internal fun verifySigningCertificateDigests(
+        hasMultipleSigners: Boolean,
+        apkContentsSignerDigests: List<String>,
+        signingCertificateHistoryDigests: List<String>?,
+    ): Boolean {
+        if (apkContentsSignerDigests.isEmpty()) return false
+        if (apkContentsSignerDigests.any { it.isBlank() }) return false
+        if (hasMultipleSigners) {
+            // Multi-signer APKs do not use certificate rotation history; validate only active co-signers.
+            return apkContentsSignerDigests.any { AppSecurityGuard.verifyCertDigestHex(it) }
+        }
+        val history = signingCertificateHistoryDigests
+        if (history != null) {
+            if (history.isEmpty() || history.any { it.isBlank() }) return false
+            return history.any { AppSecurityGuard.verifyCertDigestHex(it) }
+        }
+        return apkContentsSignerDigests.any { AppSecurityGuard.verifyCertDigestHex(it) }
+    }
+
+    internal fun verifySigningCertificates(
+        hasMultipleSigners: Boolean,
+        apkContentsSigners: List<ByteArray>,
+        signingCertificateHistory: List<ByteArray>?,
+    ): Boolean {
+        if (apkContentsSigners.isEmpty()) return false
+        val activeDigests = ArrayList<String>(apkContentsSigners.size)
+        for (cert in apkContentsSigners) {
+            val hex = certificateSha256Hex(cert) ?: return false
+            activeDigests.add(hex)
+        }
+        val historyDigests = if (hasMultipleSigners) {
+            null
+        } else {
+            signingCertificateHistory?.let { history ->
+                if (history.isEmpty()) return false
+                val out = ArrayList<String>(history.size)
+                for (cert in history) {
+                    val hex = certificateSha256Hex(cert) ?: return false
+                    out.add(hex)
+                }
+                out
+            }
+        }
+        return verifySigningCertificateDigests(
+            hasMultipleSigners = hasMultipleSigners,
+            apkContentsSignerDigests = activeDigests,
+            signingCertificateHistoryDigests = historyDigests,
+        )
+    }
+
+    internal fun verifyLegacySignatureDigests(signatureDigests: List<String>?): Boolean {
+        if (signatureDigests.isNullOrEmpty()) return false
+        if (signatureDigests.any { it.isBlank() }) return false
+        return signatureDigests.any { AppSecurityGuard.verifyCertDigestHex(it) }
+    }
+
+    internal fun verifyLegacySignatures(signatures: List<ByteArray>?): Boolean {
+        if (signatures.isNullOrEmpty()) return false
+        val digests = ArrayList<String>(signatures.size)
+        for (sig in signatures) {
+            val hex = certificateSha256Hex(sig) ?: return false
+            digests.add(hex)
+        }
+        return verifyLegacySignatureDigests(digests)
+    }
+
+    @Suppress("DEPRECATION")
+    fun verifyApkSigningCertificate(context: Context, apkFile: File): Boolean {
+        return runCatching {
+            if (!apkFile.isFile) return@runCatching false
+            val pm = context.packageManager
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                val pkgInfo = pm.getPackageArchiveInfo(
+                    apkFile.absolutePath,
+                    PackageManager.GET_SIGNING_CERTIFICATES,
+                ) ?: return@runCatching false
+                val signingInfo = pkgInfo.signingInfo ?: return@runCatching false
+                val apkSigners = signingInfo.apkContentsSigners
+                    ?.map { it.toByteArray() }
+                    ?: return@runCatching false
+                val history = signingInfo.signingCertificateHistory
+                    ?.map { it.toByteArray() }
+                verifySigningCertificates(
+                    hasMultipleSigners = signingInfo.hasMultipleSigners(),
+                    apkContentsSigners = apkSigners,
+                    signingCertificateHistory = history,
+                )
+            } else {
+                val pkgInfo = pm.getPackageArchiveInfo(
+                    apkFile.absolutePath,
+                    PackageManager.GET_SIGNATURES,
+                ) ?: return@runCatching false
+                val legacySigners = pkgInfo.signatures?.map { it.toByteArray() }
+                verifyLegacySignatures(legacySigners)
+            }
+        }.getOrDefault(false)
     }
 
     fun isValidApkFile(file: File): Boolean {
