@@ -1,7 +1,7 @@
 # گزارش جامع ممیزی، اصلاح معماری، پیاده‌سازی و تست سیستم لایسنس، شناسایی دستگاه و مدیریت نشست‌های NovaPulse
 
 **وضعیت مأموریت:** اتمام کامل مراحل ممیزی، طراحی، پیاده‌سازی Backend / Database / Admin Panel / Android، مهاجرت ایمن دیتابیس زنده و تأیید تست‌های واحد و همزمانی  
-**شاخه فعال پروژه (`PattNG`):** `feat/qsn-3d-smart-stage1` (شناسه اپلیکیشن: `com.quietstorm.ng`، نسخه `2.4.2`)  
+**شاخه فعال پروژه (`PattNG`):** `feat/qsn-3d-smart-stage1` (شناسه اپلیکیشن: `com.quietstorm.ng`، نسخه `2.4.3`, `versionCode 751`)  
 **نکته محرمانگی:** در این گزارش هیچ License Key، Session Token، رمز، ایمیل یا UUID مشتری درج نشده است.  
 **نکته بیلد APK:** مطابق دستورالعمل پروژه، هیچ بیلد APK روی سرور انجام نمی‌شود و تولید/امضای رسمی APK منحصراً از طریق **GitHub Actions** (`.github/workflows/build.yml`) روی پوش شاخه `feat/qsn-3d-smart-stage1` انجام می‌گردد.
 
@@ -61,6 +61,7 @@
   * محافظت `/api/v1/license/by-sub/` با احراز هویت پنل ادمین (Bearer پنل HMPanel، Cookie 3x-ui یا `ADMIN_TOKEN` با مقایسه constant-time).
   * APIهای مدیریت برای پنل: لیست دستگاه‌ها (`admin_list_devices`)، تغییر ظرفیت با پیش‌نمایش و سیاست کاهش `revoke_excess`/`keep_excess` (`admin_set_capacity`)، ابطال تکی (`admin_revoke_session`)، ابطال کل (`admin_revoke_all_sessions`) و مشاهده Audit Log بدون افشای کلید/توکن خام (`admin_list_audit_logs`).
   * Rate Limit ضد Brute-Force (`429`) روی اندپوینت‌های عمومی لایسنس.
+  * **حالت سازگاری موقت نسخه‌های قدیمی (`ALLOW_LEGACY_CLIENT_COMPAT=1`):** امکان ورود مجدد کاربران اپلیکیشن قدیمی (`v2.4.2` و قبل‌تر) با **همان کدهای لایسنس قبلی و بدون تغییر کلید** تا زمان نصب نسخه `v2.4.3`، با ایزوله‌سازی کامل از توکن‌های نسخه جدید (توکن‌های نسخه جدید هرگز در URL کار نمی‌کنند و اگر ظرفیت توسط دستگاه جدید پر شده باشد، نسخه قدیمی مسدود می‌شود). با تنظیم `ALLOW_LEGACY_CLIENT_COMPAT=0` در `.env` پس از آپدیت عمومی، ورود نسخه‌های قدیمی به‌طور کامل بسته می‌شود.
   * ارائه ماژول مشترک پنل در مسیر `/api/v1/license/assets/panel-core.js` و حفظ همگام‌سازی بدون بازنویسی تنظیمات دستی `max_devices_source`.
 
 ### ۲. ارتقای پنل‌های مدیریت (`/opt/novapulse-license/web/`)
@@ -113,11 +114,12 @@
 1. **تست یکپارچه و همزمانی Backend (`python3 /opt/novapulse-license/tests/test_license_security.py`):**
    * `test_admin_capacity_preview_revoke_and_audit_redaction`: `ok`
    * `test_concurrency_20_threads_against_capacity_2`: `ok` (تضمین عدم عبور از ظرفیت ۲ در ۲۰ ترد همزمان)
+   * `test_legacy_client_compat_window_and_new_app_isolation`: `ok` (بررسی ورود موقت نسخه قدیمی و ایزوله‌سازی کامل توکن و ظرفیت نسخه جدید)
    * `test_reject_legacy_shared_android_id_and_bad_proof`: `ok`
    * `test_single_device_enforcement_logout_and_replay_protection`: `ok`
    * `test_status_refresh_sub_header_auth_and_bysub_auth`: `ok`
    * `test_unlimited_capacity_and_bruteforce_rate_limit`: `ok`
-   * **جمع:** `Ran 6 tests in 1.834s -> OK`
+   * **جمع:** `Ran 7 tests in 1.889s -> OK`
 2. **بررسی Syntax فایل‌های پنل (`node --check /opt/novapulse-license/web/panel-core.js /opt/novapulse-license/web/hm.js /opt/novapulse-license/web/xui.js`):** خروج با کد `0` (بدون خطا).
 3. **بررسی اندپوینت‌های زنده سرویس و Reverse Proxy:**
    * `http://127.0.0.1:4150/api/v1/license/health` -> `200`

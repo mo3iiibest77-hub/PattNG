@@ -136,14 +136,14 @@ jobs:
           exit 1
         fi
         BUILD_TOOLS=$(ls -d "${ANDROID_HOME}"/build-tools/* | sort -V | tail -n 1)
-        APK="app/build/outputs/apk/playstore/release/NovaPulse_2.4.2_arm64-v8a.apk"
+        APK="app/build/outputs/apk/playstore/release/NovaPulse_2.4.3_arm64-v8a.apk"
         test -f "${APK}"
         test -f "app/build/outputs/mapping/playstoreRelease/mapping.txt"
         badging=$("${BUILD_TOOLS}/aapt2" dump badging "${APK}")
         line=$(printf '%s\n' "${badging}" | awk 'NR==1')
         echo "${line}"
         echo "${line}" | grep -q "name='com.quietstorm.ng'"
-        echo "${line}" | grep -q "versionCode='4000750'"
+        echo "${line}" | grep -q "versionCode='4000751'"
         certs=$("${BUILD_TOOLS}/apksigner" verify --print-certs "${APK}" 2>&1)
         printf '%s\n' "${certs}"
         cert_sha256=$(printf '%s\n' "${certs}" | sed -n 's/.*SHA-256 digest: *//p' | tr -d ' \r' | awk 'NR==1')
@@ -227,5 +227,5 @@ jobs:
           else
             gh release create "$TAG" release-files/* \
               --title "NovaPulse ${TAG}" \
-              --notes "Official NovaPulse release (${TAG}). Standard & Universal APKs only (ARM64, ARMv7, x86_64, x86, Universal)."
+              --notes "⚠️ به‌روزرسانی الزامی و امنیتی NovaPulse (${TAG}): برای حفظ اتصال پایدار، پشتیبانی از نشست امن دستگاه و جلوگیری از قطع دسترسی نسخه‌های قدیمی، لطفاً حتماً اپلیکیشن را به این نسخه به‌روزرسانی کنید. (Official Standard & Universal APKs: ARM64, ARMv7, x86_64, x86, Universal)"
           fi
