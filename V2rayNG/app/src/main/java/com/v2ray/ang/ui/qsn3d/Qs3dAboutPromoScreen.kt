@@ -47,7 +47,7 @@ import com.v2ray.ang.R
  * Update [TELEGRAM_USERNAME] before publishing if your Telegram handle changes.
  */
 object SupportLinks {
-    const val TELEGRAM_USERNAME = "TELEGRAM_USERNAME_HERE"
+    const val TELEGRAM_USERNAME = "Mo3i_Best"
 
     val telegramDeepLink: String
         get() = "tg://resolve?domain=$TELEGRAM_USERNAME"
@@ -272,6 +272,21 @@ fun Qs3dAboutPromoScreen(
                     fontSize = 13.sp,
                     lineHeight = 20.sp
                 )
+                Spacer(Modifier.height(10.dp))
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(QsColors.ElectricCyan.copy(alpha = 0.14f))
+                        .border(0.8.dp, QsColors.ElectricCyan.copy(alpha = 0.45f), RoundedCornerShape(10.dp))
+                        .padding(horizontal = 12.dp, vertical = 6.dp)
+                ) {
+                    Text(
+                        text = "@${SupportLinks.TELEGRAM_USERNAME}",
+                        color = QsColors.ElectricCyan,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
                 Spacer(Modifier.height(12.dp))
                 Button(
                     onClick = { SupportLinks.openTelegramSupport(context) },

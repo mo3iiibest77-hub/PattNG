@@ -3,6 +3,7 @@ package com.v2ray.ang.senpai
 import com.v2ray.ang.ui.qsn3d.LicenseLogoutOrchestrator
 import com.v2ray.ang.ui.qsn3d.LicenseLogoutStorage
 import com.v2ray.ang.ui.qsn3d.Qs3dUiState
+import com.v2ray.ang.ui.qsn3d.SupportLinks
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -148,5 +149,10 @@ class LicenseSecurityAndQuotaTest {
         )
         assertFalse("Logout must fail cleanly if VPN remains running", ok)
         assertTrue("Expected stop retry before aborting", stopAttempts >= 2)
+    @Test
+    fun supportLinks_usesConfiguredTelegramUsername() {
+        assertEquals("Mo3i_Best", SupportLinks.TELEGRAM_USERNAME)
+        assertEquals("tg://resolve?domain=Mo3i_Best", SupportLinks.telegramDeepLink)
+        assertEquals("https://t.me/Mo3i_Best", SupportLinks.telegramWebUrl)
     }
 }
