@@ -217,5 +217,5 @@
 | ایزوله‌سازی فایروال کانتینر و پورت‌های داخلی (`4150, 9090, 20870`) | **PASS** | مسدود از کانتینر `hmpanel-panel`؛ قابل‌دسترس فقط از `hmpanel-nginx` (`172.18.0.4`) |
 | دسترسی SSH کلیدمحور (`22` و `101`) و رد رمز عبور | **PASS** | `SSH_KEY_22_OK`, `SSH_KEY_101_OK`, `sftp> pwd` موفق؛ رمز برای `root`/`ubuntu` رد (`255`) |
 | سلامت سرویس‌های VPN و شبکه (`x-ui`, `xray`, `novapulse-license`, `sysmon`, `agy-account-sync`, `xray-restart-watcher`) | **PASS** | تمام `9` سرویس `active`؛ تمامی پورت‌های Xray/MTProto/Sub فعال (`55` لایسنس فعال، `16` دستگاه فعال، `2` دستگاه legacy) |
-| تست واحد و رندر سه‌بعدی/اسکرین‌شات Android در GitHub Actions (`feat/qsn-3d-smart-stage1`) | **PENDING CI PUSH** | بلافاصله پس از پوش روی گیت‌هاب اکشنز اجرا و بازبینی تصویری خواهد شد |
+| تست واحد و رندر سه‌بعدی/اسکرین‌شات Android در GitHub Actions (`feat/qsn-3d-smart-stage1`) | **PASS** | Run [`43745916261`](https://github.com/mo3iiibest77-hub/PattNG/actions/runs/43745916261) (`a9f1ac74`): `98/98` تست واحد موفق (`failed=0, skipped=0`)، تولید `ui-screenshots` (`2,555,713` بایت)، بیلد `NovaPulse_2.4.5_arm64-v8a.apk` (`sha256: 0e678fb3f79b3935664b5613cda0f5347e449ecb51c9a27e8565fde2b3c7b312`) و تأیید امضای گواهی Release (`a016c9bf...`) |
 
