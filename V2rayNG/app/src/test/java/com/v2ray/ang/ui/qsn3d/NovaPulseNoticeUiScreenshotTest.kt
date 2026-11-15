@@ -14,6 +14,8 @@ import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.unit.dp
@@ -117,8 +119,8 @@ class NovaPulseNoticeUiScreenshotTest {
             }
         }
 
-        composeTestRule.onNodeWithText("@NovaPulseVPN", substring = true).assertIsDisplayed()
-        composeTestRule.onNodeWithText("@Mo3i_Best", substring = true).assertIsDisplayed()
+        composeTestRule.onAllNodesWithText("@NovaPulseVPN", substring = true).onFirst().assertIsDisplayed()
+        composeTestRule.onAllNodesWithText("@Mo3i_Best", substring = true).onFirst().assertIsDisplayed()
         writeScreenshotPng("notice_mandatory_pre244_fa_412dp.png")
     }
 
@@ -167,7 +169,7 @@ class NovaPulseNoticeUiScreenshotTest {
         }
 
         composeTestRule.onNodeWithText("68%").assertIsDisplayed()
-        composeTestRule.onNodeWithText("@Mo3i_Best", substring = true).assertIsDisplayed()
+        composeTestRule.onAllNodesWithText("@Mo3i_Best", substring = true).onFirst().assertIsDisplayed()
         writeScreenshotPng("notice_optional_244_progress_fa_412dp.png")
     }
 
@@ -202,7 +204,7 @@ class NovaPulseNoticeUiScreenshotTest {
             }
         }
 
-        composeTestRule.onNodeWithText("@Mo3i_Best", substring = true).assertIsDisplayed()
+        composeTestRule.onAllNodesWithText("@Mo3i_Best", substring = true).onFirst().assertIsDisplayed()
         writeScreenshotPng("notice_security_legacy_fa_320dp.png")
     }
 
@@ -247,8 +249,8 @@ class NovaPulseNoticeUiScreenshotTest {
             }
         }
 
-        composeTestRule.onNodeWithText("@NovaPulseVPN", substring = true).assertIsDisplayed()
-        composeTestRule.onNodeWithText("@Mo3i_Best", substring = true).assertIsDisplayed()
+        composeTestRule.onAllNodesWithText("@NovaPulseVPN", substring = true).onFirst().assertIsDisplayed()
+        composeTestRule.onAllNodesWithText("@Mo3i_Best", substring = true).onFirst().assertIsDisplayed()
         writeScreenshotPng("notice_optional_en_412dp.png")
     }
 }

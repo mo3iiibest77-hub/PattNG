@@ -69,7 +69,8 @@ class NovaPulseNoticeParserTest {
         assertFalse(links[0].text.contains(")"))
 
         assertEquals("https://t.me/NovaPulseVPN", links[1].target)
-        assertFalse(links[1].text.contains("."))
+        assertFalse(links[1].text.contains("VPN."))
+        assertEquals("https://t.me/NovaPulseVPN", links[1].text.removeSurrounding("\u2066", "\u2069"))
 
         assertEquals("https://t.me/Mo3i_Best", links[2].target)
         assertFalse(links[2].text.contains("،"))
