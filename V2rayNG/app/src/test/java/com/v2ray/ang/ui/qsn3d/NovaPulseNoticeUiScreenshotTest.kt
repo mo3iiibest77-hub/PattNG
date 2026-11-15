@@ -15,11 +15,14 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.hasClickAction
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import com.v2ray.ang.dto.ApkAssetOption
@@ -339,7 +342,10 @@ class NovaPulseNoticeUiScreenshotTest {
         }
         composeTestRule.mainClock.advanceTimeByFrame()
 
-        val channelNode = composeTestRule.onNodeWithText("کانال رسمی", substring = true)
+        val channelNode = composeTestRule.onNode(
+            hasClickAction() and hasText("کانال رسمی", substring = true) and hasText("@NovaPulseVPN", substring = true),
+        )
+        channelNode.performScrollTo()
         channelNode.assertIsDisplayed()
         assertEquals(
             "Persian notice must force RTL layoutDirection even under en-US locale",
@@ -359,7 +365,10 @@ class NovaPulseNoticeUiScreenshotTest {
                 channelIntent.dataString == "https://t.me/NovaPulseVPN",
         )
 
-        val supportNode = composeTestRule.onNodeWithText("پشتیبانی تلگرام", substring = true)
+        val supportNode = composeTestRule.onNode(
+            hasClickAction() and hasText("پشتیبانی تلگرام", substring = true) and hasText("@Mo3i_Best", substring = true),
+        )
+        supportNode.performScrollTo()
         supportNode.assertIsDisplayed()
         supportNode.performClick()
         composeTestRule.mainClock.advanceTimeByFrame()
