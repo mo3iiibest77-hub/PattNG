@@ -28,6 +28,22 @@ sealed class ApkInstallResult {
 
 object NovaPulseApkDownloader {
 
+    fun sanitizeApkFileName(fileName: String): String =
+        fileName.replace(Regex("[^A-Za-z0-9._-]"), "_")
+            .let { if (it.endsWith(".apk", ignoreCase = true)) it else "$it.apk" }
+
+    fun buildDownloadCandidates(
+        downloadUrl: String,
+        fileName: String,
+        serverLatestUrl: String = AppConfig.APP_UPDATE_SERVER_URL,
+    ): List<String> {
+        val safeName = sanitizeApkFileName(fileName)
+        val gatewayBase = serverLatestUrl.trim().removeSuffix("/latest").trimEnd('/')
+        val gatewayUrl = if (gatewayBase.isNotEmpty()) "$gatewayBase/files/$safeName" else ""
+        return linkedSetOf(gatewayUrl, downloadUrl.trim())
+            .filter { it.startsWith("http://", ignoreCase = true) || it.startsWith("https://", ignoreCase = true) }
+    }
+
     suspend fun downloadApk(
         context: Context,
         downloadUrl: String,
@@ -42,18 +58,13 @@ object NovaPulseApkDownloader {
             }
         }
 
-        val safeName = fileName.replace(Regex("[^A-Za-z0-9._-]"), "_")
-            .let { if (it.endsWith(".apk", ignoreCase = true)) it else "$it.apk" }
+        val safeName = sanitizeApkFileName(fileName)
         val targetFile = File(updatesDir, safeName)
         val tempFile = File(updatesDir, "$safeName.part")
         if (tempFile.exists()) tempFile.delete()
 
-        val response = try {
-            executeDownloadRequest(downloadUrl, useLocalProxy = false)
-        } catch (directEx: Exception) {
-            LogUtil.w(AppConfig.TAG, "Direct update download failed, trying active local proxy: ${directEx.message}")
-            executeDownloadRequest(downloadUrl, useLocalProxy = true)
-        }
+        val candidates = buildDownloadCandidates(downloadUrl, safeName)
+        val response = executeWithMirrorFallback(candidates)
 
         response.use { resp ->
             if (!resp.isSuccessful) {
@@ -62,7 +73,8 @@ object NovaPulseApkDownloader {
             val body = resp.body ?: throw IllegalStateException("Empty APK response")
             val total = body.contentLength()
             var copied = 0L
-            var lastReportedPct = -1
+            var lastReportedPct = 0
+            onProgress(1)
 
             body.byteStream().use { input ->
                 FileOutputStream(tempFile).use { output ->
@@ -72,12 +84,14 @@ object NovaPulseApkDownloader {
                         if (read == -1) break
                         output.write(buffer, 0, read)
                         copied += read
-                        if (total > 0L) {
-                            val pct = ((copied * 100L) / total).toInt().coerceIn(0, 100)
-                            if (pct != lastReportedPct) {
-                                lastReportedPct = pct
-                                onProgress(pct)
-                            }
+                        val pct = if (total > 0L) {
+                            ((copied * 100L) / total).toInt().coerceIn(1, 99)
+                        } else {
+                            (1 + (copied / (320L * 1024L)).toInt()).coerceIn(1, 95)
+                        }
+                        if (pct > lastReportedPct) {
+                            lastReportedPct = pct
+                            onProgress(pct)
                         }
                     }
                     output.flush()
@@ -107,11 +121,42 @@ object NovaPulseApkDownloader {
         targetFile
     }
 
+    private fun executeWithMirrorFallback(candidates: List<String>): okhttp3.Response {
+        var lastError: Exception? = null
+        val activeProxyPort = runCatching { SettingsManager.getHttpPort() }.getOrDefault(0)
+        val proxyModes = if (activeProxyPort > 0) listOf(false, true) else listOf(false)
+
+        for (candidate in candidates) {
+            for (useProxy in proxyModes) {
+                try {
+                    val resp = executeDownloadRequest(candidate, useLocalProxy = useProxy)
+                    if (resp.isSuccessful) {
+                        return resp
+                    }
+                    val code = resp.code
+                    resp.close()
+                    lastError = IllegalStateException("HTTP $code")
+                    if (code == 404 || code == 410) {
+                        // Do not waste time retrying local proxy on definitive 404/410; try next mirror.
+                        break
+                    }
+                } catch (ex: Exception) {
+                    LogUtil.w(
+                        AppConfig.TAG,
+                        "Update download attempt failed (url=$candidate proxy=$useProxy): ${ex.message}"
+                    )
+                    lastError = ex
+                }
+            }
+        }
+        throw (lastError ?: IllegalStateException("No working update download mirror"))
+    }
+
     private fun executeDownloadRequest(url: String, useLocalProxy: Boolean): okhttp3.Response {
         val builder = OkHttpClient.Builder()
-            .connectTimeout(15, TimeUnit.SECONDS)
-            .readTimeout(60, TimeUnit.SECONDS)
-            .writeTimeout(30, TimeUnit.SECONDS)
+            .connectTimeout(12, TimeUnit.SECONDS)
+            .readTimeout(45, TimeUnit.SECONDS)
+            .writeTimeout(25, TimeUnit.SECONDS)
             .followRedirects(true)
             .followSslRedirects(true)
 
@@ -125,7 +170,8 @@ object NovaPulseApkDownloader {
         val client = builder.build()
         val req = Request.Builder()
             .url(url)
-            .header("User-Agent", "NovaPulseUpdater")
+            .header("User-Agent", "NovaPulseUpdater/2.4.5")
+            .header("Accept-Encoding", "identity")
             .get()
             .build()
         return client.newCall(req).execute()

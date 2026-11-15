@@ -798,5 +798,9 @@
     <string name="novapulse_update_perm_needed">Please allow "Install unknown apps" for NovaPulse, then tap Install Now.</string>
     <string name="novapulse_update_failed_fmt">Update failed: %1$s</string>
     <string name="novapulse_update_later_btn">Later</string>
+    <string name="novapulse_update_badge_new">NEW</string>
+    <string name="novapulse_update_badge_up_to_date">UP TO DATE</string>
+    <string name="novapulse_update_whats_new">What\'s New</string>
+    <string name="novapulse_update_fast_gateway_note">High-speed download via NovaPulse secure gateway</string>
 
 </resources>

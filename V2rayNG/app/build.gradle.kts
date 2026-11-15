@@ -13,8 +13,8 @@ android {
         applicationId = "com.quietstorm.ng"
         minSdk = 24
         targetSdk = 37
-        versionCode = 752
-        versionName = "2.4.4"
+        versionCode = 753
+        versionName = "2.4.5"
 
         val abiFilterList = (properties["ABI_FILTERS"] as? String)?.split(';')
         splits {

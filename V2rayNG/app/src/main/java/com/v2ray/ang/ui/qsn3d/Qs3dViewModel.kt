@@ -170,6 +170,8 @@ class Qs3dViewModel(
     @Volatile
     private var lastUpdateCheckMs = 0L
     @Volatile
+    private var lastUpdateDialogDismissMs = 0L
+    @Volatile
     private var forceRevokingLicense = false
     private var licenseWatchdogJob: Job? = null
 
@@ -963,7 +965,17 @@ class Qs3dViewModel(
     fun checkForAppUpdatesIfStale(minIntervalMs: Long = 60_000L) {
         val now = System.currentTimeMillis()
         if ((now - lastUpdateCheckMs) < minIntervalMs) return
-        checkForAppUpdates(silent = true, openDialogIfUpdate = false)
+        val shouldRemindGently = _uiState.value.let { st ->
+            st.availableUpdate?.hasUpdate == true &&
+                st.updateDownloadProgress == null &&
+                !st.showUpdateDialog &&
+                lastUpdateDialogDismissMs > 0L &&
+                (now - lastUpdateDialogDismissMs) >= 600_000L
+        }
+        if (shouldRemindGently) {
+            lastUpdateDialogDismissMs = now
+        }
+        checkForAppUpdates(silent = true, openDialogIfUpdate = shouldRemindGently)
     }
 
     fun checkForAppUpdates(silent: Boolean = false, openDialogIfUpdate: Boolean = true) {
@@ -1012,9 +1024,12 @@ class Qs3dViewModel(
     }
 
     fun openUpdateDialog(open: Boolean) {
+        if (!open) {
+            lastUpdateDialogDismissMs = System.currentTimeMillis()
+        }
         _uiState.update { it.copy(showUpdateDialog = open) }
         if (open) {
-            // Re-verify live so stale 2.4.3 banner immediately refreshes if 2.4.4/2.4.5 shipped meanwhile.
+            // Re-verify live so stale banner immediately refreshes if a newer release shipped meanwhile.
             checkForAppUpdates(silent = true, openDialogIfUpdate = true)
         }
     }

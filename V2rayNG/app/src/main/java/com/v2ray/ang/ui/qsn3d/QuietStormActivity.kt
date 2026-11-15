@@ -8,6 +8,13 @@ import android.os.Bundle
 import androidx.activity.compose.BackHandler
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -15,19 +22,25 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.AlertDialog
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
@@ -45,12 +58,17 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import com.v2ray.ang.BuildConfig
 import com.v2ray.ang.R
 import com.v2ray.ang.core.LauncherManager
 import com.v2ray.ang.handler.MmkvManager
@@ -392,31 +410,85 @@ private fun UpdateAvailableStrip(
     latestVersion: String,
     onClick: () -> Unit,
 ) {
+    val pulseTransition = rememberInfiniteTransition(label = "update_strip_pulse")
+    val glowAlpha by pulseTransition.animateFloat(
+        initialValue = 0.35f,
+        targetValue = 0.85f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 1400, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "strip_glow",
+    )
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 14.dp, vertical = 2.dp)
-            .clip(RoundedCornerShape(10.dp))
-            .background(QsColors.AuroraMint.copy(alpha = 0.16f))
-            .border(0.9.dp, QsColors.AuroraMint.copy(alpha = 0.50f), RoundedCornerShape(10.dp))
+            .padding(horizontal = 14.dp, vertical = 3.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .background(
+                Brush.horizontalGradient(
+                    listOf(
+                        QsColors.AuroraMint.copy(alpha = 0.20f),
+                        QsColors.ElectricCyan.copy(alpha = 0.14f),
+                        QsColors.PlasmaViolet.copy(alpha = 0.14f),
+                    )
+                )
+            )
+            .border(
+                width = 1.dp,
+                brush = Brush.horizontalGradient(
+                    listOf(
+                        QsColors.AuroraMint.copy(alpha = glowAlpha),
+                        QsColors.ElectricCyan.copy(alpha = glowAlpha * 0.85f),
+                    )
+                ),
+                shape = RoundedCornerShape(14.dp),
+            )
             .clickable(onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 6.dp),
+            .padding(horizontal = 12.dp, vertical = 8.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Text(
-            text = stringResource(R.string.novapulse_update_available_banner_fmt, latestVersion),
-            color = QsColors.AuroraMint,
-            fontSize = 11.5.sp,
-            fontWeight = FontWeight.Bold,
-            maxLines = 1
-        )
-        Text(
-            text = stringResource(R.string.update_now),
-            color = QsColors.ElectricCyan,
-            fontSize = 11.sp,
-            fontWeight = FontWeight.ExtraBold
-        )
+        Row(
+            modifier = Modifier.weight(1f),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(8.dp)
+                    .clip(CircleShape)
+                    .background(QsColors.AuroraMint.copy(alpha = glowAlpha))
+            )
+            Text(
+                text = stringResource(R.string.novapulse_update_available_banner_fmt, latestVersion),
+                color = QsColors.TextPrimary,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        Spacer(Modifier.width(8.dp))
+        Box(
+            modifier = Modifier
+                .clip(RoundedCornerShape(999.dp))
+                .background(
+                    Brush.horizontalGradient(
+                        listOf(QsColors.AuroraMint, QsColors.ElectricCyan)
+                    )
+                )
+                .padding(horizontal = 10.dp, vertical = 4.dp)
+        ) {
+            Text(
+                text = stringResource(R.string.update_now),
+                color = QsColors.DeepVoid,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.ExtraBold,
+                maxLines = 1,
+            )
+        }
     }
 }
 
@@ -434,90 +506,347 @@ private fun NovaPulseUpdateDialog(
         ?: result.availableAssets.firstOrNull()
     val universal = result.availableAssets.firstOrNull { it.isUniversal && it != recommended }
 
-    AlertDialog(
+    val pulseTransition = rememberInfiniteTransition(label = "update_dialog_halo")
+    val haloAlpha by pulseTransition.animateFloat(
+        initialValue = 0.35f,
+        targetValue = 0.90f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 1600, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "halo_alpha",
+    )
+
+    Dialog(
         onDismissRequest = onDismiss,
-        title = {
-            Text(
-                text = stringResource(R.string.novapulse_update_available_title_fmt, versionStr),
-                fontWeight = FontWeight.Bold
-            )
-        },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp)
+                .clip(RoundedCornerShape(24.dp))
+                .background(
+                    Brush.verticalGradient(
+                        listOf(
+                            Color(0xF5111D3B),
+                            QsColors.MidnightNavy.copy(alpha = 0.97f),
+                            QsColors.DeepVoid.copy(alpha = 0.98f),
+                        )
+                    )
+                )
+                .border(
+                    width = 1.2.dp,
+                    brush = Brush.linearGradient(
+                        listOf(
+                            QsColors.ElectricCyan.copy(alpha = haloAlpha),
+                            QsColors.PlasmaViolet.copy(alpha = 0.55f),
+                            QsColors.AuroraMint.copy(alpha = haloAlpha),
+                        )
+                    ),
+                    shape = RoundedCornerShape(24.dp),
+                )
+                .padding(20.dp)
+        ) {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                // Header: Orbital Emblem + Title + New Badge
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(46.dp)
+                            .clip(CircleShape)
+                            .background(
+                                Brush.radialGradient(
+                                    listOf(
+                                        QsColors.AuroraMint.copy(alpha = 0.34f),
+                                        QsColors.ElectricCyan.copy(alpha = 0.12f),
+                                    )
+                                )
+                            )
+                            .border(1.2.dp, QsColors.AuroraMint.copy(alpha = haloAlpha), CircleShape),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            text = "↑",
+                            color = QsColors.AuroraMint,
+                            fontSize = 21.sp,
+                            fontWeight = FontWeight.Black,
+                        )
+                    }
+                    Column(modifier = Modifier.weight(1f)) {
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(999.dp))
+                                .background(QsColors.AuroraMint.copy(alpha = 0.16f))
+                                .padding(horizontal = 8.dp, vertical = 2.dp)
+                        ) {
+                            Text(
+                                text = stringResource(R.string.novapulse_update_badge_new),
+                                color = QsColors.AuroraMint,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                            )
+                        }
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            text = stringResource(R.string.novapulse_update_available_title_fmt, versionStr),
+                            color = QsColors.TextPrimary,
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                        )
+                    }
+                }
+
+                // Version transition pills: current -> latest
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(QsColors.GlassSurface)
+                        .border(0.8.dp, QsColors.GlassBorderBottom, RoundedCornerShape(14.dp))
+                        .padding(horizontal = 12.dp, vertical = 9.dp),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(QsColors.TextMuted.copy(alpha = 0.22f))
+                            .padding(horizontal = 9.dp, vertical = 3.dp)
+                    ) {
+                        Text(
+                            text = "v${BuildConfig.VERSION_NAME}",
+                            color = QsColors.TextSecondary,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                        )
+                    }
+                    Text(
+                        text = "  ➜  ",
+                        color = QsColors.ElectricCyan,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(QsColors.AuroraMint.copy(alpha = 0.22f))
+                            .border(0.8.dp, QsColors.AuroraMint.copy(alpha = 0.6f), RoundedCornerShape(8.dp))
+                            .padding(horizontal = 9.dp, vertical = 3.dp)
+                    ) {
+                        Text(
+                            text = "v$versionStr",
+                            color = QsColors.AuroraMint,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                        )
+                    }
+                }
+
                 if (state.isCheckingUpdate && state.updateDownloadProgress == null) {
                     Text(
                         text = stringResource(R.string.novapulse_update_checking),
                         color = QsColors.ElectricCyan,
-                        fontSize = 11.5.sp
+                        fontSize = 11.5.sp,
+                        fontWeight = FontWeight.Medium,
                     )
                 }
+
                 if (!result.releaseNotes.isNullOrBlank()) {
-                    Text(
-                        text = result.releaseNotes,
-                        fontSize = 12.5.sp
-                    )
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(QsColors.GlassSurfaceElevated.copy(alpha = 0.45f))
+                            .border(0.8.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(14.dp))
+                            .padding(12.dp)
+                    ) {
+                        Text(
+                            text = stringResource(R.string.novapulse_update_whats_new),
+                            color = QsColors.ElectricCyan,
+                            fontSize = 11.5.sp,
+                            fontWeight = FontWeight.Bold,
+                        )
+                        Spacer(Modifier.height(6.dp))
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(max = 155.dp)
+                                .verticalScroll(rememberScrollState())
+                        ) {
+                            Text(
+                                text = result.releaseNotes,
+                                color = QsColors.TextSecondary,
+                                fontSize = 12.sp,
+                                lineHeight = 18.sp,
+                            )
+                        }
+                    }
                 }
+
+                // Action / Progress Section
                 when {
                     state.updateDownloadProgress != null -> {
-                        val pct = state.updateDownloadProgress
-                        LinearProgressIndicator(
-                            progress = { pct / 100f },
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                        Text(
-                            text = stringResource(R.string.novapulse_update_downloading_fmt, pct),
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.SemiBold
-                        )
+                        val pct = state.updateDownloadProgress.coerceIn(0, 100)
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(14.dp))
+                                .background(QsColors.GlassSurface)
+                                .padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(
+                                    text = stringResource(R.string.novapulse_update_downloading_fmt, pct),
+                                    color = QsColors.TextPrimary,
+                                    fontSize = 12.5.sp,
+                                    fontWeight = FontWeight.Bold,
+                                )
+                                Text(
+                                    text = "$pct%",
+                                    color = QsColors.AuroraMint,
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.ExtraBold,
+                                )
+                            }
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(9.dp)
+                                    .clip(RoundedCornerShape(999.dp))
+                                    .background(Color.White.copy(alpha = 0.10f))
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth((pct / 100f).coerceIn(0.03f, 1f))
+                                        .height(9.dp)
+                                        .clip(RoundedCornerShape(999.dp))
+                                        .background(
+                                            Brush.horizontalGradient(
+                                                listOf(QsColors.AuroraMint, QsColors.ElectricCyan, QsColors.PlasmaViolet)
+                                            )
+                                        )
+                                )
+                            }
+                            Text(
+                                text = stringResource(R.string.novapulse_update_fast_gateway_note),
+                                color = QsColors.TextMuted,
+                                fontSize = 10.5.sp,
+                            )
+                        }
                     }
 
                     state.readyUpdateApkPath != null -> {
-                        Button(
+                        GradientUpdateButton(
+                            text = stringResource(R.string.novapulse_update_install_now_btn),
                             onClick = onInstallReady,
-                            modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(12.dp)
-                        ) {
-                            Text(stringResource(R.string.novapulse_update_install_now_btn))
-                        }
+                        )
                     }
 
                     else -> {
                         recommended?.let { opt ->
-                            Button(
+                            GradientUpdateButton(
+                                text = stringResource(R.string.novapulse_update_device_abi_btn_fmt, opt.abi),
                                 onClick = { onDownloadOption(opt) },
-                                modifier = Modifier.fillMaxWidth(),
-                                shape = RoundedCornerShape(12.dp)
-                            ) {
-                                Text(stringResource(R.string.novapulse_update_device_abi_btn_fmt, opt.abi))
-                            }
+                            )
                         }
                         universal?.let { opt ->
                             OutlinedButton(
                                 onClick = { onDownloadOption(opt) },
                                 modifier = Modifier.fillMaxWidth(),
-                                shape = RoundedCornerShape(12.dp)
+                                shape = RoundedCornerShape(14.dp),
+                                border = BorderStroke(1.dp, QsColors.ElectricCyan.copy(alpha = 0.45f)),
+                                contentPadding = PaddingValues(vertical = 11.dp),
                             ) {
-                                Text(stringResource(R.string.novapulse_update_universal_btn))
+                                Text(
+                                    text = stringResource(R.string.novapulse_update_universal_btn),
+                                    color = QsColors.ElectricCyan,
+                                    fontSize = 12.5.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                )
                             }
                         }
+                        Text(
+                            text = stringResource(R.string.novapulse_update_fast_gateway_note),
+                            color = QsColors.TextMuted,
+                            fontSize = 10.5.sp,
+                        )
+                    }
+                }
+
+                HorizontalDivider(color = Color.White.copy(alpha = 0.08f))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    TextButton(
+                        onClick = onRecheck,
+                        enabled = !state.isCheckingUpdate && state.updateDownloadProgress == null,
+                    ) {
+                        Text(
+                            text = stringResource(R.string.novapulse_update_check_btn),
+                            color = QsColors.ElectricCyan,
+                            fontSize = 12.5.sp,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                    }
+                    TextButton(onClick = onDismiss) {
+                        Text(
+                            text = stringResource(R.string.novapulse_update_later_btn),
+                            color = QsColors.TextSecondary,
+                            fontSize = 12.5.sp,
+                            fontWeight = FontWeight.Medium,
+                        )
                     }
                 }
             }
-        },
-        confirmButton = {
-            TextButton(
-                onClick = onRecheck,
-                enabled = !state.isCheckingUpdate && state.updateDownloadProgress == null
-            ) {
-                Text(stringResource(R.string.novapulse_update_check_btn))
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text(stringResource(R.string.novapulse_update_later_btn))
-            }
         }
-    )
+    }
+}
+
+@Composable
+private fun GradientUpdateButton(
+    text: String,
+    onClick: () -> Unit,
+) {
+    Button(
+        onClick = onClick,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(
+                Brush.horizontalGradient(
+                    listOf(QsColors.AuroraMint, QsColors.ElectricCyan)
+                )
+            ),
+        colors = ButtonDefaults.buttonColors(
+            containerColor = Color.Transparent,
+            contentColor = QsColors.DeepVoid,
+        ),
+        shape = RoundedCornerShape(14.dp),
+        contentPadding = PaddingValues(vertical = 12.dp),
+    ) {
+        Text(
+            text = text,
+            color = QsColors.DeepVoid,
+            fontSize = 13.5.sp,
+            fontWeight = FontWeight.ExtraBold,
+        )
+    }
 }
 
 @Composable

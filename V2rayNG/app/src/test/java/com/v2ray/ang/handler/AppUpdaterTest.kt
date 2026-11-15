@@ -207,4 +207,27 @@ class AppUpdaterTest {
         assertTrue(skippedResult.hasUpdate)
         assertEquals("2.4.5", skippedResult.latestVersion)
     }
+
+    @Test
+    fun `buildDownloadCandidates prioritizes self-hosted gateway and deduplicates identical mirror`() {
+        val ghCandidates = NovaPulseApkDownloader.buildDownloadCandidates(
+            downloadUrl = "https://github.com/mo3iiibest77-hub/PattNG/releases/download/v2.4.5/NovaPulse_2.4.5_arm64-v8a.apk",
+            fileName = "NovaPulse_2.4.5_arm64-v8a.apk",
+            serverLatestUrl = "https://nova.dontbedumb.ir/api/v1/license/app-update/latest",
+        )
+        assertEquals(
+            listOf(
+                "https://nova.dontbedumb.ir/api/v1/license/app-update/files/NovaPulse_2.4.5_arm64-v8a.apk",
+                "https://github.com/mo3iiibest77-hub/PattNG/releases/download/v2.4.5/NovaPulse_2.4.5_arm64-v8a.apk",
+            ),
+            ghCandidates
+        )
+
+        val gatewayOnly = NovaPulseApkDownloader.buildDownloadCandidates(
+            downloadUrl = "https://nova.dontbedumb.ir/api/v1/license/app-update/files/NovaPulse_2.4.5_arm64-v8a.apk",
+            fileName = "NovaPulse_2.4.5_arm64-v8a.apk",
+            serverLatestUrl = "https://nova.dontbedumb.ir/api/v1/license/app-update/latest",
+        )
+        assertEquals(1, gatewayOnly.size)
+    }
 }

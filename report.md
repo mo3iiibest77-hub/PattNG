@@ -1,7 +1,7 @@
 # گزارش جامع ممیزی، اصلاح معماری، پیاده‌سازی و تست سیستم لایسنس، شناسایی دستگاه و مدیریت نشست‌های NovaPulse
 
-**وضعیت مأموریت:** اتمام کامل مراحل ممیزی، طراحی، پیاده‌سازی Backend / Database / Admin Panel / Android، مهاجرت ایمن دیتابیس زنده و تأیید تست‌های واحد و همزمانی  
-**شاخه فعال پروژه (`PattNG`):** `feat/qsn-3d-smart-stage1` (شناسه اپلیکیشن: `com.quietstorm.ng`، نسخه `2.4.4`, `versionCode 752`)  
+**وضعیت مأموریت:** اتمام کامل مراحل ممیزی، طراحی، پیاده‌سازی Backend / Database / Admin Panel / Android، درگاه امن و پرسرعت دانلود مستقیم APK روی سرور، مهاجرت ایمن دیتابیس زنده و تأیید تست‌های واحد و همزمانی  
+**شاخه فعال پروژه (`PattNG`):** `feat/qsn-3d-smart-stage1` (شناسه اپلیکیشن: `com.quietstorm.ng`، نسخه `2.4.5`, `versionCode 753`)  
 **نکته محرمانگی:** در این گزارش هیچ License Key، Session Token، رمز، ایمیل یا UUID مشتری درج نشده است.  
 **نکته بیلد APK:** مطابق دستورالعمل پروژه، هیچ بیلد APK روی سرور انجام نمی‌شود و تولید/امضای رسمی APK منحصراً از طریق **GitHub Actions** (`.github/workflows/build.yml`) روی پوش شاخه `feat/qsn-3d-smart-stage1` انجام می‌گردد.
 
@@ -88,9 +88,13 @@
 * **بستن بایپس‌ها (`UrlSchemeActivity.kt`, `LauncherManager.kt`, `CoreServiceManager.kt`):**
   * مسدودسازی ایمپورت اکسترنال لینک/کانفیگ و هدایت به `QuietStormActivity` زمانی که `!LicenseBackendClient.isLicenseSessionActive()`.
   * مسدودسازی اجرای سرویس VPN و هسته در `LauncherManager` و `CoreServiceManager` بدون نشست لایسنس فعال.
-* **به‌روزرسانی همیشه-آخرین‌نسخه (`UpdateCheckerManager.kt`, `Qs3dViewModel.kt`, `QuietStormActivity.kt`, `Qs3dSettingsScreen.kt` و `server.py`):**
-  * حذف مشکل گیر کردن روی نسخه کش‌شده قدیمی (مثل `2.4.3` پس از انتشار `2.4.4`/`2.4.5`): در سرور `_pick_highest_release` بین ریلیزهای فعال بیشترین نسخه معنایی را انتخاب می‌کند و با `?force=1`/`?nocache=1` کش `30` ثانیه‌ای دور زده می‌شود.
-  * در اپلیکیشن هنگام باز شدن دیالوگ آپدیت، بازگشت به برنامه (`onResume`) و پیش از شروع دانلود در `downloadAndInstallAppUpdate` بررسی زنده انجام می‌شود تا همیشه آخرین نسخه واقعی دانلود و نصب شود.
+* **درگاه امن میزبانی مستقیم APK روی سرور و نودج دوره‌ای نسخه‌های قدیمی (`server.py` و `np_license/sessions.py`):**
+  * **حل مشکل گیرکردن دانلود روی `0%`:** اندپوینت `/api/v1/license/app-update/files/<apk>` با پشتیبانی کامل از `HEAD`، دانلود تکه‌ای HTTP `Range` (`206 Partial Content`)، هدر `Accept-Ranges: bytes`، `X-Accel-Buffering: no` و کش باینری تأییدشده SHA-256 راه‌اندازی شد و لینک‌های دانلود در `/api/v1/license/app-update/latest` به‌صورت خودکار به `https://nova.dontbedumb.ir/api/v1/license/app-update/files/<apk>` بازنویسی و در پس‌زمینه از ریلیزهای جدید گیت‌هاب همگام‌سازی (Mirror) می‌شوند.
+  * **قطع و یادآوری دوره‌ای نسخه‌های قدیمی:** با حفظ `ALLOW_LEGACY_CLIENT_COMPAT=1` (بدون تغییر کلیدهای مشتریان)، نسخه‌های پیش از `v2.4.3` پس از بازه `LEGACY_NUDGE_INTERVAL_SEC` (`900` ثانیه = ۱۵ دقیقه) در درخواست `/status` با پاسخ `401 legacy_update_required` و پیام واضح فارسی موقتاً قطع می‌شوند تا اپلیکیشن را بروزرسانی کنند؛ ورود مجدد با همان کلید بازه ۱۵ دقیقه‌ای بعدی را تا زمان نصب نسخه جدید بازنشانی می‌کند.
+* **به‌روزرسانی همیشه-آخرین‌نسخه، سخت‌سازی دانلودر و بازطراحی رابط بروزرسانی (`v2.4.5`):**
+  * `NovaPulseApkDownloader.kt`: افزودن هدر `Accept-Encoding: identity` برای حفظ `Content-Length` واقعی، زمان‌بندی ۱۲/۴۵ ثانیه، گزارش پیشرفت روان حتی در نبود طول محتوا، و اولویت‌بندی خودکار درگاه امن سرور همراه با Mirror Fallback و Proxy Fallback.
+  * `UpdateCheckerManager.kt` و `Qs3dViewModel.kt`: انتخاب همیشه-آخرین نسخه بین منابع و یادآوری غیرآزاردهنده بعد از بستن دیالوگ آپدیت (`۶۰۰` ثانیه).
+  * `QuietStormActivity.kt` و `Qs3dSettingsScreen.kt`: بازطراحی بنر بالای صفحه، دیالوگ بروزرسانی شیشه‌ای-فضایی با نمایش انتقال نسخه (`vOld ➜ vNew`)، نوار پیشرفت گرادیانت و کارت بخش نسخه در تنظیمات.
 
 ---
 
@@ -119,11 +123,13 @@
    * `test_app_update_always_picks_highest_semver`: `ok`
    * `test_concurrency_20_threads_against_capacity_2`: `ok` (تضمین عدم عبور از ظرفیت ۲ در ۲۰ ترد همزمان)
    * `test_legacy_client_compat_window_and_new_app_isolation`: `ok` (بررسی ورود موقت نسخه قدیمی و ایزوله‌سازی کامل توکن و ظرفیت نسخه جدید)
+   * `test_legacy_periodic_nudge_disconnects_and_re_redeem_resets`: `ok` (بررسی نودج ۱۵ دقیقه‌ای و کد `401 legacy_update_required` و ریست شدن پس از ورود مجدد)
    * `test_reject_legacy_shared_android_id_and_bad_proof`: `ok`
+   * `test_self_hosted_apk_gateway_head_range_and_url_rewrite`: `ok` (بررسی `HEAD`، `Range 206` و بازنویسی خودکار آدرس به سرور و پرکردن `sha256`)
    * `test_single_device_enforcement_logout_and_replay_protection`: `ok`
    * `test_status_refresh_sub_header_auth_and_bysub_auth`: `ok`
    * `test_unlimited_capacity_and_bruteforce_rate_limit`: `ok`
-   * **جمع:** `Ran 8 tests in 1.859s -> OK`
+   * **جمع:** `Ran 10 tests in 1.862s -> OK`
 2. **بررسی Syntax فایل‌های پنل (`node --check /opt/novapulse-license/web/panel-core.js /opt/novapulse-license/web/hm.js /opt/novapulse-license/web/xui.js`):** خروج با کد `0` (بدون خطا).
 3. **بررسی اندپوینت‌های زنده سرویس و Reverse Proxy:**
    * `http://127.0.0.1:4150/api/v1/license/health` -> `200`
@@ -131,10 +137,9 @@
    * `http://127.0.0.1:4150/api/v1/license/by-sub/invalid` -> `401`
    * `http://127.0.0.1:4150/api/v1/license/sub/nps_fake` -> `401`
    * `POST http://127.0.0.1:4150/api/v1/license/status` بدون توکن -> `401`
+   * `HEAD https://nova.dontbedumb.ir/api/v1/license/app-update/files/NovaPulse_2.4.4_arm64-v8a.apk` -> `HTTP/2 200` (`accept-ranges: bytes`, `content-length: 24928219`)
    * `https://nova.dontbedumb.ir/api/v1/license/assets/panel-core.js` -> `200`
    * `https://nova.dontbedumb.ir/np-hm-license.js` -> `200`
    * `https://127.0.0.1:2087/gXfxEJl46r0576NkI7/np-license-api/assets/panel-core.js` -> `200`
-4. **تست‌های واحد JVM اپلیکیشن Android (`./gradlew testPlaystoreDebugUnitTest --no-daemon --console=plain`):**
-   * `BUILD SUCCESSFUL in 1m 5s`
-   * خروجی XML تست‌ها: **`total=85, passed=85, failed=0, skipped=0`** (شامل تست‌های جدید `DeviceIdentityAndSessionSecurityTest` و `LicenseSecurityAndQuotaTest` برای تفکیک `429` از `401 session_revoked`).
-   * **بیلد APK نهایی:** از روی کدهای پوش‌شده روی شاخه `feat/qsn-3d-smart-stage1` توسط **GitHub Actions** (`.github/workflows/build.yml`) اجرا و آرتیفکت‌های امضاشده تولید می‌گردد.
+4. **بیلد و تست واحد Android در GitHub Actions:**
+   * بیلد و امضای رسمی APK نسخه `2.4.5` (`versionCode 753`) همراه با اجرای `./gradlew testPlaystoreDebugUnitTest --no-daemon` از طریق **GitHub Actions** (`.github/workflows/build.yml`) روی تگ `v2.4.5` انجام می‌شود.

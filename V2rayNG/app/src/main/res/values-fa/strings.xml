@@ -798,5 +798,9 @@
     <string name="novapulse_update_perm_needed">لطفاً مجوز نصب برنامه برای نواپالس را فعال کن و دوباره روی «نصب نسخه جدید» بزن.</string>
     <string name="novapulse_update_failed_fmt">خطا در بروزرسانی: %1$s</string>
     <string name="novapulse_update_later_btn">بعداً</string>
+    <string name="novapulse_update_badge_new">جدید</string>
+    <string name="novapulse_update_badge_up_to_date">به‌روز</string>
+    <string name="novapulse_update_whats_new">تغییرات نسخه جدید</string>
+    <string name="novapulse_update_fast_gateway_note">دانلود مستقیم و پرسرعت از درگاه امن نواپالس</string>
 
 </resources>

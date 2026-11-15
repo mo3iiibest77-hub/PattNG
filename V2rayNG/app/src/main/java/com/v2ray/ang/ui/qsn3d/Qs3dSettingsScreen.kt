@@ -1,7 +1,10 @@
 package com.v2ray.ang.ui.qsn3d
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -17,6 +20,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
@@ -33,6 +37,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -215,14 +220,50 @@ fun Qs3dSettingsScreen(
         item {
             val deviceAbi = Build.SUPPORTED_ABIS?.firstOrNull() ?: "arm64-v8a"
             val updateInfo = state.availableUpdate
-            Glass3dCard(beamSeed = 23, glowColor = QsColors.ElectricCyan.copy(alpha = 0.42f)) {
-                Text(
-                    text = stringResource(R.string.novapulse_update_card_title),
-                    color = QsColors.TextPrimary,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 15.sp
-                )
-                Spacer(Modifier.height(4.dp))
+            val hasUpdate = updateInfo?.hasUpdate == true && !updateInfo.latestVersion.isNullOrBlank()
+            Glass3dCard(
+                beamSeed = 23,
+                glowColor = if (hasUpdate) QsColors.AuroraMint.copy(alpha = 0.55f) else QsColors.ElectricCyan.copy(alpha = 0.42f)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = stringResource(R.string.novapulse_update_card_title),
+                        color = QsColors.TextPrimary,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 15.sp
+                    )
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(999.dp))
+                            .background(
+                                if (hasUpdate) QsColors.AuroraMint.copy(alpha = 0.20f)
+                                else QsColors.ConnectedEmerald.copy(alpha = 0.18f)
+                            )
+                            .border(
+                                0.8.dp,
+                                if (hasUpdate) QsColors.AuroraMint.copy(alpha = 0.60f)
+                                else QsColors.ConnectedEmerald.copy(alpha = 0.50f),
+                                RoundedCornerShape(999.dp),
+                            )
+                            .padding(horizontal = 9.dp, vertical = 3.dp)
+                    ) {
+                        Text(
+                            text = if (hasUpdate) {
+                                stringResource(R.string.novapulse_update_badge_new)
+                            } else {
+                                stringResource(R.string.novapulse_update_badge_up_to_date)
+                            },
+                            color = if (hasUpdate) QsColors.AuroraMint else QsColors.ConnectedEmerald,
+                            fontSize = 10.5.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                        )
+                    }
+                }
+                Spacer(Modifier.height(6.dp))
                 Text(
                     text = stringResource(
                         R.string.novapulse_update_current_ver_fmt,
@@ -232,19 +273,33 @@ fun Qs3dSettingsScreen(
                     color = QsColors.TextSecondary,
                     fontSize = 12.sp
                 )
-                if (updateInfo?.hasUpdate == true && !updateInfo.latestVersion.isNullOrBlank()) {
-                    Spacer(Modifier.height(8.dp))
+                if (hasUpdate && updateInfo != null) {
+                    Spacer(Modifier.height(10.dp))
                     Button(
                         onClick = onOpenAvailableUpdate,
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(12.dp)
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(
+                                Brush.horizontalGradient(
+                                    listOf(QsColors.AuroraMint, QsColors.ElectricCyan)
+                                )
+                            ),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color.Transparent,
+                            contentColor = QsColors.DeepVoid,
+                        ),
+                        shape = RoundedCornerShape(12.dp),
+                        contentPadding = PaddingValues(vertical = 11.dp),
                     ) {
                         Text(
                             text = stringResource(
                                 R.string.novapulse_update_available_banner_fmt,
-                                updateInfo.latestVersion
+                                updateInfo.latestVersion ?: ""
                             ),
-                            fontWeight = FontWeight.Bold
+                            color = QsColors.DeepVoid,
+                            fontWeight = FontWeight.ExtraBold,
+                            fontSize = 13.sp,
                         )
                     }
                 }
@@ -253,7 +308,8 @@ fun Qs3dSettingsScreen(
                     onClick = onCheckUpdates,
                     enabled = !state.isCheckingUpdate,
                     modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(12.dp)
+                    shape = RoundedCornerShape(12.dp),
+                    border = BorderStroke(1.dp, QsColors.ElectricCyan.copy(alpha = 0.45f)),
                 ) {
                     if (state.isCheckingUpdate) {
                         CircularProgressIndicator(
