@@ -149,6 +149,8 @@ class LicenseSecurityAndQuotaTest {
         )
         assertFalse("Logout must fail cleanly if VPN remains running", ok)
         assertTrue("Expected stop retry before aborting", stopAttempts >= 2)
+    }
+
     @Test
     fun supportLinks_usesConfiguredTelegramUsername() {
         assertEquals("Mo3i_Best", SupportLinks.TELEGRAM_USERNAME)
