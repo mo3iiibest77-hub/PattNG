@@ -35,6 +35,9 @@ class AngApplication : Application() {
     override fun onCreate() {
         super.onCreate()
 
+        // Verify release APK signing integrity before initializing security-sensitive stores
+        com.v2ray.ang.senpai.AppSecurityGuard.verifyAndRecordIntegrity(this)
+
         MmkvManager.initialize(this)
 
         AppLocaleManager.initialize(this)

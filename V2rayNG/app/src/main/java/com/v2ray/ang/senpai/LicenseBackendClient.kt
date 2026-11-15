@@ -59,7 +59,8 @@ sealed class LicenseResolutionResult {
  */
 object LicenseBackendClient {
 
-    const val DEFAULT_BACKEND_BASE_URL = "https://nova.dontbedumb.ir"
+    val DEFAULT_BACKEND_BASE_URL: String
+        get() = AppSecurityGuard.protectedBackendBaseUrl()
     private const val PREF_BACKEND_BASE_URL = "qsn_backend_base_url"
     private const val PREF_SAVED_LICENSE_KEY = "qsn_saved_license_key"
     private const val PREF_ACTIVE_LICENSE_SUB_ID = "qsn_active_license_sub_id"
@@ -174,6 +175,9 @@ object LicenseBackendClient {
         backendBaseUrlOverride: String?,
         client: OkHttpClient,
     ): LicenseResolutionResult {
+        if (AppSecurityGuard.isRuntimeTampered()) {
+            return LicenseResolutionResult.Failure("نسخه اپلیکیشن معتبر نیست یا دستکاری شده است. لطفاً نسخه رسمی را نصب کنید.")
+        }
         return when (val input = classifyInput(rawInput)) {
             is ActivationInput.Invalid ->
                 LicenseResolutionResult.Failure("کد لایسنس وارد شده نامعتبر است.")

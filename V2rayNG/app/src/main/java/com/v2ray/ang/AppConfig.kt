@@ -129,7 +129,8 @@ object AppConfig {
     const val ANDROID_PACKAGE_NAME_LIST_URL = "$GITHUB_RAW_URL/2dust/androidpackagenamelist/master/proxy.txt"
     const val APP_URL = "$GITHUB_URL/mo3iiibest77-hub/PattNG"
     const val APP_API_URL = "https://api.github.com/repos/mo3iiibest77-hub/PattNG/releases"
-    const val APP_UPDATE_SERVER_URL = "https://nova.dontbedumb.ir/api/v1/license/app-update/latest"
+    val APP_UPDATE_SERVER_URL: String
+        get() = com.v2ray.ang.senpai.AppSecurityGuard.protectedUpdateServerUrl()
     const val APP_ISSUES_URL = "$APP_URL/issues"
     const val APP_WIKI_MODE = "$APP_URL#modes"
     const val APP_PRIVACY_POLICY = "$GITHUB_RAW_URL/mo3iiibest77-hub/PattNG/feat/qsn-3d-smart-stage1/CR.md"
