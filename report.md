@@ -153,21 +153,26 @@
 * محتویات بکاپ‌شده: SQLite `.backup` از `licenses.db` و `x-ui.db` (هر دو `PRAGMA integrity_check -> ok`)، `/etc/ssh`، فایل‌های systemd unit، `/opt/novapulse-license`، `/opt/hmpanel/{docker-compose.yml,.env,nginx}`، `/usr/local/bin/agy-account-sync.py`، تنظیمات `antigravity_tools`، پیکربندی `/etc/ufw` و خروجی‌های `iptables-save` (`iptables-before.v4` / `iptables-before.v6`).
 
 ### ۲. مقاوم‌سازی سیستم‌عامل، شبکه، SSH و سرویس‌ها
-1. **آماده‌سازی احراز هویت کلیدمحور SSH (`22` و `101`) همراه با جلوگیری از قطع دسترسی مالک:**
-   * با بررسی لاگ‌های واقعی سیستم (`/var/log/auth.log.1`) مشخص شد مالک اخیراً از خارج با رمز عبور وارد سرور شده است (`51.21.82.134`). بنابراین برای جلوگیری قطعی از قفل‌شدن دسترسی مدیریتی تا پیش از تأیید عملی ورود با کلید از دستگاه شخصی مالک، سیاست فعلی به‌صورت کنترل‌شده روی **آماده‌باش دوگانه** تنظیم شد:
-     * فایل محدودکننده موقت `00-novapulse-ssh-hardening.conf` برداشته شد و `PasswordAuthentication yes` و `PermitRootLogin yes` همراه با `PubkeyAuthentication yes` و `KbdInteractiveAuthentication no` موقتاً حفظ شدند (`98-security-hardening.conf` و سرویس Fail2ban روی `sshd` فعال هستند).
-   * حساب کمکی `ubuntu` (`uid=1000`, `sudo`) بدون تغییر حفظ شد.
-   * کلید جدید اختصاصی `ed25519` برای دسترسی `root` ساخته و به `/root/.ssh/authorized_keys` (`0600`) اضافه شد:
-     * **مسیر فایل کلید خصوصی روی سرور:** `/root/.ssh/novapulse_root_ed25519`
-     * **اثر انگشت کلید عمومی:** `SHA256:OpT/sCN1RXHZMzjpeejWEmKqY2RvA5jTNu2zABgLlUA`
-     * **اسکریپت قطع رمز عبور پس از تأیید مالک:** `/usr/local/sbin/novapulse-lock-ssh-keyonly.sh` (`chmod 700`) آماده شده تا بلافاصله پس از تأیید ورود موفق با کلید از دستگاه مالک اجرا شود و SSH را صرفاً کلیدمحور (`AuthenticationMethods publickey`) کند.
-   * تأیید عملی: ورود محلی با کلید `/root/.ssh/novapulse_root_ed25519` روی هر دو پورت `22` و `101` موفق بوده است (`SSH_KEY_22_OK`, `SSH_KEY_101_OK`).
+1. **وضعیت SSH، آماده‌سازی ورود کلیدمحور استاندارد و جلوگیری از قطع دسترسی مالک:**
+   * اسکریپت `/usr/local/sbin/novapulse-lock-ssh-keyonly.sh` (`chmod 700`) **اجرا نشده است**. سیاست فعلی روی پورت‌های `22` و `101` شامل `PermitRootLogin yes`، `PasswordAuthentication yes`، `PubkeyAuthentication yes` و `KbdInteractiveAuthentication no` است تا دسترسی فعلی مالک با رمز عبور بدون اختلال حفظ شود و `fail2ban` (`sshd`، `Currently banned: 0`) فعال است.
+   * فایل کلید موقت تولیدشده روی سرور (`/root/.ssh/novapulse_root_ed25519`) **راهکار نهایی مالک محسوب نمی‌شود**؛ کلید اصلی باید روی سیستم شخصی مالک تولید و صرفاً کلید عمومی (`.pub`) به سرور منتقل شود.
+   * مسیر استاندارد و مجوزهای احراز هویت آماده هستند (`StrictModes yes`، `AuthorizedKeysFile .ssh/authorized_keys .ssh/authorized_keys2`، `/root/.ssh` و `/home/ubuntu/.ssh` با مجوز `700` و `authorized_keys` با مجوز `600`).
+   * **راهنمای استاندارد راه‌اندازی کلید SSH روی دستگاه مالک (بدون افشای کلید یا رمز):**
+     1. روی کامپیوتر شخصی مالک (Windows PowerShell / macOS / Linux) یک جفت‌کلید `ed25519` بسازید:
+        `ssh-keygen -t ed25519 -f ~/.ssh/novapulse_owner_ed25519 -C "owner-novapulse"`
+     2. **نشست SSH اول را باز نگه دارید** (به‌عنوان پشتیبان ایمن) و فقط محتوای فایل **عمومی** (`novapulse_owner_ed25519.pub`) را به انتهای `/root/.ssh/authorized_keys` اضافه کنید (یا با `ssh-copy-id -p 101 -i ~/.ssh/novapulse_owner_ed25519.pub root@51.21.82.134`).
+     3. بدون بستن نشست اول، یک **نشست SSH دوم** با احراز هویت صرفاً کلید باز کنید تا کارکرد کلید جدید تأیید شود:
+        `ssh -p 101 -i ~/.ssh/novapulse_owner_ed25519 -o IdentitiesOnly=yes -o PubkeyAuthentication=yes -o PasswordAuthentication=no root@51.21.82.134`
+     4. در صورت نیاز به بازگشت سریع (Rollback)، از همان نشست اول باز یا بکاپ `/root/backups/phase3-hardening-20261115-174110Z/ssh/` پیکربندی پیشین قابل بازیابی است. تا پیش از تأیید عملی نشست دوم از سیستم مالک، `PasswordAuthentication` فعال باقی می‌ماند.
 
-2. **فایروال IPv4 + IPv6 (`UFW`) و فیلترینگ `DOCKER-USER`:**
-   * سیاست پیش‌فرض: `deny incoming`، `allow outgoing`، `deny routed` با `IPV6=yes`.
-   * پورت‌های عمومی باز (بدون اختلال در کاربران VPN): `22, 101, 80, 443, 2087, 2083, 2097, 2052, 2053, 2096, 8080, 8443, 8444, 8445, 8447/tcp`.
-   * پورت‌های داخلی `4150` (بک‌اند لایسنس)، `9090` (`sysmon`)، `20870` (`x-ui`) و پورت‌های داخلی Docker (`3100, 8088, 8090, 8100`) منحصراً از طریق رابط `br-50a43488fc95` برای IP ثابت **`172.18.0.4/32`** کانتینر Nginx مجاز هستند و از اینترنت یا سایر کانتینرها مسدود شدند.
-   * زنجیره `DOCKER-USER` در `/etc/ufw/after.rules` (IPv4) و `/etc/ufw/after6.rules` (IPv6) نیز ترافیک مستقیم خارجی روی پورت‌های داخلی را Drop می‌کند.
+2. **فایروال IPv4 + IPv6 (`UFW`)، `iptables`/`ip6tables`، `DOCKER-USER` و NAT:**
+   * در بررسی زنده (`2026-11-15T19:46:42Z`–`19:47:09Z`):
+     * `UFW` فعال با سیاست `deny (incoming), allow (outgoing), deny (routed)` روی IPv4 و `ufw6-user-input`.
+     * در جدول `DOCKER-USER` برای IPv4 و IPv6، ترافیک ورودی از رابط عمومی `ens5` به‌جز مقصد `172.18.0.4` روی پورت‌های `80, 443, 2087` با قانون صریح `DROP` مسدود است (`RETURN` برای `ctstate RELATED,ESTABLISHED` و بریج‌های داخلی Docker حفظ شده است).
+     * قوانین `iptables -t nat` (`Chain DOCKER`) تنها پورت‌های `80`, `443`, `2087` را به `172.18.0.4` و `8045` را به `127.0.0.1` (`antigravity-manager`) نگاشت می‌کنند.
+     * پورت‌های عمومی VPN / Xray / MTProto / `x-ui` Sub (`2052, 2053, 2083, 2087, 2096, 2097, 8080, 8443, 8444, 8445, 8447`) و `22, 101, 80, 443` همگی `OPEN` هستند (`2083` تا تکمیل بررسی و مهاجرت کاربران بدون اختلال حفظ شده است).
+     * پورت‌های داخلی `4150` (بک‌اند لایسنس)، `9090` (`sysmon`) و `20870` (`x-ui`) در تست هم‌جوار Docker (`hmpanel-panel -> 172.18.0.1`) هر سه **`TIMEOUT/BLOCKED`** و از کانتینر مجاز `hmpanel-nginx` به ترتیب `{"status": "ok"}`, `302`, `200` پاسخ دادند.
+     * **محدودیت اسکن خارجی:** این محیط تنها به خود سرور دسترسی دارد و اسکن TCP واقعی از یک میزبان اینترنتی خارج از سرور اجرا نشده است (تست از خود سرور روی IP خودش مسیر Loopback را طی می‌کند و سند بسته‌بودن خارجی محسوب نمی‌شود)؛ بنابراین مسدودیت خارجی پورت‌های `4150`، `9090` و `20870` در دسته‌بندی **تکمیل‌شده در فایروال و تاییدشده بین‌کانتینری، اما تأییدنشده از بیرون سرور** ثبت می‌شود.
 
 3. **حذف رمزهای افشاشده و جداسازی محیطی `sysmon` و `agy-account-sync`:**
    * حذف کامنت‌های حاوی رمز از `/opt/hmpanel/nginx/conf.d/agy.conf` و `/opt/hamsoo/agy.conf`.
@@ -178,13 +183,21 @@
    * تثبیت آدرس `ipv4_address: 172.18.0.4` برای `hmpanel-nginx` در `/opt/hmpanel/docker-compose.yml` (پایدار پس از recreate و restart).
    * محدودسازی `TRUSTED_PROXY_CIDRS` در `/opt/novapulse-license/.env` به `127.0.0.0/8,::1/128,172.18.0.4/32`.
    * استخراج دقیق دامنه‌های واقعی CORS از کانفیگ‌های زنده Nginx (`/opt/hmpanel/nginx/conf.d/`): صرفاً `https://nova.dontbedumb.ir` و `https://cdnflear.dontbedumb.ir:2087` در `server.py` مجاز هستند (`Vary: Origin`؛ درخواست `OPTIONS` با `Origin: https://evil.example` پاسخ `403` می‌گیرد و بدون جایگزینی سیستم Auth است).
-   * **وضعیت PostgreSQL و مرز دسترسی Docker:** کانتینر `hmpanel-postgres` پورت `5432/tcp` را روی میزبان Publish نکرده است و ارتباط `novapulse-license` با نقش کمینه‌سطح `np_license_svc` (`NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT` و فقط `SELECT`/`UPDATE` ستونی روی `"Panel"` و `"Client"`) از طریق `docker exec -i hmpanel-postgres psql -U np_license_svc ...` با متغیرهای پارامتریک (`-v` / `:'var'`) انجام می‌شود. دسترسی به `"Admin"` و `"Panel".password` با خطای `permission denied` مسدود است. (وابستگی به `/var/run/docker.sock` در بخش ریسک‌های باقیمانده ثبت شده است.)
-   * **وضعیت مهاجرت تدریجی لایسنس‌های قدیمی (`licenses.db` — مجموع `62` رکورد بدون ابطال کورکورانه):**
-     * دستگاه‌های به‌روز (`device_id_legacy=0`, `active`): `13` دستگاه روی `2.4.5` و `3` دستگاه روی `2.4.4` (مجموع `16` دستگاه مدرن).
-     * کاربران قدیمی فعال (`device_id_legacy=1`, `active`, `legacy (<2.4.3)`): `2` لایسنس (`NP-7SUH***` و `NP-5WYD***`).
-     * لایسنس‌های نامشخص قدیمی (`device_id_legacy=1`, `status='legacy_ambiguous'`): `3` لایسنس (`NP-CU7F***`، `NP-R2DZ***`، `NP-7G76***`)؛ و `2` لایسنس منقضی/لغوشده طبیعی (`NP-WMSP***`, `NP-P834***`).
-     * پنجره سازگاری (`ALLOW_LEGACY_CLIENT_COMPAT=1` و یادآور دوره‌ای هر `900s` با کد `401 legacy_update_required`) فعال نگه داشته شده تا کاربران قدیمی بدون قطع ناگهانی به نسخه `2.4.5` مهاجرت کنند.
-   * **محافظت از درگاه APK تولید:** فایل‌های انتشار رسمی در `/opt/novapulse-license/releases/` (`NovaPulse_2.4.5_*.apk`) بدون تغییر و دست‌نخورده باقی ماندند تا هیچ جایگزینی پیش از تأیید نهایی مالک انجام نشود.
+   * **وضعیت PostgreSQL و مرز دسترسی Docker:** کانتینر `hmpanel-postgres` پورت `5432/tcp` را روی میزبان Publish نکرده است و ارتباط `novapulse-license` با نقش کمینه‌سطح `np_license_svc` (`NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT` و فقط `SELECT`/`UPDATE` ستونی روی `"Panel"` و `"Client"`) از طریق `docker exec -i hmpanel-postgres psql -U np_license_svc ...` با متغیرهای پارامتریک (`-v` / `:'var'`) انجام می‌شود. دسترسی به `"Admin"` و `"Panel".password` با خطای `permission denied` مسدود است.
+   * **وضعیت زنده مهاجرت تدریجی لایسنس‌های قدیمی (`licenses.db` در `2026-11-15T19:46:56Z` — مجموع `62` لایسنس):**
+     * دستگاه‌های مدرن به‌روز (`device_id_legacy=0`, `active`): `13` دستگاه روی `2.4.5` و `3` دستگاه روی `2.4.4` (مجموع `16` دستگاه مدرن).
+     * دستگاه‌های قدیمی فعال (`device_id_legacy=1`, `status='active'`, `legacy (<2.4.3)`): **`3` دستگاه فعال** شامل `NP-CU7F***` (تازه‌وارد در آخرین ساعت، سقف `3`), `NP-7SUH***` (سقف `1`), `NP-5WYD***` (سقف `-1`).
+     * رکوردهای نامشخص قدیمی (`device_id_legacy=1`, `status='legacy_ambiguous'`): اکنون **`2` رکورد باقی‌مانده** (`NP-7G76***` و `NP-R2DZ***`)؛ و **`2` ردیف `revoked`** (`NP-P834***`, `NP-WMSP***`).
+     * **برنامه مهاجرت مرحله‌ای (بدون قطع ناگهانی):** (۱) حفظ `ALLOW_LEGACY_CLIENT_COMPAT=1` و یادآور `900s` تا ارتقای کاربران فعلی، (۲) جایگزینی فایل‌های APK رسمی پس از تأیید مالک و اطلاع‌رسانی در کانال، (۳) رسیدن شمار دستگاه‌های `active legacy (<2.4.3)` به `0`، و (۴) غیرفعال‌سازی `ALLOW_LEGACY_CLIENT_COMPAT=0`.
+   * **درگاه APK تولید و مقایسه با بیلد CI (بدون جایگزینی فایل‌های سرور):**
+     * **فایل‌های تولید فعلی در `/opt/novapulse-license/releases/` (`Nov 15 14:12` — دست‌نخورده):**
+       * `NovaPulse_2.4.5_arm64-v8a.apk`: `sha256=7f23a2f7a9c22249c9590a6d8d1b14c05d4d94f0ca9abafd1a2df1b0c7106565` (گواهی v2: `a016c9bf4d8e7341efd565f7fc1959235fcdf74c63feb1e31dbaee86a9c22ae1`)
+       * `NovaPulse_2.4.5_armeabi-v7a.apk`: `sha256=1228100240fdacb6e33031da7d02beee83423dce23e16ea4e58462b15d747839` (گواهی v2: `a016c9bf...`)
+       * `NovaPulse_2.4.5_universal.apk`: `sha256=ded9a412e88ab93c99582df908abb95cc55c89e751e0e985345be98f7c35c12f` (گواهی v2: `a016c9bf...`)
+       * `NovaPulse_2.4.5_x86.apk`: `sha256=9b5d25272d454131768309e42666c6a8172a11b468f522091e390959e93bf723` (گواهی v2: `a016c9bf...`)
+       * `NovaPulse_2.4.5_x86_64.apk`: `sha256=11040c4148b514fb9c9a23465d0edfdb62923d11759334e91a86bb87fce9939d` (گواهی v2: `a016c9bf...`)
+     * **مقایسه Git بین `e6e7f4fa` (کامیت آزموده‌شده در CI Run `43750483880`) و `HEAD`:** از کامیت `e6e7f4fa` به بعد **فقط `report.md` تغییر کرده** و هیچ تغییر کد یا تستی پس از آن ایجاد نشده است (`git diff --name-status e6e7f4fa..f377a9ce -> M report.md`).
+     * در CI Run `43750483880` هر ۵ ABI بیلد و آپلود شده‌اند؛ گام بررسی Workflow (`build.yml`) به‌صورت مستقیم `sha256=84584a8f417224b85763a6a67416ecc1704de2689bd863a14288d97881de3fa8` و گواهی `a016c9bf...` را برای `arm64-v8a` چاپ و تأیید کرده است (دریافت فایل ZIP آرتیفکت سایر ۴ ABI نیازمند احراز هویت GitHub است).
 
 ---
 
@@ -206,38 +219,52 @@
 * **کامپوننت سه‌بعدی-شیشه‌ای یکپارچه (`NovaPulseNoticeDialog.kt`):**
   * استفاده هم‌زمان در `QuietStormActivity.kt` (دیالوگ بروزرسانی، دیالوگ اعلان امنیتی/لایسنس و دیالوگ رضایت بهینه‌سازی)، `CheckUpdateActivity.kt` و جایگزینی اسنک‌بار پیش‌فرض با `Qs3dSnackbarHost` شیشه‌ای.
   * طراحی چندلایه با هدر Emblem وکتور اختصاصی (متوقف در صورت خاموش‌بودن انیمیشن یا رفتن به پس‌زمینه توسط `rememberMotionActive()`)، نمایشگر انتقال نسخه (`v2.4.4 -> v2.4.5`) و ABI، کارت‌های رنگی بخش‌بندی‌شده، لینک‌های آبی/فیروزه‌ای قابل‌کلیک درون متن و چیپ‌های دسترسی مستقیم تلگرام (`SupportLinks.openTelegramTarget`) با ساختار واکنش‌گرا برای نمایشگرهای باریک `320dp`.
-* **تست رندر واقعی، راست‌به‌چپ (RTL) و کلیک لینک‌ها در CI (`NovaPulseNoticeUiScreenshotTest.kt` + `.github/workflows/build.yml`):**
-  * رندر واقعی Compose با Robolectric Native Graphics (`@GraphicsMode(NATIVE)`) در حالت‌های فارسی اجباری (`412dp`)، آپدیت اختیاری با نوار پیشرفت (`412dp`)، اعلان امنیتی در صفحه باریک (`320dp`)، حالت انگلیسی (`412dp`) و همچنین تست اجبار `LayoutDirection.Rtl` روی لوکیل `en-US` و شبیه‌سازی کلیک واقعی روی چیپ‌های «کانال رسمی» و «پشتیبانی تلگرام» همراه با تأیید `Intent.ACTION_VIEW`، و آپلود خروجی `ui-screenshots` به‌عنوان Artifact در گیت‌هاب اکشنز.
+* **تست خودکار Compose و محدودیت دریافت اسکرین‌شات (`NovaPulseNoticeUiScreenshotTest.kt` + Run `43750483880`):**
+  * اجرای رندر Compose (Robolectric `4.16.1` با `NATIVE` graphics)، بررسی وجود متن‌ها، عدم سفید/سیاه‌بودن بایتمپ، اجبار `LayoutDirection.Rtl` زیر لوکیل `en-US` و شبیه‌سازی کلیک روی چیپ‌های تلگرام (`Intent.ACTION_VIEW`) در Run `43750483880` (`99/99` موفق) و تولید آرتیفکت `ui-screenshots` (`2,555,713` بایت).
+  * در بررسی زنده (`2026-11-15T19:46:56Z`) دانلود آرتیفکت از REST API گیت‌هاب بدون PAT خطای **`401 Unauthorized`** داد؛ بنابراین بررسی چشمی واقعی فایل‌های PNG روی چشم انسان انجام نشده و صراحتاً در بخش **تکمیل‌شده اما بدون تأیید بصری خارجی** ثبت می‌شود.
 
 ---
 
-### ۵. ماتریس نهایی راستی‌آزمایی (Verification Matrix)
+### ۵. ماتریس نهایی راستی‌آزمایی و زمان‌بندی تست‌ها (`2026-11-15T19:46Z–19:47Z`)
 
-| بخش / آزمون | وضعیت | نتیجه مشاهده‌شده |
+| تست / مقصد / زمان (UTC) | وضعیت | نتیجه مشاهده‌شده |
 | :--- | :---: | :--- |
-| تست واحد و امنیت Backend (`unittest discover`) | **PASS** | `13/13` تست موفق (شامل تست Proxy CIDR `/32` و CORS و نودج نسخه < `2.4.4`) |
-| چرخه زنده API لایسنس (`challenge -> redeem -> status -> sub_noauth -> logout -> post_logout`) | **PASS** | پاسخ‌های `200 -> 200 -> 200 -> 401 -> 200 -> 401` و پاک‌سازی رکورد تست |
-| دسترسی کمینه‌سطح PostgreSQL (`np_license_svc`) | **PASS** | شمارش `Client` (`59`) موفق؛ `Panel.password` و `Admin` با `permission denied` مسدود |
-| ایزوله‌سازی فایروال کانتینر و پورت‌های داخلی (`4150, 9090, 20870`) | **PASS** | مسدود از کانتینر `hmpanel-panel`؛ قابل‌دسترس فقط از `hmpanel-nginx` (`172.18.0.4`) |
-| دسترسی SSH کلیدمحور (`22` و `101`) بدون قطع دسترسی مالک | **DEFERRED (Safe)** | `SSH_KEY_22_OK` و `SSH_KEY_101_OK` موفق؛ ورود رمز عمداً تا تأیید کلید مالک باز ماند (`/usr/local/sbin/novapulse-lock-ssh-keyonly.sh` آماده اجرا) |
-| سلامت سرویس‌های VPN و شبکه (`ssh`, `fail2ban`, `ufw`, `docker`, `x-ui`, `novapulse-license`, `sysmon`, `agy-account-sync`, `xray-restart-watcher`) | **PASS** | تمام `9` سرویس `active`؛ `62` ردیف لایسنس (`16` مدرن `2.4.4`/`2.4.5`، `2` legacy فعال، `3` `legacy_ambiguous`، `2` revoked) |
-| تست واحد، RTL، کلیک چیپ‌ها و رندر سه‌بعدی در GitHub Actions (`feat/qsn-3d-smart-stage1`) | **PASS** | Run [`43750483880`](https://github.com/mo3iiibest77-hub/PattNG/actions/runs/43750483880) (`e6e7f4fa`): `99/99` تست واحد موفق (`failed=0, skipped=0`)، تولید `ui-screenshots` (`2,555,713` بایت)، بیلد `NovaPulse_2.4.5_arm64-v8a.apk` (`sha256: 84584a8f417224b85763a6a67416ecc1704de2689bd863a14288d97881de3fa8`) و تأیید امضای گواهی Release (`a016c9bf...`) |
+| تست واحد Backend (`unittest discover`, `19:13:12Z`) | **Verified** | `Ran 13 tests in 2.197s -> OK` |
+| Nginx Upstream -> Backend/Sysmon/x-ui (`172.18.0.4 -> 172.18.0.1`, `19:46:56Z`) | **Verified** | `4150`: `{"status": "ok"}`, `9090`: `HTTP 302`, `20870`: `HTTP 200` |
+| ایزوله‌سازی بین‌کانتینری Docker (`hmpanel-panel -> 172.18.0.1`, `19:46:56Z`) | **Verified** | پورت‌های `4150`, `9090`, `20870` همگی `TIMEOUT/BLOCKED` |
+| Reverse Proxy عمومی IPv4/IPv6 & `2083` (`19:46:56Z–19:47:09Z`) | **Verified** | `nova.dontbedumb.ir` (IPv4): `200`; `cdnflear.dontbedumb.ir:2087` (IPv4): `200`; `:2083`: `403` (فعال)؛ `[2a05:..:71e0]:443` (IPv6 مستقیم محلی): `200` (دامنه `nova.dontbedumb.ir` رکورد DNS AAAA ندارد) |
+| پورت‌های Xray / MTProto / Panel (`2052, 2053, 2083, 2087, 2096, 2097, 8080, 8443-8447`, `19:47:09Z`) | **Verified** | همگی در حالت `LISTEN` و اتصال TCP موفق (`OPEN`) |
+| اسکن خارجی اینترنتی پورت‌های `4150, 9090, 20870` | **NOT Externally Verified** | قوانین `UFW` و `DOCKER-USER` (`ens5` DROP برای IPv4/IPv6) و ایزوله‌سازی بین‌کانتینری تأیید شد، اما میزبان خارجی مستقل در دسترس نبود |
+| امضای v2 و SHA-256 هر ۵ APK تولیدی در `/opt/novapulse-license/releases/` (`19:47:32Z`) | **Verified** | هر ۵ ABI دست‌نخورده و امضاشده با `a016c9bf...` |
+| بیلد و تست Android در GitHub Actions (`Run 43750483880`, کامیت `e6e7f4fa`) | **Verified (Code) / Visual Uninspected** | `99/99` تست موفق؛ `arm64-v8a` `sha256=84584a8f...` و گواهی `a016c9bf...` تأیید شد؛ `ui-screenshots` دانلود نشد (`401 Unauthorized` بدون PAT) |
 
 ---
 
-## بخش پنجم: ریسک‌های باقیمانده و محدودیت‌های صریح (Residual Risks & Open Items)
+## بخش پنجم: طبقه‌بندی نهایی وضعیت‌ها (چهار وضعیت تفکیک‌شده)
 
-این موارد به‌صورت عمدی باز نگه داشته شده یا دارای محدودیت محیطی هستند و نباید تکمیل‌شده تلقی شوند:
+### ۱. Completed and independently verified (تکمیل‌شده و راستی‌آزمایی‌شده)
+* فعال‌بودن تمام ۹ سرویس تولیدی (`ssh`, `fail2ban`, `ufw`, `docker`, `x-ui`, `novapulse-license`, `sysmon`, `agy-account-sync`, `xray-restart-watcher`) و پاسخ سالم `/api/v1/license/health` (`200`).
+* موفقیت کامل تست‌های واحد Backend (`13/13`)، چرخه زنده Auth لایسنس، دسترسی کمینه‌سطح PostgreSQL (`np_license_svc`) و پاک‌سازی/چرخش رمزهای `sysmon` و `agy-account-sync`.
+* فعال‌بودن `UFW` + `DOCKER-USER` (IPv4 & IPv6)، بازبودن کامل تمام پورت‌های VPN / Xray / MTProto / `2083`، کارکرد صحیح Upstream از `hmpanel-nginx` (`172.18.0.4`) و مسدودبودن دسترسی مستقیم از کانتینر غیرمجاز `hmpanel-panel` به `4150, 9090, 20870`.
+* حفظ دسترسی امن SSH با رمز و آماده‌باش `authorized_keys` (`700`/`600`) بدون اجرای `novapulse-lock-ssh-keyonly.sh`، حفظ کلید و بکاپ قابل‌بازگشت.
+* وضعیت زنده `licenses.db` با حفظ کاربران قدیمی بدون ابطال ناگهانی (`3` دستگاه فعال `<2.4.3`، `2` رکورد `legacy_ambiguous`، `16` دستگاه مدرن `2.4.4`/`2.4.5`).
+* بررسی SHA-256 و گواهی v2 تمام ۵ فایل APK تولیدی فعلی (`/opt/novapulse-license/releases/`) بدون جایگزینی، هم‌خوانی `e6e7f4fa..HEAD` (تنها تغییر در `report.md`)، و موفقیت `99/99` تست واحد + بیلد `arm64-v8a` در Run `43750483880`.
 
-1. **فعال‌بودن موقت احراز هویت با رمز عبور در SSH (ریسک باز عمدی تا تأیید مالک):**
-   * `PasswordAuthentication yes` و `PermitRootLogin yes` روی پورت‌های `22` و `101` فعال هستند تا دسترسی مالک از طریق رمز مسدود نشود (Fail2ban فعال است).
-   * **اقدام بعدی:** دریافت `/root/.ssh/novapulse_root_ed25519` روی دستگاه شخصی، تأیید ورود موفق با کلید از بیرون سرور، و سپس اجرای `/usr/local/sbin/novapulse-lock-ssh-keyonly.sh`.
-2. **اجرای `novapulse-license` با کاربر `root` و دسترسی به Docker Socket:**
-   * به‌دلیل وابستگی Sync با کانتینر `hmpanel-postgres` از طریق `docker exec -i hmpanel-postgres psql ...` (پورت `5432` روی میزبان بسته است)، سرویس `novapulse-license` همچنان به `/var/run/docker.sock` متکی است. مهاجرت به اتصال شبکه ایزوله روی همان Bridge داکر می‌تواند در فاز بعدی انجام شود.
-3. **بازبودن موقت پنجره سازگاری لایسنس‌های قدیمی (`ALLOW_LEGACY_CLIENT_COMPAT=1`):**
-   * هنوز `2` دستگاه فعال با نسخه `<2.4.3` و `3` ردیف `legacy_ambiguous` در `licenses.db` وجود دارند. پس از ارتقای این کاربران با پیام یادآور دوره‌ای (`900s`)، می‌توان `ALLOW_LEGACY_CLIENT_COMPAT=0` را فعال کرد.
-4. **محدودیت بازبینی بصری مستقیم فایل‌های PNG اسکرین‌شات در میزبان:**
-   * Workflow در GitHub Actions اسکرین‌شات‌های واقعی Compose را تولید و در `ui-screenshots` آپلود می‌کند (و تست‌ها عدم سفید/سیاه‌بودن و ابعاد واقعی را در زمان رندر چک می‌کنند)، اما دانلود ZIP آرتیفکت از REST API گیت‌هاب نیازمند توکن احراز هویت (PAT) است؛ بنابراین بررسی چشمی نهایی فایل‌های PNG از طریق رابط کاربری GitHub بر عهده مالک است.
-5. **به‌روزرسانی نکردن APKهای تولید در `/opt/novapulse-license/releases/`:**
-   * فایل‌های فعلی روی سرور (`NovaPulse_2.4.5_*.apk` مربوط به ساعت `14:12`) مطابق دستور بدون جایگزینی حفظ شدند تا بیلد امضاشده و آزموده‌شده نهایی پس از تأیید مالک منتشر شود.
+### ۲. Completed but not externally verified (تکمیل‌شده ولی بدون تأیید خارجی)
+* **بسته‌بودن خارجی پورت‌های `4150`، `9090` و `20870` از اینترنت:** قوانین `UFW`، `iptables` (`DOCKER-USER` روی `ens5`)، `ip6tables` و مسدودیت بین‌کانتینری تأیید شده‌اند، اما به‌دلیل نبود ماشین تست خارج از VPS، Port Scan واقعی از بیرون انجام نشده است.
+* **بازبینی چشمی فایل‌های PNG آرتیفکت `ui-screenshots`:** تست‌های خودکار Compose (`99/99` شامل RTL، کلیک چیپ تلگرام و بایتمپ غیرخالی) پاس شده‌اند، اما فایل ZIP آرتیفکت از REST API گیت‌هاب بدون PAT با `401 Unauthorized` رد شد و تصاویر با چشم انسان دیده نشده‌اند.
+* **تست گواهی/SHA-256 مجزای ۴ ABI دیگر در CI (`armeabi-v7a`, `x86`, `x86_64`, `universal`):** در Run `43750483880` ساخته و آپلود شده‌اند، اما اسکریپت `build.yml` فقط خروجی SHA-256 و `apksigner` فایل `arm64-v8a` را در لاگ چاپ کرده است.
+
+### ۳. Pending owner action (در انتظار اقدام مالک)
+* **ساخت کلید اختصاصی SSH روی دستگاه شخصی مالک،** قراردادن کلید عمومی در `/root/.ssh/authorized_keys` و **آزمون عملی در نشست SSH دوم** (پیش از هر تصمیم برای محدودسازی رمز).
+* **بررسی بصری دستی فایل‌های `ui-screenshots`** در صفحه Run [`43750483880`](https://github.com/mo3iiibest77-hub/PattNG/actions/runs/43750483880) پس از ورود به حساب GitHub.
+* **تصمیم و تأیید نهایی مالک برای جایگزینی APKهای تولید** در `/opt/novapulse-license/releases/` با خروجی‌های `e6e7f4fa` پس از مشاهده بصری و تست روی گوشی واقعی.
+* **اجرای Scan پورت خارجی** از دستگاه شخصی یا ابزار خارجی برای تأیید بسته‌بودن `4150, 9090, 20870` از اینترنت.
+
+### ۴. Remaining security risks (ریسک‌های امنیتی باقی‌مانده)
+* **`PasswordAuthentication yes` و `PermitRootLogin yes` در SSH:** تا زمانی که مالک ورود با کلید شخصی خود را تأیید نکند عمداً باز مانده است (کاهش ریسک فعلی با `fail2ban` روی پورت‌های `22` و `101`).
+* **وابستگی سرویس `novapulse-license` به کاربر `root` و `/var/run/docker.sock`:** به‌علت همگام‌سازی PostgreSQL از طریق `docker exec -i hmpanel-postgres psql` (`5432` روی میزبان بسته است).
+* **بازبودن موقت `ALLOW_LEGACY_CLIENT_COMPAT=1`:** تا پایان ارتقای `3` دستگاه فعال قدیمی (`NP-CU7F***`، `NP-7SUH***`، `NP-5WYD***`) و تعیین تکلیف `2` ردیف `legacy_ambiguous`.
+* **باقی‌ماندن فایل کلید موقت `/root/.ssh/novapulse_root_ed25519` روی دیسک سرور:** پس از آنکه مالک کلید اختصاصی ساخته‌شده روی دستگاه خودش را تست کرد، بهتر است کلید موقت و سطر عمومی مرتبط (`novapulse-root-admin@prod`) از سرور حذف شوند.
+
 
