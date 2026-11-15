@@ -1,6 +1,7 @@
 package com.v2ray.ang.ui.qsn3d
 
 import android.app.Application
+import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.view.View
@@ -18,15 +19,20 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import com.v2ray.ang.dto.ApkAssetOption
 import com.v2ray.ang.dto.CheckUpdateResult
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
+import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import org.robolectric.shadows.ShadowLooper
@@ -295,5 +301,75 @@ class NovaPulseNoticeUiScreenshotTest {
         composeTestRule.onAllNodesWithText("@NovaPulseVPN", substring = true).onFirst().assertIsDisplayed()
         composeTestRule.onAllNodesWithText("@Mo3i_Best", substring = true).onFirst().assertIsDisplayed()
         captureAndSaveViewPng(hostView, "notice_optional_en_412dp.png")
+    }
+
+    @Test
+    @Config(qualifiers = "en-rUS-w412dp-h915dp-xxhdpi")
+    fun persianNotice_enforcesRtlEvenOnEnglishLocale_andTelegramChipsLaunchIntents() {
+        val sampleNotes = """
+            اطلاعیه مهم بروزرسانی (نسخه‌های پایین‌تر از 2.4.4)
+            • لطفاً به نسخه 2.4.5 ارتقا دهید.
+
+            پشتیبانی و دریافت نسخه رسمی:
+            • کانال رسمی در تلگرام: @NovaPulseVPN
+            • لینک مستقیم: https://t.me/NovaPulseVPN
+            • آیدی پشتیبانی: @Mo3i_Best
+        """.trimIndent()
+
+        val result = CheckUpdateResult(
+            hasUpdate = true,
+            latestVersion = "2.4.5",
+            latestVersionCode = 4000755,
+            releaseNotes = sampleNotes,
+            recommendedAbi = "arm64-v8a",
+            availableAssets = sampleUpdateAssets(),
+        )
+
+        composeTestRule.mainClock.autoAdvance = false
+        composeTestRule.setContent {
+            Qs3dTheme {
+                NovaPulseUpdateDialogCard(
+                    result = result,
+                    currentVersionName = "2.4.4",
+                    isCheckingUpdate = false,
+                    downloadProgress = null,
+                    onDownloadOption = {},
+                )
+            }
+        }
+        composeTestRule.mainClock.advanceTimeByFrame()
+
+        val channelNode = composeTestRule.onNodeWithText("کانال رسمی", substring = true)
+        channelNode.assertIsDisplayed()
+        assertEquals(
+            "Persian notice must force RTL layoutDirection even under en-US locale",
+            LayoutDirection.Rtl,
+            channelNode.fetchSemanticsNode().layoutInfo.layoutDirection,
+        )
+
+        channelNode.performClick()
+        composeTestRule.mainClock.advanceTimeByFrame()
+        val appShadow = shadowOf(RuntimeEnvironment.getApplication())
+        val channelIntent = appShadow.nextStartedActivity
+        assertNotNull("Clicking @NovaPulseVPN chip must launch Telegram VIEW intent", channelIntent)
+        assertEquals(Intent.ACTION_VIEW, channelIntent.action)
+        assertTrue(
+            "Unexpected channel URI: ${channelIntent.dataString}",
+            channelIntent.dataString == "tg://resolve?domain=NovaPulseVPN" ||
+                channelIntent.dataString == "https://t.me/NovaPulseVPN",
+        )
+
+        val supportNode = composeTestRule.onNodeWithText("پشتیبانی تلگرام", substring = true)
+        supportNode.assertIsDisplayed()
+        supportNode.performClick()
+        composeTestRule.mainClock.advanceTimeByFrame()
+        val supportIntent = appShadow.nextStartedActivity
+        assertNotNull("Clicking @Mo3i_Best chip must launch Telegram VIEW intent", supportIntent)
+        assertEquals(Intent.ACTION_VIEW, supportIntent.action)
+        assertTrue(
+            "Unexpected support URI: ${supportIntent.dataString}",
+            supportIntent.dataString == "tg://resolve?domain=Mo3i_Best" ||
+                supportIntent.dataString == "https://t.me/Mo3i_Best",
+        )
     }
 }

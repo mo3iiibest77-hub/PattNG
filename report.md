@@ -153,17 +153,15 @@
 * محتویات بکاپ‌شده: SQLite `.backup` از `licenses.db` و `x-ui.db` (هر دو `PRAGMA integrity_check -> ok`)، `/etc/ssh`، فایل‌های systemd unit، `/opt/novapulse-license`، `/opt/hmpanel/{docker-compose.yml,.env,nginx}`، `/usr/local/bin/agy-account-sync.py`، تنظیمات `antigravity_tools`، پیکربندی `/etc/ufw` و خروجی‌های `iptables-save` (`iptables-before.v4` / `iptables-before.v6`).
 
 ### ۲. مقاوم‌سازی سیستم‌عامل، شبکه، SSH و سرویس‌ها
-1. **احراز هویت صرفاً کلیدمحور SSH (`root` و `ubuntu`) روی پورت‌های `22` و `101`:**
-   * پیکربندی متمرکز در `/etc/ssh/sshd_config.d/00-novapulse-ssh-hardening.conf` و همگام‌سازی فایل‌های `50-cloud-init.conf`، `60-cloudimg-settings.conf` و `99-root-access.conf`:
-     * `PermitRootLogin prohibit-password`
-     * `PasswordAuthentication no` و `KbdInteractiveAuthentication no`
-     * `PubkeyAuthentication yes` و `AuthenticationMethods publickey`
-   * حساب `ubuntu` (`uid=1000`, `sudo` NOPASSWD) بدون تغییر حفظ شد.
+1. **آماده‌سازی احراز هویت کلیدمحور SSH (`22` و `101`) همراه با جلوگیری از قطع دسترسی مالک:**
+   * با بررسی لاگ‌های واقعی سیستم (`/var/log/auth.log.1`) مشخص شد مالک اخیراً از خارج با رمز عبور وارد سرور شده است (`51.21.82.134`). بنابراین برای جلوگیری قطعی از قفل‌شدن دسترسی مدیریتی تا پیش از تأیید عملی ورود با کلید از دستگاه شخصی مالک، سیاست فعلی به‌صورت کنترل‌شده روی **آماده‌باش دوگانه** تنظیم شد:
+     * فایل محدودکننده موقت `00-novapulse-ssh-hardening.conf` برداشته شد و `PasswordAuthentication yes` و `PermitRootLogin yes` همراه با `PubkeyAuthentication yes` و `KbdInteractiveAuthentication no` موقتاً حفظ شدند (`98-security-hardening.conf` و سرویس Fail2ban روی `sshd` فعال هستند).
+   * حساب کمکی `ubuntu` (`uid=1000`, `sudo`) بدون تغییر حفظ شد.
    * کلید جدید اختصاصی `ed25519` برای دسترسی `root` ساخته و به `/root/.ssh/authorized_keys` (`0600`) اضافه شد:
      * **مسیر فایل کلید خصوصی روی سرور:** `/root/.ssh/novapulse_root_ed25519`
      * **اثر انگشت کلید عمومی:** `SHA256:OpT/sCN1RXHZMzjpeejWEmKqY2RvA5jTNu2zABgLlUA`
-     * **نحوه دریافت کلید خصوصی در کلاینت:** اتصال با کاربر مجاز `ubuntu` و انتقال امن با `sudo cat /root/.ssh/novapulse_root_ed25519` (یا `sftp` پس از تنظیم مجوز موقت)، سپس ذخیره با `chmod 600` روی سیستم مدیر. پس از انتقال، نگهداری نسخه کلید خصوصی با دسترسی محدود ضروری است.
-   * تأیید عملی: ورود با کلید روی پورت‌های `22` و `101` موفق (`SSH_KEY_22_OK`, `SSH_KEY_101_OK`, `sftp> pwd`) و ورود با رمز برای `root` و `ubuntu` مسدود (`Permission denied (publickey)`). Fail2ban (`sshd`) فعال باقی ماند.
+     * **اسکریپت قطع رمز عبور پس از تأیید مالک:** `/usr/local/sbin/novapulse-lock-ssh-keyonly.sh` (`chmod 700`) آماده شده تا بلافاصله پس از تأیید ورود موفق با کلید از دستگاه مالک اجرا شود و SSH را صرفاً کلیدمحور (`AuthenticationMethods publickey`) کند.
+   * تأیید عملی: ورود محلی با کلید `/root/.ssh/novapulse_root_ed25519` روی هر دو پورت `22` و `101` موفق بوده است (`SSH_KEY_22_OK`, `SSH_KEY_101_OK`).
 
 2. **فایروال IPv4 + IPv6 (`UFW`) و فیلترینگ `DOCKER-USER`:**
    * سیاست پیش‌فرض: `deny incoming`، `allow outgoing`، `deny routed` با `IPV6=yes`.
@@ -176,11 +174,17 @@
    * چرخش مستقل ۳ رمز (پسورد پنل `sysmon`، `API_KEY` و `WEB_PASSWORD` کانتینر `antigravity-manager`) بدون نگهداری در سورس یا کانفیگ وب‌سرور.
    * انتقال متغیرهای محیطی به فایل‌های `0600 root:root` (`/etc/sysmon/env`، `/etc/agy-account-sync/env`، `/etc/agy-account-sync/container.env`)، اعمال محدودیت‌های systemd (`NoNewPrivileges`, `PrivateTmp`, `ProtectSystem`, `ProtectHome`) روی `sysmon.service` و `xray-restart-watcher.service` و حذف کامل رمز fallback از `/usr/local/bin/agy-account-sync.py` (`HTTP 200` در همگام‌سازی واقعی تأیید شد).
 
-4. **تثبیت IP کانتینر Nginx، اعتماد پروکسی، CORS و دسترسی کمینه‌سطح PostgreSQL:**
+4. **تثبیت IP کانتینر Nginx، اعتماد پروکسی، CORS، مهاجرت لایسنس‌های قدیمی و وابستگی PostgreSQL:**
    * تثبیت آدرس `ipv4_address: 172.18.0.4` برای `hmpanel-nginx` در `/opt/hmpanel/docker-compose.yml` (پایدار پس از recreate و restart).
    * محدودسازی `TRUSTED_PROXY_CIDRS` در `/opt/novapulse-license/.env` به `127.0.0.0/8,::1/128,172.18.0.4/32`.
-   * محدودسازی سخت‌گیرانه CORS در `server.py` فقط به دامنه‌های مجاز (`https://nova.dontbedumb.ir`, `https://cdnflear.dontbedumb.ir:2087`) همراه با `Vary: Origin` و پاسخ `403` برای درخواست‌های `OPTIONS` از Origin نامعتبر.
-   * ایجاد نقش کمینه‌سطح PostgreSQL به نام `np_license_svc` (`NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT`) صرفاً با مجوز `SELECT`/`UPDATE` ستونی روی جدول‌های `"Panel"` و `"Client"` و تبدیل ۵ کوئری `psql` به اجرای پارامتریک (`-v` / `:'var'`) بدون الحاق رشته‌ای SQL. دسترسی به جداول حساس `"Admin"` و `"Panel".password` با خطای `permission denied` مسدود است.
+   * استخراج دقیق دامنه‌های واقعی CORS از کانفیگ‌های زنده Nginx (`/opt/hmpanel/nginx/conf.d/`): صرفاً `https://nova.dontbedumb.ir` و `https://cdnflear.dontbedumb.ir:2087` در `server.py` مجاز هستند (`Vary: Origin`؛ درخواست `OPTIONS` با `Origin: https://evil.example` پاسخ `403` می‌گیرد و بدون جایگزینی سیستم Auth است).
+   * **وضعیت PostgreSQL و مرز دسترسی Docker:** کانتینر `hmpanel-postgres` پورت `5432/tcp` را روی میزبان Publish نکرده است و ارتباط `novapulse-license` با نقش کمینه‌سطح `np_license_svc` (`NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT` و فقط `SELECT`/`UPDATE` ستونی روی `"Panel"` و `"Client"`) از طریق `docker exec -i hmpanel-postgres psql -U np_license_svc ...` با متغیرهای پارامتریک (`-v` / `:'var'`) انجام می‌شود. دسترسی به `"Admin"` و `"Panel".password` با خطای `permission denied` مسدود است. (وابستگی به `/var/run/docker.sock` در بخش ریسک‌های باقیمانده ثبت شده است.)
+   * **وضعیت مهاجرت تدریجی لایسنس‌های قدیمی (`licenses.db` — مجموع `62` رکورد بدون ابطال کورکورانه):**
+     * دستگاه‌های به‌روز (`device_id_legacy=0`, `active`): `13` دستگاه روی `2.4.5` و `3` دستگاه روی `2.4.4` (مجموع `16` دستگاه مدرن).
+     * کاربران قدیمی فعال (`device_id_legacy=1`, `active`, `legacy (<2.4.3)`): `2` لایسنس (`NP-7SUH***` و `NP-5WYD***`).
+     * لایسنس‌های نامشخص قدیمی (`device_id_legacy=1`, `status='legacy_ambiguous'`): `3` لایسنس (`NP-CU7F***`، `NP-R2DZ***`، `NP-7G76***`)؛ و `2` لایسنس منقضی/لغوشده طبیعی (`NP-WMSP***`, `NP-P834***`).
+     * پنجره سازگاری (`ALLOW_LEGACY_CLIENT_COMPAT=1` و یادآور دوره‌ای هر `900s` با کد `401 legacy_update_required`) فعال نگه داشته شده تا کاربران قدیمی بدون قطع ناگهانی به نسخه `2.4.5` مهاجرت کنند.
+   * **محافظت از درگاه APK تولید:** فایل‌های انتشار رسمی در `/opt/novapulse-license/releases/` (`NovaPulse_2.4.5_*.apk`) بدون تغییر و دست‌نخورده باقی ماندند تا هیچ جایگزینی پیش از تأیید نهایی مالک انجام نشود.
 
 ---
 
@@ -191,7 +195,7 @@
 2. **غیرفعال‌سازی استخراج و پشتیبان‌گیری خودکار داده‌ها (`AndroidManifest.xml`, `res/xml/data_extraction_rules.xml`):**
    * افزودن `android:fullBackupContent="false"` و `android:dataExtractionRules="@xml/data_extraction_rules"` برای مسدودسازی Cloud Backup و Device-to-Device Transfer روی تمام دامنه‌ها (`root`, `file`, `database`, `sharedpref`, `external`).
 3. **بستن مسیرهای بایپس گیت لایسنس و دستکاری زمان اجرا (`LauncherManager.kt`, `CoreVpnService.kt`, `CoreProxyOnlyService.kt`, `CoreRootService.kt`, `BootReceiver.kt`, `UrlSchemeActivity.kt`):**
-   * الزام بررسی هم‌زمان `!AppSecurityGuard.isRuntimeTampered()` و `LicenseBackendClient.isLicenseSessionActive()` پیش از راه‌اندازی تونل VPN (`setupVpnService()`), سرویس‌های پروکسی/روت، همگام‌سازی خودکار بوت و پردازش Deep Link/Intent خارجی.
+   * الزام بررسی هم‌زمان `!AppSecurityGuard.isRuntimeTampered()` و `LicenseBackendClient.isLicenseSessionActive()` پیش از راه‌اندازی تونل VPN (`setupVpnService()`)، سرویس‌های پروکسی/روت، همگام‌سازی خودکار بوت و پردازش Deep Link/Intent خارجی.
 
 ---
 
@@ -202,8 +206,8 @@
 * **کامپوننت سه‌بعدی-شیشه‌ای یکپارچه (`NovaPulseNoticeDialog.kt`):**
   * استفاده هم‌زمان در `QuietStormActivity.kt` (دیالوگ بروزرسانی، دیالوگ اعلان امنیتی/لایسنس و دیالوگ رضایت بهینه‌سازی)، `CheckUpdateActivity.kt` و جایگزینی اسنک‌بار پیش‌فرض با `Qs3dSnackbarHost` شیشه‌ای.
   * طراحی چندلایه با هدر Emblem وکتور اختصاصی (متوقف در صورت خاموش‌بودن انیمیشن یا رفتن به پس‌زمینه توسط `rememberMotionActive()`)، نمایشگر انتقال نسخه (`v2.4.4 -> v2.4.5`) و ABI، کارت‌های رنگی بخش‌بندی‌شده، لینک‌های آبی/فیروزه‌ای قابل‌کلیک درون متن و چیپ‌های دسترسی مستقیم تلگرام (`SupportLinks.openTelegramTarget`) با ساختار واکنش‌گرا برای نمایشگرهای باریک `320dp`.
-* **تست اسکرین‌شات واقعی در CI (`NovaPulseNoticeUiScreenshotTest.kt` + `.github/workflows/build.yml`):**
-  * رندر واقعی Compose با Robolectric Native Graphics (`@GraphicsMode(NATIVE)`) در حالت‌های فارسی اجباری (`412dp`)، آپدیت اختیاری با نوار پیشرفت (`412dp`)، اعلان امنیتی در صفحه باریک (`320dp`) و حالت انگلیسی (`412dp`) و آپلود خروجی `ui-screenshots` به‌عنوان Artifact در گیت‌هاب اکشنز.
+* **تست رندر واقعی، راست‌به‌چپ (RTL) و کلیک لینک‌ها در CI (`NovaPulseNoticeUiScreenshotTest.kt` + `.github/workflows/build.yml`):**
+  * رندر واقعی Compose با Robolectric Native Graphics (`@GraphicsMode(NATIVE)`) در حالت‌های فارسی اجباری (`412dp`)، آپدیت اختیاری با نوار پیشرفت (`412dp`)، اعلان امنیتی در صفحه باریک (`320dp`)، حالت انگلیسی (`412dp`) و همچنین تست اجبار `LayoutDirection.Rtl` روی لوکیل `en-US` و شبیه‌سازی کلیک واقعی روی چیپ‌های «کانال رسمی» و «پشتیبانی تلگرام» همراه با تأیید `Intent.ACTION_VIEW`، و آپلود خروجی `ui-screenshots` به‌عنوان Artifact در گیت‌هاب اکشنز.
 
 ---
 
@@ -215,7 +219,25 @@
 | چرخه زنده API لایسنس (`challenge -> redeem -> status -> sub_noauth -> logout -> post_logout`) | **PASS** | پاسخ‌های `200 -> 200 -> 200 -> 401 -> 200 -> 401` و پاک‌سازی رکورد تست |
 | دسترسی کمینه‌سطح PostgreSQL (`np_license_svc`) | **PASS** | شمارش `Client` (`59`) موفق؛ `Panel.password` و `Admin` با `permission denied` مسدود |
 | ایزوله‌سازی فایروال کانتینر و پورت‌های داخلی (`4150, 9090, 20870`) | **PASS** | مسدود از کانتینر `hmpanel-panel`؛ قابل‌دسترس فقط از `hmpanel-nginx` (`172.18.0.4`) |
-| دسترسی SSH کلیدمحور (`22` و `101`) و رد رمز عبور | **PASS** | `SSH_KEY_22_OK`, `SSH_KEY_101_OK`, `sftp> pwd` موفق؛ رمز برای `root`/`ubuntu` رد (`255`) |
-| سلامت سرویس‌های VPN و شبکه (`x-ui`, `xray`, `novapulse-license`, `sysmon`, `agy-account-sync`, `xray-restart-watcher`) | **PASS** | تمام `9` سرویس `active`؛ تمامی پورت‌های Xray/MTProto/Sub فعال (`55` لایسنس فعال، `16` دستگاه فعال، `2` دستگاه legacy) |
-| تست واحد و رندر سه‌بعدی/اسکرین‌شات Android در GitHub Actions (`feat/qsn-3d-smart-stage1`) | **PASS** | Run [`43745916261`](https://github.com/mo3iiibest77-hub/PattNG/actions/runs/43745916261) (`a9f1ac74`): `98/98` تست واحد موفق (`failed=0, skipped=0`)، تولید `ui-screenshots` (`2,555,713` بایت)، بیلد `NovaPulse_2.4.5_arm64-v8a.apk` (`sha256: 0e678fb3f79b3935664b5613cda0f5347e449ecb51c9a27e8565fde2b3c7b312`) و تأیید امضای گواهی Release (`a016c9bf...`) |
+| دسترسی SSH کلیدمحور (`22` و `101`) بدون قطع دسترسی مالک | **DEFERRED (Safe)** | `SSH_KEY_22_OK` و `SSH_KEY_101_OK` موفق؛ ورود رمز عمداً تا تأیید کلید مالک باز ماند (`/usr/local/sbin/novapulse-lock-ssh-keyonly.sh` آماده اجرا) |
+| سلامت سرویس‌های VPN و شبکه (`ssh`, `fail2ban`, `ufw`, `docker`, `x-ui`, `novapulse-license`, `sysmon`, `agy-account-sync`, `xray-restart-watcher`) | **PASS** | تمام `9` سرویس `active`؛ `62` ردیف لایسنس (`16` مدرن `2.4.4`/`2.4.5`، `2` legacy فعال، `3` `legacy_ambiguous`، `2` revoked) |
+| تست واحد، RTL، کلیک چیپ‌ها و رندر سه‌بعدی در GitHub Actions (`feat/qsn-3d-smart-stage1`) | **PENDING_PUSH** | آخرین اجرا در Run [`43745916261`](https://github.com/mo3iiibest77-hub/PattNG/actions/runs/43745916261) (`a9f1ac74`: `98/98` موفق، `ui-screenshots` با حجم `2,555,713` بایت)؛ اجرای جدید با تست RTL/کلیک در حال ثبت است |
+
+---
+
+## بخش پنجم: ریسک‌های باقیمانده و محدودیت‌های صریح (Residual Risks & Open Items)
+
+این موارد به‌صورت عمدی باز نگه داشته شده یا دارای محدودیت محیطی هستند و نباید تکمیل‌شده تلقی شوند:
+
+1. **فعال‌بودن موقت احراز هویت با رمز عبور در SSH (ریسک باز عمدی تا تأیید مالک):**
+   * `PasswordAuthentication yes` و `PermitRootLogin yes` روی پورت‌های `22` و `101` فعال هستند تا دسترسی مالک از طریق رمز مسدود نشود (Fail2ban فعال است).
+   * **اقدام بعدی:** دریافت `/root/.ssh/novapulse_root_ed25519` روی دستگاه شخصی، تأیید ورود موفق با کلید از بیرون سرور، و سپس اجرای `/usr/local/sbin/novapulse-lock-ssh-keyonly.sh`.
+2. **اجرای `novapulse-license` با کاربر `root` و دسترسی به Docker Socket:**
+   * به‌دلیل وابستگی Sync با کانتینر `hmpanel-postgres` از طریق `docker exec -i hmpanel-postgres psql ...` (پورت `5432` روی میزبان بسته است)، سرویس `novapulse-license` همچنان به `/var/run/docker.sock` متکی است. مهاجرت به اتصال شبکه ایزوله روی همان Bridge داکر می‌تواند در فاز بعدی انجام شود.
+3. **بازبودن موقت پنجره سازگاری لایسنس‌های قدیمی (`ALLOW_LEGACY_CLIENT_COMPAT=1`):**
+   * هنوز `2` دستگاه فعال با نسخه `<2.4.3` و `3` ردیف `legacy_ambiguous` در `licenses.db` وجود دارند. پس از ارتقای این کاربران با پیام یادآور دوره‌ای (`900s`)، می‌توان `ALLOW_LEGACY_CLIENT_COMPAT=0` را فعال کرد.
+4. **محدودیت بازبینی بصری مستقیم فایل‌های PNG اسکرین‌شات در میزبان:**
+   * Workflow در GitHub Actions اسکرین‌شات‌های واقعی Compose را تولید و در `ui-screenshots` آپلود می‌کند (و تست‌ها عدم سفید/سیاه‌بودن و ابعاد واقعی را در زمان رندر چک می‌کنند)، اما دانلود ZIP آرتیفکت از REST API گیت‌هاب نیازمند توکن احراز هویت (PAT) است؛ بنابراین بررسی چشمی نهایی فایل‌های PNG از طریق رابط کاربری GitHub بر عهده مالک است.
+5. **به‌روزرسانی نکردن APKهای تولید در `/opt/novapulse-license/releases/`:**
+   * فایل‌های فعلی روی سرور (`NovaPulse_2.4.5_*.apk` مربوط به ساعت `14:12`) مطابق دستور بدون جایگزینی حفظ شدند تا بیلد امضاشده و آزموده‌شده نهایی پس از تأیید مالک منتشر شود.
 
