@@ -2,6 +2,8 @@ package com.v2ray.ang.ui.qsn3d
 
 import android.app.Application
 import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.view.View
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -10,17 +12,16 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.test.assertIsDisplayed
-import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.onNodeWithText
-import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.unit.dp
 import com.v2ray.ang.dto.ApkAssetOption
 import com.v2ray.ang.dto.CheckUpdateResult
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -28,6 +29,7 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
+import org.robolectric.shadows.ShadowLooper
 import java.io.File
 import java.io.FileOutputStream
 
@@ -58,12 +60,37 @@ class NovaPulseNoticeUiScreenshotTest {
         ),
     )
 
-    private fun writeScreenshotPng(fileName: String) {
-        composeTestRule.mainClock.autoAdvance = false
+    private fun captureAndSaveViewPng(hostView: View?, fileName: String) {
+        val view = hostView
+        assertNotNull("Host view must be attached", view)
+        requireNotNull(view)
+
+        composeTestRule.mainClock.advanceTimeByFrame()
         composeTestRule.mainClock.advanceTimeBy(350L)
-        val bitmap = composeTestRule.onRoot().captureToImage().asAndroidBitmap()
-        assertTrue("Captured bitmap width must be > 200px", bitmap.width > 200)
-        assertTrue("Captured bitmap height must be > 300px", bitmap.height > 300)
+        composeTestRule.mainClock.advanceTimeByFrame()
+        ShadowLooper.idleMainLooper()
+
+        val width = view.width
+        val height = view.height
+        assertTrue("Rendered view width must be > 200px, got $width", width > 200)
+        assertTrue("Rendered view height must be > 300px, got $height", height > 300)
+
+        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bitmap)
+        view.draw(canvas)
+
+        // Verify non-blank rendering (multiple distinct pixel colors drawn)
+        val distinctColors = HashSet<Int>()
+        val stepX = maxOf(1, width / 24)
+        val stepY = maxOf(1, height / 32)
+        for (y in 0 until height step stepY) {
+            for (x in 0 until width step stepX) {
+                distinctColors.add(bitmap.getPixel(x, y))
+                if (distinctColors.size > 12) break
+            }
+            if (distinctColors.size > 12) break
+        }
+        assertTrue("Rendered bitmap must contain real UI content (distinct colors=${distinctColors.size})", distinctColors.size > 12)
 
         val outDir = File("build/outputs/screenshots").apply { mkdirs() }
         val outFile = File(outDir, fileName)
@@ -97,7 +124,10 @@ class NovaPulseNoticeUiScreenshotTest {
             availableAssets = sampleUpdateAssets(),
         )
 
+        composeTestRule.mainClock.autoAdvance = false
+        var hostView: View? = null
         composeTestRule.setContent {
+            hostView = LocalView.current
             Qs3dTheme {
                 Box(
                     modifier = Modifier
@@ -118,10 +148,11 @@ class NovaPulseNoticeUiScreenshotTest {
                 }
             }
         }
+        composeTestRule.mainClock.advanceTimeByFrame()
 
         composeTestRule.onAllNodesWithText("@NovaPulseVPN", substring = true).onFirst().assertIsDisplayed()
         composeTestRule.onAllNodesWithText("@Mo3i_Best", substring = true).onFirst().assertIsDisplayed()
-        writeScreenshotPng("notice_mandatory_pre244_fa_412dp.png")
+        captureAndSaveViewPng(hostView, "notice_mandatory_pre244_fa_412dp.png")
     }
 
     @Test
@@ -146,7 +177,10 @@ class NovaPulseNoticeUiScreenshotTest {
             availableAssets = sampleUpdateAssets(),
         )
 
+        composeTestRule.mainClock.autoAdvance = false
+        var hostView: View? = null
         composeTestRule.setContent {
+            hostView = LocalView.current
             Qs3dTheme {
                 Box(
                     modifier = Modifier
@@ -167,10 +201,11 @@ class NovaPulseNoticeUiScreenshotTest {
                 }
             }
         }
+        composeTestRule.mainClock.advanceTimeByFrame()
 
         composeTestRule.onNodeWithText("68%").assertIsDisplayed()
         composeTestRule.onAllNodesWithText("@Mo3i_Best", substring = true).onFirst().assertIsDisplayed()
-        writeScreenshotPng("notice_optional_244_progress_fa_412dp.png")
+        captureAndSaveViewPng(hostView, "notice_optional_244_progress_fa_412dp.png")
     }
 
     @Test
@@ -186,7 +221,10 @@ class NovaPulseNoticeUiScreenshotTest {
             • پشتیبانی مستقیم و دریافت/تمدید لایسنس: @Mo3i_Best
         """.trimIndent()
 
+        composeTestRule.mainClock.autoAdvance = false
+        var hostView: View? = null
         composeTestRule.setContent {
+            hostView = LocalView.current
             Qs3dTheme {
                 Box(
                     modifier = Modifier
@@ -203,9 +241,10 @@ class NovaPulseNoticeUiScreenshotTest {
                 }
             }
         }
+        composeTestRule.mainClock.advanceTimeByFrame()
 
         composeTestRule.onAllNodesWithText("@Mo3i_Best", substring = true).onFirst().assertIsDisplayed()
-        writeScreenshotPng("notice_security_legacy_fa_320dp.png")
+        captureAndSaveViewPng(hostView, "notice_security_legacy_fa_320dp.png")
     }
 
     @Test
@@ -227,7 +266,10 @@ class NovaPulseNoticeUiScreenshotTest {
             availableAssets = sampleUpdateAssets(),
         )
 
+        composeTestRule.mainClock.autoAdvance = false
+        var hostView: View? = null
         composeTestRule.setContent {
+            hostView = LocalView.current
             Qs3dTheme {
                 Box(
                     modifier = Modifier
@@ -248,9 +290,10 @@ class NovaPulseNoticeUiScreenshotTest {
                 }
             }
         }
+        composeTestRule.mainClock.advanceTimeByFrame()
 
         composeTestRule.onAllNodesWithText("@NovaPulseVPN", substring = true).onFirst().assertIsDisplayed()
         composeTestRule.onAllNodesWithText("@Mo3i_Best", substring = true).onFirst().assertIsDisplayed()
-        writeScreenshotPng("notice_optional_en_412dp.png")
+        captureAndSaveViewPng(hostView, "notice_optional_en_412dp.png")
     }
 }
