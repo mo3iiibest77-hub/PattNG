@@ -183,4 +183,28 @@ class AppUpdaterTest {
             arm64Result.downloadUrl
         )
     }
+
+    @Test
+    fun `pickNewestRelease always chooses strictly highest version across sources`() {
+        val older = sampleRelease(tag = "v2.4.3", versionCode = 4000751)
+        val newest = sampleRelease(tag = "v2.4.5", versionCode = 4000753)
+
+        assertEquals("v2.4.5", UpdateCheckerManager.pickNewestRelease(older, newest)?.tagName)
+        assertEquals("v2.4.5", UpdateCheckerManager.pickNewestRelease(newest, older)?.tagName)
+
+        // Same version tag -> higher versionCode wins
+        val sameTagNewCode = sampleRelease(tag = "v2.4.4", versionCode = 4000753)
+        val sameTagOldCode = sampleRelease(tag = "v2.4.4", versionCode = 4000752)
+        assertEquals(4000753, UpdateCheckerManager.pickNewestRelease(sameTagOldCode, sameTagNewCode)?.versionCode)
+
+        // Skipping multiple versions (e.g. 2.4.2 -> 2.4.5) still reports update available
+        val skippedResult = UpdateCheckerManager.evaluateReleaseUpdate(
+            release = newest,
+            currentVersionName = "2.4.2",
+            currentVersionCode = 4000750,
+            supportedAbis = listOf("arm64-v8a")
+        )
+        assertTrue(skippedResult.hasUpdate)
+        assertEquals("2.4.5", skippedResult.latestVersion)
+    }
 }

@@ -99,6 +99,7 @@ class QuietStormActivity : BaseComponentActivity() {
     override fun onResume() {
         super.onResume()
         viewModel.verifyLicenseSessionNow(force = false)
+        viewModel.checkForAppUpdatesIfStale()
     }
 
     private fun requestNotificationPermissionIfNeeded() {
@@ -377,6 +378,7 @@ class QuietStormActivity : BaseComponentActivity() {
                         state = state,
                         onDownloadOption = viewModel::downloadAndInstallAppUpdate,
                         onInstallReady = viewModel::installReadyUpdateApk,
+                        onRecheck = { viewModel.checkForAppUpdates(silent = false, openDialogIfUpdate = true) },
                         onDismiss = { viewModel.openUpdateDialog(false) }
                     )
                 }
@@ -423,6 +425,7 @@ private fun NovaPulseUpdateDialog(
     state: Qs3dUiState,
     onDownloadOption: (com.v2ray.ang.dto.ApkAssetOption) -> Unit,
     onInstallReady: () -> Unit,
+    onRecheck: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     val result = state.availableUpdate ?: return
@@ -441,6 +444,13 @@ private fun NovaPulseUpdateDialog(
         },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                if (state.isCheckingUpdate && state.updateDownloadProgress == null) {
+                    Text(
+                        text = stringResource(R.string.novapulse_update_checking),
+                        color = QsColors.ElectricCyan,
+                        fontSize = 11.5.sp
+                    )
+                }
                 if (!result.releaseNotes.isNullOrBlank()) {
                     Text(
                         text = result.releaseNotes,
@@ -494,7 +504,14 @@ private fun NovaPulseUpdateDialog(
                 }
             }
         },
-        confirmButton = {},
+        confirmButton = {
+            TextButton(
+                onClick = onRecheck,
+                enabled = !state.isCheckingUpdate && state.updateDownloadProgress == null
+            ) {
+                Text(stringResource(R.string.novapulse_update_check_btn))
+            }
+        },
         dismissButton = {
             TextButton(onClick = onDismiss) {
                 Text(stringResource(R.string.novapulse_update_later_btn))

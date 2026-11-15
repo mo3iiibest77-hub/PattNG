@@ -60,22 +60,24 @@ object UpdateCheckerManager {
     ): CheckUpdateResult = withContext(Dispatchers.IO) {
         val supportedAbis = Build.SUPPORTED_ABIS?.toList().orEmpty()
         val installedApkAbi = detectInstalledApkAbi(context)
+        val ts = System.currentTimeMillis()
         val serverUrl = buildString {
             append(AppConfig.APP_UPDATE_SERVER_URL)
-            if (includePreRelease) append("?prerelease=1")
+            append("?force=1&t=")
+            append(ts)
+            if (includePreRelease) append("&prerelease=1")
+        }
+
+        val ghUrl = if (includePreRelease) {
+            AppConfig.APP_API_URL
+        } else {
+            AppConfig.APP_API_URL.concatUrl("latest")
         }
 
         val serverRelease = fetchReleaseFromUrl(serverUrl, expectList = false)
-        val release = if (serverRelease != null && (serverRelease.assets.isNotEmpty() || isNewerRelease(serverRelease, BuildConfig.VERSION_NAME, BuildConfig.VERSION_CODE))) {
-            serverRelease
-        } else {
-            val ghUrl = if (includePreRelease) {
-                AppConfig.APP_API_URL
-            } else {
-                AppConfig.APP_API_URL.concatUrl("latest")
-            }
-            fetchReleaseFromUrl(ghUrl, expectList = includePreRelease) ?: serverRelease
-        }
+        // Always cross-check GitHub when needed or compare both sources so the newest version ALWAYS wins.
+        val ghRelease = fetchReleaseFromUrl(ghUrl, expectList = includePreRelease)
+        val release = pickNewestRelease(serverRelease, ghRelease)
 
         if (release == null) {
             return@withContext CheckUpdateResult(hasUpdate = false)
@@ -93,6 +95,33 @@ object UpdateCheckerManager {
             "Update check: hasUpdate=${result.hasUpdate}, latest=${result.latestVersion}, installedVariant=$installedApkAbi, recommended=${result.recommendedAbi}"
         )
         result
+    }
+
+    fun pickNewestRelease(
+        first: GitHubRelease?,
+        second: GitHubRelease?,
+    ): GitHubRelease? {
+        if (first == null) return second
+        if (second == null) return first
+        val firstHasApk = first.assets.any {
+            val l = it.name.lowercase()
+            l.endsWith(".apk") && !l.contains("fdroid")
+        }
+        val secondHasApk = second.assets.any {
+            val l = it.name.lowercase()
+            l.endsWith(".apk") && !l.contains("fdroid")
+        }
+        if (firstHasApk != secondHasApk) {
+            return if (firstHasApk) first else second
+        }
+        val cmp = compareVersions(first.tagName, second.tagName)
+        if (cmp != 0) {
+            return if (cmp > 0) first else second
+        }
+        if (first.versionCode != second.versionCode) {
+            return if (first.versionCode > second.versionCode) first else second
+        }
+        return first
     }
 
     private fun fetchReleaseFromUrl(url: String, expectList: Boolean): GitHubRelease? {

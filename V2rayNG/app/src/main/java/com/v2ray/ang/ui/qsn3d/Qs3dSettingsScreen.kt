@@ -247,32 +247,31 @@ fun Qs3dSettingsScreen(
                             fontWeight = FontWeight.Bold
                         )
                     }
-                } else {
-                    Spacer(Modifier.height(10.dp))
-                    OutlinedButton(
-                        onClick = onCheckUpdates,
-                        enabled = !state.isCheckingUpdate,
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(12.dp)
-                    ) {
-                        if (state.isCheckingUpdate) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(16.dp),
-                                strokeWidth = 2.dp,
-                                color = QsColors.ElectricCyan
-                            )
-                            Spacer(Modifier.width(8.dp))
-                            Text(
-                                text = stringResource(R.string.novapulse_update_checking),
-                                color = QsColors.ElectricCyan
-                            )
-                        } else {
-                            Text(
-                                text = stringResource(R.string.novapulse_update_check_btn),
-                                color = QsColors.ElectricCyan,
-                                fontWeight = FontWeight.SemiBold
-                            )
-                        }
+                }
+                Spacer(Modifier.height(10.dp))
+                OutlinedButton(
+                    onClick = onCheckUpdates,
+                    enabled = !state.isCheckingUpdate,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    if (state.isCheckingUpdate) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            strokeWidth = 2.dp,
+                            color = QsColors.ElectricCyan
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            text = stringResource(R.string.novapulse_update_checking),
+                            color = QsColors.ElectricCyan
+                        )
+                    } else {
+                        Text(
+                            text = stringResource(R.string.novapulse_update_check_btn),
+                            color = QsColors.ElectricCyan,
+                            fontWeight = FontWeight.SemiBold
+                        )
                     }
                 }
             }

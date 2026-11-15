@@ -168,6 +168,8 @@ class Qs3dViewModel(
     @Volatile
     private var lastLicenseVerifyMs = 0L
     @Volatile
+    private var lastUpdateCheckMs = 0L
+    @Volatile
     private var forceRevokingLicense = false
     private var licenseWatchdogJob: Job? = null
 
@@ -958,23 +960,41 @@ class Qs3dViewModel(
 
     // ---------- Self-Update Checker & Installer ----------
 
-    fun checkForAppUpdates(silent: Boolean = false) {
+    fun checkForAppUpdatesIfStale(minIntervalMs: Long = 60_000L) {
+        val now = System.currentTimeMillis()
+        if ((now - lastUpdateCheckMs) < minIntervalMs) return
+        checkForAppUpdates(silent = true, openDialogIfUpdate = false)
+    }
+
+    fun checkForAppUpdates(silent: Boolean = false, openDialogIfUpdate: Boolean = true) {
         if (_uiState.value.isCheckingUpdate) return
         val app = getApplication<Application>()
         viewModelScope.launch(Dispatchers.IO) {
             _uiState.update { it.copy(isCheckingUpdate = true) }
             try {
+                lastUpdateCheckMs = System.currentTimeMillis()
                 val res = UpdateCheckerManager.checkForUpdate(includePreRelease = false, context = app)
                 if (res.hasUpdate) {
-                    _uiState.update {
-                        it.copy(
+                    _uiState.update { cur ->
+                        val versionChanged = cur.availableUpdate?.latestVersion != res.latestVersion ||
+                            cur.availableUpdate?.latestVersionCode != res.latestVersionCode
+                        cur.copy(
                             isCheckingUpdate = false,
                             availableUpdate = res,
-                            showUpdateDialog = true
+                            readyUpdateApkPath = if (versionChanged) null else cur.readyUpdateApkPath,
+                            updateDownloadProgress = if (versionChanged) null else cur.updateDownloadProgress,
+                            showUpdateDialog = cur.showUpdateDialog || openDialogIfUpdate,
                         )
                     }
                 } else {
-                    _uiState.update { it.copy(isCheckingUpdate = false, availableUpdate = null) }
+                    _uiState.update {
+                        it.copy(
+                            isCheckingUpdate = false,
+                            availableUpdate = null,
+                            readyUpdateApkPath = null,
+                            showUpdateDialog = false,
+                        )
+                    }
                     if (!silent) {
                         val ver = BuildConfig.VERSION_NAME
                         _uiState.update {
@@ -993,6 +1013,10 @@ class Qs3dViewModel(
 
     fun openUpdateDialog(open: Boolean) {
         _uiState.update { it.copy(showUpdateDialog = open) }
+        if (open) {
+            // Re-verify live so stale 2.4.3 banner immediately refreshes if 2.4.4/2.4.5 shipped meanwhile.
+            checkForAppUpdates(silent = true, openDialogIfUpdate = true)
+        }
     }
 
     fun downloadAndInstallAppUpdate(option: ApkAssetOption) {
@@ -1001,17 +1025,52 @@ class Qs3dViewModel(
         viewModelScope.launch(Dispatchers.IO) {
             _uiState.update {
                 it.copy(
+                    isCheckingUpdate = true,
                     updateDownloadProgress = 0,
                     readyUpdateApkPath = null,
                     updateNeedsInstallPerm = false,
                 )
             }
+            var targetOption = option
+            val prevUpdate = _uiState.value.availableUpdate
+            val fresh = runCatching {
+                UpdateCheckerManager.checkForUpdate(includePreRelease = false, context = app)
+            }.getOrNull()
+            lastUpdateCheckMs = System.currentTimeMillis()
+            if (fresh != null && fresh.hasUpdate) {
+                val newerTag = !fresh.latestVersion.isNullOrBlank() && (
+                    prevUpdate?.latestVersion.isNullOrBlank() ||
+                        UpdateCheckerManager.compareVersions(fresh.latestVersion, prevUpdate?.latestVersion.orEmpty()) > 0
+                    )
+                val newerCode = fresh.latestVersionCode > (prevUpdate?.latestVersionCode ?: 0)
+                if (newerTag || newerCode || prevUpdate == null) {
+                    val matchedFresh = fresh.availableAssets.firstOrNull {
+                        it.abi.equals(option.abi, ignoreCase = true)
+                    } ?: fresh.availableAssets.firstOrNull { it.isDeviceMatch }
+                        ?: fresh.availableAssets.firstOrNull { it.isUniversal }
+                        ?: fresh.availableAssets.firstOrNull()
+                    if (matchedFresh != null) {
+                        targetOption = matchedFresh
+                    }
+                    _uiState.update {
+                        it.copy(
+                            availableUpdate = fresh,
+                            toastMessage = if ((newerTag || newerCode) && !fresh.latestVersion.isNullOrBlank()) {
+                                app.getString(R.string.novapulse_update_available_banner_fmt, fresh.latestVersion)
+                            } else {
+                                it.toastMessage
+                            }
+                        )
+                    }
+                }
+            }
+            _uiState.update { it.copy(isCheckingUpdate = false) }
             try {
                 val apkFile = NovaPulseApkDownloader.downloadApk(
                     context = app,
-                    downloadUrl = option.downloadUrl,
-                    fileName = option.fileName,
-                    expectedSha256 = option.sha256,
+                    downloadUrl = targetOption.downloadUrl,
+                    fileName = targetOption.fileName,
+                    expectedSha256 = targetOption.sha256,
                 ) { pct ->
                     _uiState.update { it.copy(updateDownloadProgress = pct) }
                 }
