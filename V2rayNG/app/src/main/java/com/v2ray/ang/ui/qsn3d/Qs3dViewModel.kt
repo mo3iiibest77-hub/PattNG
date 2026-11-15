@@ -34,8 +34,11 @@ import com.v2ray.ang.senpai.CdnPingClassifier
 import com.v2ray.ang.senpai.CdnType
 import com.v2ray.ang.senpai.CloudFrontScanner
 import com.v2ray.ang.senpai.CloudflareScanner
+import com.v2ray.ang.senpai.DeviceIdentityManager
 import com.v2ray.ang.senpai.LicenseBackendClient
 import com.v2ray.ang.senpai.LicenseResolutionResult
+import com.v2ray.ang.senpai.LicenseSessionStore
+import com.v2ray.ang.senpai.LogoutOutcome
 import com.v2ray.ang.senpai.OriginDomainStore
 import com.v2ray.ang.senpai.PostConnectDiscoveryRunner
 import com.v2ray.ang.senpai.PostConnectDiscoveryState
@@ -540,12 +543,19 @@ class Qs3dViewModel(
     fun verifyLicenseSessionNow(force: Boolean = false) {
         val now = System.currentTimeMillis()
         if (!force && (now - lastLicenseVerifyMs) < 5_000L) return
-        val savedKey = LicenseBackendClient.getSavedLicenseKey()
-        if (savedKey.isBlank()) return
-        lastLicenseVerifyMs = now
         val ctx = getApplication<Application>()
+        val snap = LicenseSessionStore.getSnapshot()
+        val savedKey = LicenseBackendClient.getSavedLicenseKey()
+        if (!snap.active && savedKey.isBlank()) {
+            viewModelScope.launch(Dispatchers.IO) {
+                LicenseBackendClient.flushPendingLogoutIfNeeded()
+            }
+            return
+        }
+        lastLicenseVerifyMs = now
         viewModelScope.launch(Dispatchers.IO) {
-            val deviceId = runCatching { Utils.getDeviceIdForXUDPBaseKey() }.getOrDefault("")
+            LicenseBackendClient.flushPendingLogoutIfNeeded()
+            val deviceId = runCatching { DeviceIdentityManager.getDeviceId(ctx) }.getOrDefault("")
             if (deviceId.isBlank()) return@launch
             val res = LicenseBackendClient.refreshStatus(
                 licenseKey = savedKey,
@@ -593,6 +603,7 @@ class Qs3dViewModel(
                 ctx = getApplication(),
                 resultMessage = message,
                 abortIfStopFails = false,
+                syncServerLogout = false,
             )
         } finally {
             forceRevokingLicense = false
@@ -609,6 +620,7 @@ class Qs3dViewModel(
                 ctx = ctx,
                 resultMessage = ctx.getString(R.string.novapulse_logout_success),
                 abortIfStopFails = true,
+                syncServerLogout = true,
             )
         }
     }
@@ -617,6 +629,7 @@ class Qs3dViewModel(
         ctx: Application,
         resultMessage: String,
         abortIfStopFails: Boolean,
+        syncServerLogout: Boolean = false,
     ): Boolean {
         val stopSucceeded = LicenseLogoutOrchestrator.stopRuntimeAndConfirm(
             isCoreRunning = { _uiState.value.coreRunning || isSystemVpnInterfaceActive(ctx) },
@@ -650,6 +663,23 @@ class Qs3dViewModel(
 
         if (!stopSucceeded) {
             runCatching { LauncherManager.stopService(ctx) }
+        }
+
+        var finalMessage = resultMessage
+        if (syncServerLogout) {
+            val snap = LicenseSessionStore.getSnapshot()
+            val devId = runCatching { DeviceIdentityManager.getDeviceId(ctx) }.getOrDefault("")
+            when (val outcome = LicenseBackendClient.logoutFromServer()) {
+                is LogoutOutcome.Success, is LogoutOutcome.AlreadyInvalid -> {
+                    LicenseSessionStore.clearPendingLogout()
+                }
+                is LogoutOutcome.NetworkFailure -> {
+                    if (snap.active && snap.sessionToken.isNotBlank() && devId.isNotBlank()) {
+                        LicenseSessionStore.enqueuePendingLogout(snap.sessionToken, devId)
+                    }
+                    finalMessage = "خروج محلی انجام شد؛ اما به دلیل نبود ارتباط با سرور (${outcome.message})، آزادسازی ظرفیت به محض اتصال اینترنت ارسال خواهد شد."
+                }
+            }
         }
 
         LicenseLogoutOrchestrator.wipeBoundLicenseData(
@@ -699,7 +729,7 @@ class Qs3dViewModel(
                 showSubscriptionDetails = false,
                 showRangeExplorer = false,
                 showAboutPromo = false,
-                toastMessage = resultMessage,
+                toastMessage = finalMessage,
             )
         }
         return true

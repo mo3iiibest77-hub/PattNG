@@ -92,9 +92,16 @@ object SubscriptionQuotaStore {
             .readTimeout(10, TimeUnit.SECONDS)
             .build()
         runCatching {
-            val reqBuilder = Request.Builder().url(url).get()
+            val isProtectedSub = LicenseBackendClient.isProtectedSubscriptionUrl(url)
+            val targetUrl = if (isProtectedSub) LicenseBackendClient.sanitizeSubscriptionUrlForStorage(url) else url
+            val reqBuilder = Request.Builder().url(targetUrl).get()
             if (!userAgent.isNullOrBlank()) {
                 reqBuilder.header("User-Agent", userAgent)
+            }
+            if (isProtectedSub) {
+                for ((k, v) in LicenseBackendClient.buildSubscriptionAuthHeaders()) {
+                    reqBuilder.header(k, v)
+                }
             }
             client.newCall(reqBuilder.build()).execute().use { resp ->
                 val rawHeader = resp.header("subscription-userinfo")

@@ -1,197 +1,134 @@
-# گزارش جامع ممیزی، تحلیل ریشه باگ‌ها و طرح اصلاح معماری سیستم لایسنس، شناسایی دستگاه و مدیریت نشست‌های NovaPulse
+# گزارش جامع ممیزی، اصلاح معماری، پیاده‌سازی و تست سیستم لایسنس، شناسایی دستگاه و مدیریت نشست‌های NovaPulse
 
-**وضعیت مأموریت:** اتمام مرحله اول (ممیزی کامل و بدون تغییر) و مرحله دوم (طراحی معماری و طرح مهاجرت)  
-**تغییرات اعمال‌شده روی دیتابیس زنده / سرویس بک‌اند / سورس اپلیکیشن تا این لحظه:** هیچ (صرفاً به‌روزرسانی مستند `report.md`)  
-**نکته محرمانگی:** در این گزارش هیچ License Key، Session Token، ایمیل، UUID یا اطلاعات محرمانه‌ای درج نشده است.
-
----
-
-## بخش اول: گزارش ممیزی معماری موجود (مرحله ۱)
-
-### A. پروژه Android (`PattNG` — شاخه فعال `feat/qsn-3d-smart-stage1`، نسخه `2.4.2`، `applicationId = "com.quietstorm.ng"`)
-
-#### ۱. ریشه اصلی باگ شناسایی دستگاه
-* **فایل:** `V2rayNG/app/src/main/java/com/v2ray/ang/util/Utils.kt` (خطوط `370-378`)
-* **تابع:** `getDeviceIdForXUDPBaseKey()`
-```kotlin
-fun getDeviceIdForXUDPBaseKey(): String {
-    return try {
-        val androidId = Settings.Secure.ANDROID_ID.toByteArray(Charsets.UTF_8)
-        Base64.encodeToString(androidId.copyOf(32), Base64.NO_PADDING.or(Base64.URL_SAFE))
-    } catch (e: Exception) {
-        LogUtil.e(AppConfig.TAG, "Failed to generate device ID", e)
-        ""
-    }
-}
-```
-* **علت فنی:** `Settings.Secure.ANDROID_ID` در Android SDK یک ثابت متنی (`"android_id"`) است، نه شناسه یکتای دستگاه. برای خواندن مقدار واقعی باید از `Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID)` استفاده می‌شد. کد فعلی همان رشته ثابت `"android_id"` را با padding تا ۳۲ بایت به Base64 تبدیل می‌کند و **روی تمام گوشی‌های دنیا یک رشته ۴۳ کاراکتری یکسان** تولید می‌کند.
-* **محل‌های استفاده از این تابع:**
-  1. `SmartConnectCoordinator.kt` (خط `492`) هنگام `redeem` و `refreshStatus`
-  2. `Qs3dViewModel.kt` (خط `548`) در Watchdog وضعیت لایسنس
-  3. `CoreNativeManager.kt` (خط `33-34`) برای `Libv2ray.initCoreEnv(assetPath, deviceId)` (کلید پایه XUDP هسته)
-
-#### ۲. مدل‌های درخواست/پاسخ، مسیرهای API و باگ‌های کلاینت
-* **فایل:** `LicenseBackendClient.kt` (خطوط `23-262`)
-  * `redeem()` (`/api/v1/license/redeem`) و `refreshStatus()` (`/api/v1/license/status`) تنها فیلدهای `license_key` و `device_id` را می‌فرستند.
-  * هیچ `session_token`، مشخصات دستگاه (`manufacturer`، `model`، `os_version`، `api_level`، `app_version`) یا امضای نشست ارسال نمی‌شود.
-  * مدل `LicenseRedeemResponse` فاقد فیلد `session_token` یا `session_id` مستقل است؛ توکن نشست صرفاً داخل رشته `subscription_url` جاسازی شده است.
-  * **باگ کد خطای HTTP در Watchdog (خط `216`):**
-    `isDefinitiveRejection = resp.code in 400..499` کد `429 Too Many Requests` را هم رد قطعی محسوب می‌کند! در صورت برخورد موقت به Rate Limit، اپلیکیشن به‌اشتباه نشست معتبر کاربر را پاک می‌کند.
-* **محل ذخیره محلی (`MmkvManager.kt` خطوط `40-77` و `LicenseBackendClient.kt` خطوط `67-114`):**
-  * کلید لایسنس (`qsn_saved_license_key`)، شناسه اشتراک فعال (`qsn_active_license_sub_id`)، وضعیت فعال بودن نشست (`qsn_license_session_active`)، لینک کامل سابسکریپشن (شامل توکن و `device_id` در `SUB`) و اطلاعات سهمیه (`qsn_sub_quota_*`) همگی به‌صورت متن عادی در storeهای MMKV ذخیره می‌شوند و از Android Keystore برای ذخیره امن هویت نصب یا توکن استفاده نشده است.
-
-#### ۳. دریافت Subscription، خروج از لایسنس و Watchdog
-* **دریافت کانفیگ (`SmartConnectCoordinator.kt` خطوط `486-543`، `AngConfigManager.kt` خطوط `465-547`، `HttpUtil.kt` خطوط `146-206`):**
-  * پس از `redeem`، لینک سابسکریپشن بدون نیاز به هدر نشست و صرفاً با فراخوانی HTTP GET به `subscription_url` دانلود و ایمپورت می‌شود.
-  * در صفحه تنظیمات (`Qs3dSettingsScreen.kt` خطوط `143-150`)، گزینه «تغییر لایسنس» بدون ارسال درخواست Logout برای لایسنس قبلی، مستقیماً لایسنس جدید را ثبت می‌کند؛ بنابراین ظرفیت لایسنس قبلی روی سرور آزاد نمی‌شود.
-* **Watchdog (`Qs3dViewModel.kt` خطوط `540-600`):**
-  * هر ۲۰ ثانیه یک‌بار (فقط هنگام روشن بودن VPN) و همچنین در `QuietStormActivity.onResume()` (با throttle ۵ ثانیه) متد `verifyLicenseSessionNow()` را صدا می‌زند.
-  * در خطای شبکه یا قطع اینترنت (`IOException`) نشست را پاک نمی‌کند (`isDefinitiveRejection = false`)؛ اما در خطاهای `4xx` متد `forceDisconnectRevokedLicense()` را صدا زده، VPN را متوقف و اطلاعات محلی را پاک می‌کند.
-  * **نقص:** چون `/status` توکن نشست را بررسی نمی‌کند و فقط `(license_key, device_id)` چک می‌شود، ابطال یک نشست مجزا یا جایگزینی نشست قابل تشخیص دقیق نیست.
-* **خروج از لایسنس (`Qs3dViewModel.kt` خطوط `602-706`):**
-  * **باگ بحرانی:** متدهای `logoutLicense()` و `stopAndWipeLicenseSession()` **هیچ درخواستی به سرور ارسال نمی‌کنند**. خروج فقط محلی است (توقف VPN و پاک‌سازی MMKV). پس از یکتا شدن `device_id`، نبود Logout سمت سرور باعث قفل شدن دائمی ظرفیت دستگاه روی سرور خواهد شد.
-
-#### ۴. حفره‌های بایپس گیت لایسنس در Android
-* **فایل `AndroidManifest.xml` (خطوط `190-208`) و `UrlSchemeActivity.kt` (خطوط `21-90`):**
-  * `UrlSchemeActivity` با `android:exported="true"` تعریف شده و `ACTION_SEND` (`text/plain`) و `ACTION_VIEW` (`novapulse://install-sub`, `novapulse://install-config`) را می‌پذیرد و مستقیماً `AngConfigManager.importBatchConfig(...)` را اجرا کرده و `MainActivity` را باز می‌کند. این مسیر گیت لایسنس را کاملاً دور می‌زند!
-* `QSTileService` و `WidgetProvider` (در پروسس `:RunSoLibV2RayDaemon`) بررسی صریحی روی معتبر بودن نشست لایسنس پیش از استارت سرویس ندارند.
-
-#### ۵. تست‌های فعلی (`LicenseSecurityAndQuotaTest.kt`)
-* تست‌های فعلی شامل `classifyInput`، `sanitizeForDisplay`، محاسبه درصد سهمیه، ترتیب Logout محلی (`LicenseLogoutOrchestrator`) و تشخیص خطای قطعی در `refreshStatus` هستند؛ اما هیچ تستی برای یکتایی Device ID، ارسال توکن نشست، عدم برخورد `429` به عنوان ابطال، و Logout سروری وجود ندارد.
+**وضعیت مأموریت:** اتمام کامل مراحل ممیزی، طراحی، پیاده‌سازی Backend / Database / Admin Panel / Android، مهاجرت ایمن دیتابیس زنده و تأیید تست‌های واحد و همزمانی  
+**شاخه فعال پروژه (`PattNG`):** `feat/qsn-3d-smart-stage1` (شناسه اپلیکیشن: `com.quietstorm.ng`، نسخه `2.4.2`)  
+**نکته محرمانگی:** در این گزارش هیچ License Key، Session Token، رمز، ایمیل یا UUID مشتری درج نشده است.  
+**نکته بیلد APK:** مطابق دستورالعمل پروژه، هیچ بیلد APK روی سرور انجام نمی‌شود و تولید/امضای رسمی APK منحصراً از طریق **GitHub Actions** (`.github/workflows/build.yml`) روی پوش شاخه `feat/qsn-3d-smart-stage1` انجام می‌گردد.
 
 ---
 
-### B. پروژه Backend و Reverse Proxy (`/opt/novapulse-license/server.py` و `hmpanel-nginx`)
+## بخش اول: گزارش ممیزی معماری قبلی (پیش از اصلاح)
 
-* سرویس `/opt/novapulse-license/server.py` (`1647` خط، اجرا با `novapulse-license.service` روی پورت `4150`) پشت `hmpanel-nginx` قرار دارد.
-* در Nginx، مسیر `/api/v1/license/` دارای `limit_req zone=api_limit burst=30 nodelay;` است.
-* **باگ‌ها و ضعف‌های امنیتی Backend:**
-  1. **اتکا به `(license_key, device_id)` بدون احراز هویت نشست:**
-     * در `handle_redeem` (خطوط `1312-1391`)، اگر `(license_id, device_id)` قبلاً وجود داشته باشد، بدون بررسی توکن نشست یا ظرفیت، `last_seen_at` آپدیت شده و همان `session_token` تحویل داده می‌شود.
-     * اندپوینت `/api/v1/license/status` از همین تابع `handle_redeem(is_status_only=True)` استفاده می‌کند؛ یعنی هر کسی که `license_key` و `device_id` را بداند می‌تواند توکن نشست فعال دستگاه دیگر را دوباره بگیرد (تصاحب نشست).
-  2. **نگهداری و انتقال ناامن Session Token:**
-     * توکن نشست به‌صورت Plaintext در ستون `license_devices.session_token` ذخیره می‌شود.
-     * لینک اشتراک به‌صورت `GET /api/v1/license/sub/{session_token}?device_id={device_id}` ساخته می‌شود که هم توکن و هم شناسه دستگاه را در URL و لاگ‌های Nginx افشا می‌کند.
-  3. **عدم وجود احراز هویت در `/api/v1/license/by-sub/<token>` (خطوط `1246-1310`):**
-     * هر درخواست‌کننده‌ای که `sub_token` یا `xui_sub_id` را بداند می‌تواند `license_key` و آمار دستگاه‌ها را بدون احراز هویت دریافت کند.
-  4. **نبود APIهای مدیریت ظرفیت، نشست و خروج:**
-     * هیچ Endpointی برای `POST /api/v1/license/logout` وجود ندارد.
-     * هیچ Endpointی برای ویرایش `max_devices`، مشاهده جزئیات نشست‌های ثبت‌شده، ابطال یک نشست تکی، ابطال همه نشست‌ها بدون اجبار به چرخش کلید، و مشاهده تاریخچه Audit وجود ندارد.
-     * توابع همگام‌سازی (`sync_from_hmpanel` و `sync_from_xui`) فقط هنگام ساخت اولیه `max_devices` را از `limitIp` (یا `1` وقتی `limitIp <= 0`) مقداردهی می‌کنند و در آپدیت‌های بعدی آن را دست‌نخورده می‌گذارند.
-  5. **اتمیک بودن تراکنش همزمان:**
-     * با اینکه `DB_LOCK` در سطح Thread وجود دارد، تراکنش SQLite با `BEGIN` پیش‌فرض (Deferred) باز می‌شود؛ استفاده صریح از `BEGIN IMMEDIATE` + `PRAGMA busy_timeout` برای حفاظت کامل در برابر Race Condition ضروری است.
-  6. متغیر `ADMIN_TOKEN` در `.env` تعریف شده ولی در کد استفاده نمی‌شود؛ احراز هویت پنل ادمین صرفاً از طریق `_verify_panel_admin` (Bearer توکن HMPanel یا Cookie نشست 3x-ui) انجام می‌شود.
+### A. پروژه Android
+1. **ریشه باگ شناسایی یکسان دستگاه (`Utils.kt`):**
+   * تابع `getDeviceIdForXUDPBaseKey()` به جای خواندن مقدار واقعی از `ContentResolver`، ثابت متنی `"android_id"` (`Settings.Secure.ANDROID_ID`) را به بایت تبدیل کرده و پس از padding به ۳۲ بایت، با Base64 کدگذاری می‌کرد.
+   * نتیجه: **همه گوشی‌ها یک رشته ۴۳ کاراکتری یکسان** به عنوان `device_id` به سرور می‌فرستادند و کنترل ظرفیت دستگاه‌ها عملاً خنثی بود.
+2. **احراز هویت ناکافی نشست (`LicenseBackendClient.kt`):**
+   * `redeem` و `refreshStatus` فقط `(license_key, device_id)` را ارسال می‌کردند؛ بدون `session_token`، بدون متادیتای دستگاه و بدون اثبات رمزنگاری‌شده.
+   * `LicenseBackendClient` کد خطای `429 Too Many Requests` را نیز در بازه `400..499` به عنوان ابطال قطعی تلقی می‌کرد و در صورت Rate Limit موقت، نشست معتبر کاربر را پاک می‌کرد.
+3. **ذخیره‌سازی و خروج ناقص:**
+   * اطلاعات نشست به‌صورت ساده در MMKV نگهداری می‌شدند.
+   * متدهای خروج (`logoutLicense()` و `stopAndWipeLicenseSession()` در `Qs3dViewModel.kt`) و تغییر لایسنس، درخواستی به سرور برای آزادسازی ظرفیت نمی‌فرستادند.
+4. **مسیرهای دور زدن گیت لایسنس:**
+   * `UrlSchemeActivity` با دریافت `ACTION_VIEW` و `ACTION_SEND` بدون بررسی فعال بودن نشست لایسنس، کانفیگ یا سابسکریپشن خارجی وارد کرده و کاربر را به `MainActivity` هدایت می‌کرد.
+   * `LauncherManager` و `CoreServiceManager` پیش از شروع سرویس VPN بررسی مستقل نشست چندپروسه‌ای لایسنس نداشتند.
 
----
+### B. پروژه Backend (`/opt/novapulse-license/server.py` و `licenses.db`)
+1. `handle_redeem` و `/api/v1/license/status` بر پایه `(license_key, device_id)` عمل می‌کردند؛ بدون بررسی توکن نشست، در صورت تکرار `device_id` نشست قبلی بدون بررسی ظرفیت برگردانده می‌شد.
+2. `session_token` به صورت متن خام (Plaintext) در ستون `license_devices.session_token` ذخیره و در URL اشتراک (`/api/v1/license/sub/{session_token}?device_id=...`) منتقل می‌شد.
+3. `/api/v1/license/by-sub/<token>` بدون احراز هویت پنل اطلاعات کلید و شمارش دستگاه‌ها را برمی‌گرداند.
+4. اندپوینت‌های `logout`، مدیریت ظرفیت `max_devices`، لیست دقیق دستگاه‌ها، ابطال تکی/کلی نشست و تاریخچه Audit وجود نداشتند.
+5. تراکنش SQLite به جای `BEGIN IMMEDIATE` از تراکنش پیش‌فرض استفاده می‌کرد و `ADMIN_TOKEN` در کد فعال نبود.
 
-### C. ساختار دیتابیس `/opt/novapulse-license/licenses.db` (داده‌های آماری — کاملاً بدون افشای اسرار)
-
-* **جدول `licenses`:** مجموعاً `60` رکورد (`59` رکورد `source='hmpanel'` و `1` رکورد `source='xui'`).
-  * توزیع `max_devices`:
-    * `1` دستگاه: `57` لایسنس
-    * `2` دستگاه: `1` لایسنس
-    * `3` دستگاه: `1` لایسنس
-    * `-1` (نامحدود): `1` لایسنس
-  * وضعیت: `0` رکورد `revoked=1` و `4` رکورد با `panel_enabled=0`.
-  * Indexهای موجود: `idx_licenses_xui_sub`، `idx_licenses_sub_token` و ایندکس‌های `UNIQUE` روی `license_key` و `hmpanel_client_id`.
-* **جدول `license_devices`:**
-  * مجموعاً `6` رکورد فعال مربوط به `6` لایسنس مجزا از `hmpanel` (چهار مورد با `max_devices=1`، یک مورد با `max_devices=3` و یک مورد با `max_devices=-1`).
-  * **تمام ۶ رکورد** دارای یک `device_id` ثابت ۴۳ کاراکتری یکسان (ناشی از باگ `Utils.kt`) و `session_token` متن خام هستند.
-  * ستون‌های متادیتای دستگاه (برند، مدل، نسخه اندروید، نسخه اپ، IP، وضعیت نشست، تاریخ/دلیل ابطال) و جدول رویدادهای ممیزی (`Audit`) هنوز وجود ندارند.
-* **مقدار `limitIp` در پنل‌های بالادستی:**
-  * در Postgres پنل HM و SQLite پنل 3x-ui هر دو `56` کاربر دارای `limitIp = 0`، یک کاربر `1`، یک کاربر `2` و یک کاربر `3` هستند. طبق سیاست فعلی، `limitIp <= 0` هنگام ساخت لایسنس به `max_devices = 1` نگاشت می‌شود.
+### C. وضعیت اولیه دیتابیس و پنل مدیریت
+* تعداد کل لایسنس‌ها پیش از مهاجرت: `60` لایسنس (`1`: `57` عدد، `2`: `1` عدد، `3`: `1` عدد، `-1`: `1` عدد).
+* تعداد ردیف‌های دستگاه قبلی در `license_devices`: `6` ردیف با یک `device_id` ثابت مشترک (`YW5kcm9pZF9pZAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA`) و توکن متن خام.
+* `hm.js` و `xui.js` صرفاً شمارنده و دکمه `rotate` را نمایش می‌دادند و امکان تعیین `max_devices` یا مدیریت نشست‌های تکی نداشتند.
 
 ---
 
-### D. پنل مدیریت (`web/hm.js` و `web/xui.js`)
+## بخش دوم: تغییرات معماری و پیاده‌سازی نهایی
 
-* در حال حاضر هر دو اسکریپت صرفاً کلید لایسنس، برچسب خلاصه `used_devices / max_devices`، دکمه کپی، و دکمه «تغییر رندوم و قطع اتصال» (`/rotate`) را نمایش می‌دهند (و در `xui.js` مانیتور کاربران بدون لایسنس نیز فعال است).
-* **موارد مفقود:**
-  * ادمین نمی‌تواند هنگام ساخت یا ویرایش لایسنس مقدار `max_devices` را تعیین یا تغییر دهد.
-  * جدول لیست دستگاه‌های متصل (مدل، برند، نسخه اندروید، نسخه اپ، IP، اولین ورود، آخرین فعالیت، وضعیت) وجود ندارد.
-  * دکمه ابطال تک‌دستگاه، ابطال همه نشست‌ها، و نمایش پیش‌نمایش کاهش ظرفیت وجود ندارد.
+### ۱. Backend جدید و ماژولار (`/opt/novapulse-license/np_license/`)
+* **`np_license/security.py`:**
+  * تولید و اعتبارسنجی Hash نشست با `HMAC-SHA256` (`hash_session_token`) با استفاده از `TOKEN_SECRET` — توکن خام هرگز در دیتابیس ذخیره نمی‌شود.
+  * تولید `session_token`، `session_id` و `challenge_nonce` با انتروپی رمزنگاری‌شده.
+  * اعتبارسنجی `is_valid_device_id` همراه با مسدودسازی صریح شناسه ثابت قدیمی (`LEGACY_SHARED_ANDROID_ID = "YW5kcm9pZF9pZAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"`).
+  * تأیید امضای ECDSA P-256 (`verify_device_proof`, `parse_p256_public_key`, `canonical_proof_message` با فرمت `v1|<nonce>|<device_id>|<purpose>` و پشتیبانی از DER و P1363).
+  * توابع کمکی پنهان‌سازی لاگ و نرمال‌سازی IP (`redact_license_key`, `short_device_id`, `normalize_client_ip`).
+* **`np_license/db.py`:**
+  * باز کردن اتصال با `isolation_level=None`، `PRAGMA busy_timeout=15000`، `WAL`، `foreign_keys=ON` و مدیر زمینه `tx_immediate` (`BEGIN IMMEDIATE`) برای اتمیک بودن کامل کنترل ظرفیت در درخواست‌های همزمان.
+* **`np_license/migrations.py`:**
+  * مهاجرت Idempotent با جدول `schema_migrations` (`version=1`, `001_session_security_architecture`).
+  * افزودن ستون `max_devices_source`، بازسازی ایمن `license_devices` با تبدیل توکن‌های قدیمی به Hash و برچسب‌گذاری ۶ ردیف قدیمی مشترک با وضعیت **`legacy_ambiguous`**.
+  * ایجاد ایندکس یکتای شرطی `idx_license_devices_active_pair ON license_devices(license_id, device_id) WHERE status = 'active'`.
+  * ایجاد جداول `auth_challenges` و `license_audit_logs`.
+* **`np_license/sessions.py` و `server.py`:**
+  * `create_auth_challenge` و الزام چالش + امضای P-256 در `redeem_license_session` و `refresh_session` (با چرخش توکن در refresh).
+  * تفکیک دقیق `/api/v1/license/redeem` (ایجاد نشست جدید فقط در صورت آزاد بودن ظرفیت؛ بازگرداندن `403` در صورت پر بودن ظرفیت و جلوگیری از تصاحب نشست فعال بدون توکن معتبر) از `/api/v1/license/status` (بررسی هدرهای نشست، `401 session_revoked` برای نشست‌های باطل/خارج‌شده بدون پاک‌کردن Hash تا علت ابطال دقیق گزارش شود).
+  * `logout_session` برای آزادسازی فوری ظرفیت در سرور و ثبت Audit.
+  * احراز هویت `authorize_subscription_fetch` برای `/api/v1/license/sub` **صرفاً از طریق هدرهای `Authorization: Bearer <session_token>` و `X-Device-Id`**؛ درخواست‌های قدیمی لینک مستقیم `/sub/<token>` با `401 url_auth_removed` رد می‌شوند.
+  * محافظت `/api/v1/license/by-sub/` با احراز هویت پنل ادمین (Bearer پنل HMPanel، Cookie 3x-ui یا `ADMIN_TOKEN` با مقایسه constant-time).
+  * APIهای مدیریت برای پنل: لیست دستگاه‌ها (`admin_list_devices`)، تغییر ظرفیت با پیش‌نمایش و سیاست کاهش `revoke_excess`/`keep_excess` (`admin_set_capacity`)، ابطال تکی (`admin_revoke_session`)، ابطال کل (`admin_revoke_all_sessions`) و مشاهده Audit Log بدون افشای کلید/توکن خام (`admin_list_audit_logs`).
+  * Rate Limit ضد Brute-Force (`429`) روی اندپوینت‌های عمومی لایسنس.
+  * ارائه ماژول مشترک پنل در مسیر `/api/v1/license/assets/panel-core.js` و حفظ همگام‌سازی بدون بازنویسی تنظیمات دستی `max_devices_source`.
+
+### ۲. ارتقای پنل‌های مدیریت (`/opt/novapulse-license/web/`)
+* **`panel-core.js` (`window.NovaPulseAdminUI.openDeviceManagerModal`):**
+  * دکمه‌های سریع ظرفیت (`1, 2, 3, 5, 10, نامحدود`) و ورودی عددی دلخواه + پیش‌نمایش نشست‌های مازاد پیش از کاهش ظرفیت.
+  * جدول کامل دستگاه‌ها (مدل، برند، نسخه اندروید، نسخه اپ، IP، زمان ورود، آخرین فعالیت، وضعیت و علت ابطال) با رندر ایمن `textContent`.
+  * دکمه‌های `لغو نشست` (تکی) و `لغو همه نشست‌های فعال` + بخش مشاهده `Audit Log`.
+* **`hm.js` و `xui.js`:**
+  * ارسال اعتبارنامه صحیح پنل (`Authorization: Bearer` در HM و `credentials: "same-origin"` در 3x-ui) در فراخوانی‌های `by-sub` و افزودن دکمه مدیریت دستگاه‌ها و ظرفیت (`📱 دستگاه‌ها (X / Y)`).
+
+### ۳. تغییرات کلاینت Android (`PattNG-stage1/V2rayNG`)
+* **`senpai/DeviceCryptoProvider.kt`:** رابط رمزنگاری و پیاده‌سازی سخت‌افزاری `AndroidKeystoreCryptoProvider` (کلید AES-256-GCM با نام `np_sec_aes_v1` و جفت‌کلید ECDSA P-256 با نام `np_sec_ecdsa_v1`).
+* **`senpai/DeviceIdentityManager.kt`:** تولید و نگهداری امن هویت نصب (CSPRNG + Android Keystore + مقدار واقعی `Settings.Secure.ANDROID_ID` به عنوان ورودی کمکی) -> تولید `deviceId` یکتای ۶۴ کاراکتری SHA-256، امضای اثبات P-256 (`signProof`)، متادیتای دستگاه و کلید یکتای `getXudpBaseKey()`.
+* **`util/Utils.kt`:** اتصال `getDeviceIdForXUDPBaseKey()` به `DeviceIdentityManager.getXudpBaseKey()`.
+* **`senpai/LicenseSessionStore.kt`:** ذخیره رمزنگاری‌شده توکن نشست، کلید لایسنس و صف `pendingLogout` در MMKV چندپروسه‌ای (`MMKV.MULTI_PROCESS_MODE`, شناسه `"np_lic_secure_v2"`).
+* **`senpai/LicenseBackendClient.kt`:**
+  * پشتیبانی از جریان Challenge + ECDSA Proof در `/redeem` و `/refresh`.
+  * ارسال هدرهای `Authorization: Bearer <session_token>` و `X-Device-Id` در `/status`، `/refresh`، `/logout` و `/sub`.
+  * حاشیه ProGuard/Gson: اضافه شدن `@SerializedName("nonce")` به `ChallengeResponsePayload` و قانون `-keep class com.v2ray.ang.senpai.LicenseBackendClient$ChallengeResponsePayload { *; }` در `V2rayNG/app/proguard-rules.pro` برای بیلد Release با R8.
+  * تفکیک قطعی `401/403` از `429`/5xx/خطای شبکه؛ ارسال Logout امن لایسنس قبلی هنگام تعویض لایسنس.
+* **`util/HttpUtil.kt` و `senpai/SubscriptionQuotaStore.kt`:** تزریق خودکار هدرهای نشست برای آدرس اشتراک NovaPulse و پاک‌سازی هرگونه توکن از URL مسیر `/api/v1/license/sub`.
+* **`senpai/SmartConnectCoordinator.kt`, `ui/qsn3d/Qs3dViewModel.kt`, `ui/qsn3d/Qs3dLicenseScreen.kt`:**
+  * استفاده از `DeviceIdentityManager.getDeviceId(context)`، نمایش ظرفیت نامحدود (`-1` -> `novapulse_unlimited`)، تخلیه `pendingLogout` در `verifyLicenseSessionNow`، و ارسال Logout سروری پیش از پاک‌سازی کامل در `logoutLicense`.
+* **بستن بایپس‌ها (`UrlSchemeActivity.kt`, `LauncherManager.kt`, `CoreServiceManager.kt`):**
+  * مسدودسازی ایمپورت اکسترنال لینک/کانفیگ و هدایت به `QuietStormActivity` زمانی که `!LicenseBackendClient.isLicenseSessionActive()`.
+  * مسدودسازی اجرای سرویس VPN و هسته در `LauncherManager` و `CoreServiceManager` بدون نشست لایسنس فعال.
 
 ---
 
-## بخش دوم: طراحی معماری هدف و برنامه اجرا (مرحله ۲، ۳، ۴ و ۵)
+## بخش سوم: بکاپ، مهاجرت دیتابیس و نتایج تست‌های تأییدشده
 
-### ۱. شناسه مستقل و امن دستگاه در Android (`DeviceIdentityManager`)
-* **اصلاح XUDP Base Key:** اصلاح `Utils.getDeviceIdForXUDPBaseKey(context)` تا از شناسه واقعی نصب/دستگاه استفاده کند و همیشه یک رشته ۳۲ بایتی معتبر Base64 URL-safe یکتا برگرداند (بدون مقدار ثابت `"android_id"`).
-* **تولید و نگهداری هویت نصب (`Install Identity`):**
-  1. تولید یک شناسه تصادفی رمزنگاری‌شده (`UUIDv4` با `SecureRandom`) در اولین اجرا.
-  2. رمزنگاری با کلید AES-256-GCM ساخته‌شده داخل **Android Keystore** (`KeyGenParameterSpec`, `minSdk = 24`) و ذخیره متن رمزنگاری‌شده به همراه IV در `SharedPreferences` خصوصی اپلیکیشن (ثابت در برابر بسته شدن برنامه و ری‌استارت گوشی، بدون افشای متن خام).
-  3. خواندن امن `Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID)` با در نظر گرفتن اینکه ممکن است `null` یا تکراری باشد (به عنوان ورودی تکمیلی).
-  4. ترکیب و هش کردن یک‌طرفه با SHA-256:  
-     `device_id = SHA-256("novapulse:dev:v2:" + installSecretUuid + ":" + safeAndroidId)` (۶۴ کاراکتر هگز).  
-     هیچ اطلاعات خام یا حساسی از گوشی به سرور ارسال نمی‌شود و هر نصب یک `device_id` کاملاً مستقل و غیرقابل حدس دارد.
+### ۱. بکاپ و مهاجرت دیتابیس زنده (`/opt/novapulse-license/licenses.db`)
+* مسیر بکاپ پیش از اعمال تغییرات: `/opt/novapulse-license/backups/20261115T124949Z/` شامل کپی کامل `licenses.db` (`53248` بایت)، `server.py` (`66618` بایت) و پوشه `web/`.
+* وضعیت دیتابیس زنده پس از مهاجرت و بازراه‌اندازی `novapulse-license.service`:
+  * سرویس `novapulse-license.service`: `active`
+  * نتیجه `PRAGMA integrity_check;`: `ok`
+  * جدول `schema_migrations`: `1|001_session_security_architecture`
+  * تعداد کل لایسنس‌ها: `60` بدون حذف یا تغییر کلید مشتریان (ظرفیت `-1`: `1` عدد، `1`: `57` عدد، `2`: `1` عدد، `3`: `1` عدد)
+  * رکوردهای قدیمی دستگاه: `6` رکورد با وضعیت `legacy_ambiguous`
 
-### ۲. متادیتای دستگاه (Device Telemetry)
-کلاینت همراه با درخواست‌های `redeem` و `status` شیء `device_info` را ارسال می‌کند:
-* `manufacturer` (`Build.MANUFACTURER`)
-* `model` (`Build.MODEL`)
-* `os_version` (`Build.VERSION.RELEASE`)
-* `api_level` (`Build.VERSION.SDK_INT`)
-* `app_version` (`BuildConfig.VERSION_NAME`)
+### ۲. دستورالعمل بازگشت (Rollback) در صورت نیاز
+1. توقف سرویس: `systemctl stop novapulse-license.service`
+2. بازگردانی فایل‌های بکاپ:
+   * `cp /opt/novapulse-license/backups/20261115T124949Z/licenses.db /opt/novapulse-license/licenses.db`
+   * `cp /opt/novapulse-license/backups/20261115T124949Z/server.py /opt/novapulse-license/server.py`
+   * `rm -rf /opt/novapulse-license/web && cp -r /opt/novapulse-license/backups/20261115T124949Z/web /opt/novapulse-license/web`
+3. بازبینی سلامت SQLite (`sqlite3 /opt/novapulse-license/licenses.db "PRAGMA integrity_check;"`) و راه‌اندازی مجدد سرویس: `systemctl start novapulse-license.service`.
 
-سرور در جدول ارتقایافته `license_devices` مقادیر زیر را ثبت می‌کند:
-* `device_id`, `device_id_prefix`, `manufacturer`, `model`, `os_version`, `api_level`, `app_version`, `session_token_hash`, `status` (`active`, `revoked`, `logged_out`, `legacy_ambiguous`), `first_seen_at`, `last_seen_at`, `last_ip` (استخراج از `X-Real-IP` / `X-Forwarded-For` صرفاً به‌عنوان متادیتای امنیتی، نه شناسه اصلی)، `revoked_at`, `revoke_reason`.
-
-### ۳. احراز هویت مستقل نشست‌ها و محافظت در برابر تصاحب نشست
-* **توکن نشست و نگهداری Hash:**
-  * در `POST /api/v1/license/redeem` (فقط در صورت داشتن ظرفیت مجاز)، یک توکن تصادفی با انتروپی بالا (`nps2_` + ۴۸ کاراکتر hex تصادفی) تولید شده، **تنها یک بار به کلاینت مجاز** داده می‌شود و در دیتابیس **فقط `HMAC-SHA256(TOKEN_SECRET, raw_token)`** در ستون `session_token_hash` ذخیره می‌گردد.
-  * کلاینت `session_token` را نیز به کمک Android Keystore به‌صورت رمزنگاری‌شده روی دستگاه ذخیره می‌کند.
-* **تفکیک دقیق مسیرها و جلوگیری از Session Hijacking:**
-  1. **`POST /api/v1/license/redeem`:**
-     * فقط با `(license_key, device_id)` یک نشست **جدید** می‌سازد اگر و فقط اگر دستگاه در حال حاضر نشست `active` نداشته باشد و ظرفیت `active_devices < max_devices` اجازه دهد.
-     * اگر ظرفیت پر باشد (`active_devices >= max_devices`)، خطای `403` با `status: "device_limit"` برمی‌گرداند و نشست‌های فعال قبلی دست‌نخورده می‌مانند.
-     * اگر **همین `device_id`** از قبل نشست `active` داشته باشد: سرور بدون دریافت `session_token` معتبر فعلی، **هرگز توکن نشست را دوباره افشا یا بازتولید نمی‌کند** (تا صرف دانستن `license_key` و حدس/کپی `device_id` نتواند نشست فعال را تصاحب کند).
-  2. **`POST /api/v1/license/status`:**
-     * **الزام احراز هویت با هر سه مورد:** `license_key` + `device_id` + `session_token` (در هدر `Authorization: Bearer <token>` یا `X-Session-Token` و `X-Device-Id`).
-     * توکن یک دستگاه روی دستگاه دیگری با `device_id` متفاوت **هرگز** معتبر نیست (`403`).
-     * نشست `revoked` یا `logged_out` فوراً با `403` (`status: "session_revoked"`) رد می‌شود تا Watchdog اتصال VPN را قطع کند.
-     * کلاینت کد `429` را از `401/403/404` تفکیک می‌کند تا Rate Limit موقت باعث Logout اشتباهی نشود.
-  3. **`POST /api/v1/license/logout`:**
-     * با `(device_id, session_token)` معتبر، سرور وضعیت نشست را در تراکنش اتمیک به `logged_out` تغییر داده، رویداد Audit ثبت می‌کند و ظرفیت دستگاه فوراً آزاد می‌شود.
-     * در سمت کلاینت: ابتدا Logout به سرور ارسال و تأیید دریافت می‌شود؛ سپس VPN متوقف و اطلاعات محلی پاک می‌گردد (اگر اینترنت قطع بود، کلاینت به کاربر اطلاع می‌دهد که آزادسازی ظرفیت در سرور نیازمند اینترنت است و اطلاعات لازم را برای تلاش مجدد امن یا آزادسازی از پنل حفظ می‌کند).
-
-### ۴. کنترل اتمیک ظرفیت `max_devices` در سرور
-* مرجع اصلی: `licenses.max_devices` در دیتابیس سرور (`1` به‌عنوان پیش‌فرض برای لایسنس جدید، مگر اینکه ادمین مقدار دیگری تعیین کرده باشد؛ `-1` برای نامحدود).
-* استفاده از `with DB_LOCK:` به همراه `conn.execute("BEGIN IMMEDIATE")` در SQLite برای شمارش `COUNT(*) WHERE license_id = ? AND status = 'active'` و ثبت نشست جدید؛ تضمین می‌کند حتی در صدها درخواست همزمان، تعداد نشست‌های پذیرفته‌شده از `max_devices` بیشتر نشود.
-
-### ۵. بستن دریافت Subscription خارج از اپلیکیشن و مسیرهای بایپس
-* **تحویل Subscription نشست‌محور:**
-  * مسیر جدید `GET /api/v1/license/sub` احراز هویت را از **هدرهای `Authorization: Bearer <session_token>` و `X-Device-Id: <device_id>`** می‌خواند و دیگر توکن و شناسه دستگاه در URL قرار نمی‌گیرند (جلوگیری از ثبت توکن در لاگ‌های دسترسی و اشتراک‌گذاری لینک خام).
-  * متدهای `AngConfigManager.updateConfigViaSub` و `SubscriptionQuotaStore` برای درخواست‌های دامنه بک‌اند NovaPulse هدرهای نشست را تزریق می‌کنند.
-  * مسیر `UrlSchemeActivity` برای وارد کردن مستقیم لینک/کانفیگ خارجی بدون لایسنس فعال محدود/مسدود می‌شود تا هیچ لینک سابسکریپشن یا کانفیگ مستقیمی نتواند گیت لایسنس را دور بزند.
-* **محافظت `by-sub`:** محدودسازی افشای اطلاعات حساس در اندپوینت `/by-sub` (نمایش وضعیت و کلید صرفاً برای پنل‌های احراز هویت‌شده با `_verify_panel_admin` و حفظ سازگاری کنترل‌شده پورتال عمومی `/p/<token>` تنها در سطح مجاز).
-* **نکته شفاف درباره لایه Xray (3X-UI / HMPanel):**
-  * تا زمانی که یک دستگاه مجاز است، سرور کانفیگ‌های فیلترشده VLESS+TLS را به اپ می‌دهد. اگر کاربری بعداً ابطال شود:
-    * اپلیکیشن NovaPulse در اولین چرخه Watchdog (`status`) یا رفرش، نشست باطل‌شده را تشخیص داده، VPN را قطع و دیتای محلی را پاک می‌کند.
-    * اگر کاربری به‌طور تهاجمی با ابزارهای سطح روت UUID را از حافظه استخراج کرده باشد، ادمین می‌تواند با گزینه «قطع فوری و چرخش UUID» (`rotate_uid=true`) دسترسی لایه Xray را هم در آن واحد مسدود کند.
-
-### ۶. قابلیت‌های پنل مدیریت (`hm.js` و `xui.js` + APIهای ادمین `server.py`)
-* **ساخت و ویرایش ظرفیت:** انتخاب سریع (`1`, `2`, `3`, `5`, `10`, نامحدود `-1` یا عدد دلخواه) + مقدار پیش‌فرض `1`.
-* **مدیریت کامل نشست‌ها در مودال هر کاربر:**
-  * نمایش لیست دستگاه‌های متصل و سابقه نشست‌ها شامل: برند و مدل گوشی، نسخه اندروید، نسخه اپلیکیشن، IP ثبت‌شده، اولین ورود، آخرین فعالیت، وضعیت (`فعال` / `ابطال‌شده` / `خارج‌شده` / `قدیمی مبهم`).
-  * دکمه **«قطع نشست»** برای ابطال تکی هر دستگاه و دکمه **«ابطال تمام نشست‌ها»** (با ثبت Audit).
-* **سیاست کاهش ظرفیت (Capacity Reduction):**
-  * هنگام کاهش `max_devices` زیر تعداد نشست‌های فعال فعلی، ابتدا پیش‌نمایش (`preview=true`) به ادمین نمایش داده می‌شود: **قدیمی‌ترین نشست‌های معتبر حفظ** و نشست‌های مازاد به‌صورت اتمیک با ثبت رویداد Audit و دلیل `capacity_reduced` غیرفعال (`revoked`) می‌شوند.
-
-### ۷. طرح مهاجرت امن دیتابیس قدیمی (مرحله ۵)
-* **گام اول:** تهیه Backup کامل و تست شده از `/opt/novapulse-license/licenses.db` قبل از هر تغییر.
-* **وضعیت فعلی داده‌ها:** از `60` لایسنس، `54` لایسنس هیچ دستگاهی ندارند و `6` لایسنس دارای رکورد قدیمی با `device_id` ثابت مشترک هستند.
-* **سیاست ایمن:**
-  1. هیچ لایسنس مشتری حذف یا باطل نمی‌شود و ارتباط `license_key` با `sub_token` / `xui_sub_id` کاملاً حفظ می‌شود.
-  2. توکن‌های ۶ رکورد قدیمی به hash تبدیل شده و وضعیت این ۶ ردیف به **`legacy_ambiguous`** علامت‌گذاری می‌شود (و هیچ‌کدام به‌صورت تصادفی به یک گوشی نسبت داده نمی‌شوند) تا در پنل ادمین با برچسب واضح برای تصمیم‌گیری ادمین نمایش داده شوند.
-  3. مهاجرت با یک اسکریپت idempotent (قابل تکرار و قابل بازگشت از بکاپ) همراه با گزارش دقیق آماری انجام خواهد شد.
-
-### ۸. برنامه تست‌های اجباری (مرحله ۶)
-پس از پیاده‌سازی، تمام ۸ سناریو به‌صورت تست‌های خودکار واحد/یکپارچه و تست زنده روی سرور بررسی و مستند خواهند شد:
-1. ظرفیت ۱ دستگاه (ورود A، رد شدن B، ادامه کار A)
-2. ظرفیت ۲ دستگاه (ورود A و B، رد شدن C، کار مستقل A و B)
-3. خروج و جایگزینی (خروج واقعی A با تأیید سرور، ورود B، عدم اعتبار توکن قبلی A)
-4. ابطال از پنل ادمین (ابطال یکی از دو دستگاه فعال، قطع شدن خودکار VPN دستگاه ابطال‌شده، ادامه کار دستگاه دیگر)
-5. درخواست‌های همزمان (`Race Condition` با درخواست‌های موازی روی یک لایسنس محدود)
-6. یکتایی و پایداری Device ID بین دو نصب مستقل و بعد از اجرای مجدد
-7. دستکاری امنیتی (توکن نامعتبر، توکن ابطالشده، توکن دستگاه دیگر، کلید نامعتبر، سشن منقضی، تکرار/Replay درخواست، تغییر Device ID، دسترسی مستقیم به Subscription URL بدون هدر نشست)
-8. تست رگرسیون موتور اتصال VPN، اسکن Cloudflare/CloudFront، اجرای کامل Unit Testهای Android و بررسی لاگ‌های سرویس بدون افشای کلید/توکن.
+### ۳. نتایج تست‌های خودکار و سلامت زنده (پس از آخرین ویرایش)
+1. **تست یکپارچه و همزمانی Backend (`python3 /opt/novapulse-license/tests/test_license_security.py`):**
+   * `test_admin_capacity_preview_revoke_and_audit_redaction`: `ok`
+   * `test_concurrency_20_threads_against_capacity_2`: `ok` (تضمین عدم عبور از ظرفیت ۲ در ۲۰ ترد همزمان)
+   * `test_reject_legacy_shared_android_id_and_bad_proof`: `ok`
+   * `test_single_device_enforcement_logout_and_replay_protection`: `ok`
+   * `test_status_refresh_sub_header_auth_and_bysub_auth`: `ok`
+   * `test_unlimited_capacity_and_bruteforce_rate_limit`: `ok`
+   * **جمع:** `Ran 6 tests in 1.834s -> OK`
+2. **بررسی Syntax فایل‌های پنل (`node --check /opt/novapulse-license/web/panel-core.js /opt/novapulse-license/web/hm.js /opt/novapulse-license/web/xui.js`):** خروج با کد `0` (بدون خطا).
+3. **بررسی اندپوینت‌های زنده سرویس و Reverse Proxy:**
+   * `http://127.0.0.1:4150/api/v1/license/health` -> `200`
+   * `http://127.0.0.1:4150/api/v1/license/assets/panel-core.js` -> `200`
+   * `http://127.0.0.1:4150/api/v1/license/by-sub/invalid` -> `401`
+   * `http://127.0.0.1:4150/api/v1/license/sub/nps_fake` -> `401`
+   * `POST http://127.0.0.1:4150/api/v1/license/status` بدون توکن -> `401`
+   * `https://nova.dontbedumb.ir/api/v1/license/assets/panel-core.js` -> `200`
+   * `https://nova.dontbedumb.ir/np-hm-license.js` -> `200`
+   * `https://127.0.0.1:2087/gXfxEJl46r0576NkI7/np-license-api/assets/panel-core.js` -> `200`
+4. **تست‌های واحد JVM اپلیکیشن Android (`./gradlew testPlaystoreDebugUnitTest --no-daemon --console=plain`):**
+   * `BUILD SUCCESSFUL in 1m 5s`
+   * خروجی XML تست‌ها: **`total=85, passed=85, failed=0, skipped=0`** (شامل تست‌های جدید `DeviceIdentityAndSessionSecurityTest` و `LicenseSecurityAndQuotaTest` برای تفکیک `429` از `401 session_revoked`).
+   * **بیلد APK نهایی:** از روی کدهای پوش‌شده روی شاخه `feat/qsn-3d-smart-stage1` توسط **GitHub Actions** (`.github/workflows/build.yml`) اجرا و آرتیفکت‌های امضاشده تولید می‌گردد.

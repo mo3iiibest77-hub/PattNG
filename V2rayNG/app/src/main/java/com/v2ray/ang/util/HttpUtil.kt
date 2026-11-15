@@ -150,6 +150,10 @@ object HttpUtil {
 
         while (redirects++ < maxRedirects) {
             if (currentUrl == null) continue
+            val isProtectedSub = com.v2ray.ang.senpai.LicenseBackendClient.isProtectedSubscriptionUrl(currentUrl)
+            if (isProtectedSub) {
+                currentUrl = com.v2ray.ang.senpai.LicenseBackendClient.sanitizeSubscriptionUrlForStorage(currentUrl)
+            }
             val client = buildOkHttpClient(request.timeout, request.httpPort, request.proxyUsername, request.proxyPassword, followRedirects = false)
             val finalUserAgent = if (request.userAgent.isNullOrBlank()) {
                 "NovaPulse/${BuildConfig.VERSION_NAME}"
@@ -163,6 +167,12 @@ object HttpUtil {
                 .header("Connection", "close")
 
             applyEmbeddedBasicAuthHeader(currentUrl, requestBuilder)
+
+            if (isProtectedSub) {
+                for ((k, v) in com.v2ray.ang.senpai.LicenseBackendClient.buildSubscriptionAuthHeaders()) {
+                    requestBuilder.header(k, v)
+                }
+            }
 
 
             val headersMap = JsonUtil.parseHeadersToMap(request.requestHeaders)

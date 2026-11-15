@@ -489,7 +489,7 @@ object SmartConnectCoordinator {
         remarksHint: String,
         isStatusRefresh: Boolean = false,
     ): Result<Int> {
-        val deviceId = runCatching { Utils.getDeviceIdForXUDPBaseKey() }.getOrDefault("")
+        val deviceId = runCatching { DeviceIdentityManager.getDeviceId(context) }.getOrDefault("")
         val redeemed = if (isStatusRefresh) {
             LicenseBackendClient.refreshStatus(rawInput, deviceId, remarksHint)
         } else {

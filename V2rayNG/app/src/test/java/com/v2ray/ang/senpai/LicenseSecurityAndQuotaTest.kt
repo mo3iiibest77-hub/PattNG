@@ -198,4 +198,47 @@ class LicenseSecurityAndQuotaTest {
         assertTrue(transientRes is LicenseResolutionResult.Failure)
         assertFalse((transientRes as LicenseResolutionResult.Failure).isDefinitiveRejection)
     }
+
+    @Test
+    fun refreshStatus_doesNotRevokeOn429Or5xx_butRevokesOn401SessionRevoked() {
+        val rateLimitedClient = OkHttpClient.Builder().addInterceptor { chain ->
+            Response.Builder()
+                .request(chain.request())
+                .protocol(Protocol.HTTP_1_1)
+                .code(429)
+                .message("Too Many Requests")
+                .body("""{"status":"rate_limited","message":"Slow down"}""".toResponseBody("application/json".toMediaType()))
+                .build()
+        }.build()
+
+        val r429 = LicenseBackendClient.refreshStatus(
+            licenseKey = "NP-AAAA-BBBB-CCCC",
+            deviceId = "dev-123",
+            backendBaseUrlOverride = "https://127.0.0.1:4150",
+            client = rateLimitedClient,
+            sessionTokenOverride = "nps_test_tok",
+        )
+        assertTrue(r429 is LicenseResolutionResult.Failure)
+        assertFalse((r429 as LicenseResolutionResult.Failure).isDefinitiveRejection)
+
+        val revoked401Client = OkHttpClient.Builder().addInterceptor { chain ->
+            Response.Builder()
+                .request(chain.request())
+                .protocol(Protocol.HTTP_1_1)
+                .code(401)
+                .message("Unauthorized")
+                .body("""{"status":"session_revoked","message":"Revoked by admin"}""".toResponseBody("application/json".toMediaType()))
+                .build()
+        }.build()
+
+        val r401 = LicenseBackendClient.refreshStatus(
+            licenseKey = "NP-AAAA-BBBB-CCCC",
+            deviceId = "dev-123",
+            backendBaseUrlOverride = "https://127.0.0.1:4150",
+            client = revoked401Client,
+            sessionTokenOverride = "nps_test_tok",
+        )
+        assertTrue(r401 is LicenseResolutionResult.Failure)
+        assertTrue((r401 as LicenseResolutionResult.Failure).isDefinitiveRejection)
+    }
 }

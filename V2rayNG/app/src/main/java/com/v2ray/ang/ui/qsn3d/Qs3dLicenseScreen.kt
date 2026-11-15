@@ -375,9 +375,14 @@ fun Qs3dSubscriptionScreen(
                             accent = QsColors.ElectricCyan,
                             modifier = Modifier.weight(1f)
                         )
+                        val maxDevLabel = if ((quota?.maxDevices ?: 1) < 0) {
+                            stringResource(R.string.novapulse_unlimited)
+                        } else {
+                            "${quota?.maxDevices ?: 1}"
+                        }
                         MetricPill(
                             label = stringResource(R.string.novapulse_devices_label),
-                            value = "${quota?.usedDevices ?: 1} / ${quota?.maxDevices ?: 1}",
+                            value = "${quota?.usedDevices ?: 1} / $maxDevLabel",
                             accent = QsColors.AuroraMint,
                             modifier = Modifier.weight(1f)
                         )

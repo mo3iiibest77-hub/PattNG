@@ -108,6 +108,11 @@ object CoreServiceManager {
 
     @Throws(Exception::class)
     private fun doStartCoreLoop(service: Service, vpnInterface: ParcelFileDescriptor?) {
+        if (!com.v2ray.ang.senpai.LicenseBackendClient.isLicenseSessionActive()) {
+            LogUtil.w(AppConfig.TAG, "CoreServiceManager: Blocked core start without active license session")
+            error(service.getString(com.v2ray.ang.R.string.novapulse_license_force_revoked))
+        }
+
         val mFilter = IntentFilter(AppConfig.BROADCAST_ACTION_SERVICE)
         mFilter.addAction(Intent.ACTION_SCREEN_ON)
         mFilter.addAction(Intent.ACTION_SCREEN_OFF)

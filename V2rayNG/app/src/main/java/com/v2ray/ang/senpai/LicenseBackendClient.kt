@@ -2,261 +2,655 @@ package com.v2ray.ang.senpai
 
 import com.google.gson.Gson
 import com.google.gson.annotations.SerializedName
+import com.v2ray.ang.AppConfig
+import com.v2ray.ang.BuildConfig
 import com.v2ray.ang.handler.MmkvManager
+import com.v2ray.ang.util.LogUtil
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import java.io.IOException
+import java.net.URI
 import java.util.concurrent.TimeUnit
 
-/**
- * Input classification for the onboarding / license activation field.
- * Direct subscription links and raw config URIs are strictly rejected; ONLY license codes
- * issued by the panel backend are accepted.
- */
 sealed class ActivationInput {
     data class LicenseKey(val key: String) : ActivationInput()
     data class RejectedUrl(val reason: String) : ActivationInput()
-    data object Invalid : ActivationInput()
+    data object Empty : ActivationInput()
 }
 
 data class LicenseRedeemResponse(
-    @SerializedName("subscription_url") val subscriptionUrl: String? = null,
-    @SerializedName("url") val url: String? = null,
+    val status: String? = null,
+    @SerializedName("license_status") val licenseStatus: String? = null,
     @SerializedName("license_key") val licenseKey: String? = null,
-    @SerializedName("remarks") val remarks: String? = null,
+    @SerializedName("session_id") val sessionId: String? = null,
+    @SerializedName("session_token") val sessionToken: String? = null,
+    @SerializedName("session_expires_at") val sessionExpiresAt: Long = 0L,
+    @SerializedName("subscription_url") val subscriptionUrl: String? = null,
+    @SerializedName("sub_url") val subUrl: String? = null,
+    val url: String? = null,
     @SerializedName("plan_name") val planName: String? = null,
+    val remarks: String? = null,
     @SerializedName("upload_bytes") val uploadBytes: Long = 0L,
     @SerializedName("download_bytes") val downloadBytes: Long = 0L,
     @SerializedName("total_bytes") val totalBytes: Long = 0L,
     @SerializedName("expire_at") val expireAtSeconds: Long = 0L,
     @SerializedName("created_at") val createdAtSeconds: Long = 0L,
     @SerializedName("max_devices") val maxDevices: Int = 1,
+    @SerializedName("unlimited_devices") val unlimitedDevices: Boolean = false,
     @SerializedName("used_devices") val usedDevices: Int = 1,
-    @SerializedName("status") val status: String? = null,
-    @SerializedName("message") val message: String? = null,
+    @SerializedName("revoke_reason") val revokeReason: String? = null,
+    val message: String? = null,
+    val detail: String? = null,
 ) {
-    fun resolvedSubscriptionUrl(): String? =
-        subscriptionUrl?.trim()?.takeIf { it.isNotEmpty() }
-            ?: url?.trim()?.takeIf { it.isNotEmpty() }
+    fun resolvedSubscriptionUrl(): String =
+        sequenceOf(subscriptionUrl, subUrl, url)
+            .firstOrNull { !it.isNullOrBlank() }
+            ?.trim()
+            .orEmpty()
+
+    fun resolvedRemarks(fallback: String): String =
+        sequenceOf(planName, remarks)
+            .firstOrNull { !it.isNullOrBlank() }
+            ?.trim()
+            ?: fallback
+
+    fun resolvedStatusCode(): String =
+        sequenceOf(status, licenseStatus)
+            .firstOrNull { !it.isNullOrBlank() }
+            ?.trim()
+            ?.lowercase()
+            .orEmpty()
+
+    fun toQuotaInfo(remarksFallback: String): SubscriptionQuotaInfo {
+        val resolvedMax = if (unlimitedDevices || maxDevices < 0) -1 else maxDevices.coerceAtLeast(1)
+        return SubscriptionQuotaInfo(
+            uploadBytes = uploadBytes,
+            downloadBytes = downloadBytes,
+            totalBytes = totalBytes,
+            expireAtSeconds = expireAtSeconds,
+            createdAtSeconds = createdAtSeconds,
+            planName = resolvedRemarks(remarksFallback),
+            maxDevices = resolvedMax,
+            usedDevices = usedDevices.coerceAtLeast(0),
+            licenseStatus = resolvedStatusCode().ifBlank { "active" },
+        )
+    }
 }
 
 sealed class LicenseResolutionResult {
-    data class ReadySubscription(
-        val subscriptionUrl: String,
-        val remarks: String,
-        val licenseKey: String,
-        val quota: SubscriptionQuotaInfo? = null,
-    ) : LicenseResolutionResult()
-
-    data class BackendEndpointRequired(val licenseKey: String) : LicenseResolutionResult()
+    data object BackendEndpointRequired : LicenseResolutionResult()
     data class Failure(
         val reason: String,
         val isDefinitiveRejection: Boolean = false,
+        val httpCode: Int = 0,
+        val statusCode: String = "",
+    ) : LicenseResolutionResult()
+
+    data class ReadySubscription(
+        val subscriptionUrl: String,
+        val remarks: String,
+        val quota: SubscriptionQuotaInfo? = null,
     ) : LicenseResolutionResult()
 }
 
-/**
- * Client for NovaPulse License API (`/api/v1/license/redeem` & `/api/v1/license/status`).
- * Enforces license-only activation bound to [deviceId]; direct URLs are never accepted.
- */
-object LicenseBackendClient {
+sealed class LogoutOutcome {
+    data class Success(val usedDevices: Int = 0) : LogoutOutcome()
+    data class AlreadyInvalid(val reason: String = "") : LogoutOutcome()
+    data class NetworkFailure(val message: String) : LogoutOutcome()
+}
 
-    val DEFAULT_BACKEND_BASE_URL: String
-        get() = AppSecurityGuard.protectedBackendBaseUrl()
-    private const val PREF_BACKEND_BASE_URL = "qsn_backend_base_url"
-    private const val PREF_SAVED_LICENSE_KEY = "qsn_saved_license_key"
-    private const val PREF_ACTIVE_LICENSE_SUB_ID = "qsn_active_license_sub_id"
-    private const val PREF_LICENSE_SESSION_ACTIVE = "qsn_license_session_active"
-    private val FORBIDDEN_URL_SCHEMES = listOf(
-        "https://", "http://", "vless://", "vmess://", "trojan://", "ss://",
-        "hy2://", "hysteria2://", "hysteria://", "tuic://", "socks://", "wireguard://"
-    )
-    private val LICENSE_TOKEN_REGEX = Regex("""\bNP-[A-Z0-9]{2,}(?:-[A-Z0-9]{2,}){1,}\b""", RegexOption.IGNORE_CASE)
+object LicenseBackendClient {
+    private const val PREF_LICENSE_SESSION_ACTIVE = "np_license_session_active"
+    private const val PREF_LICENSE_SUB_ID = "np_license_sub_id"
+    private const val PREF_LICENSE_KEY = "np_license_key"
+    private const val SESSION_REFRESH_INTERVAL_SEC = 6L * 3600L
+
+    private val KEY_PATTERN = Regex("^[A-Za-z0-9][A-Za-z0-9_-]{5,127}$")
+    private val RAW_KEY_REDACT_REGEX = Regex("(\\b[A-Z0-9]{2,6}(?:-[A-Z0-9]{3,8}){2,5}\\b|\\bnps_[A-Za-z0-9_=-]{8,})")
+    private val JSON_MEDIA = "application/json; charset=utf-8".toMediaType()
     private val gson = Gson()
 
-    fun getBackendBaseUrl(): String {
-        val saved = MmkvManager.decodeSettingsString(PREF_BACKEND_BASE_URL, "").orEmpty().trim().trimEnd('/')
-        return saved.ifEmpty { DEFAULT_BACKEND_BASE_URL }
+    private data class ChallengeResponsePayload(
+        @SerializedName("nonce") val nonce: String? = null,
+    )
+
+    fun resolveBaseUrl(overrideUrl: String? = null): String {
+        val raw = overrideUrl?.takeIf { it.isNotBlank() } ?: AppSecurityGuard.protectedBackendBaseUrl()
+        return raw.trim().trimEnd('/')
     }
 
-    fun setBackendBaseUrl(url: String) {
-        MmkvManager.encodeSettings(PREF_BACKEND_BASE_URL, url.trim().trimEnd('/'))
+    val cleanSubscriptionEndpoint: String get() = "${resolveBaseUrl()}/api/v1/license/sub"
+
+    private val defaultClient: OkHttpClient by lazy {
+        OkHttpClient.Builder()
+            .connectTimeout(12, TimeUnit.SECONDS)
+            .readTimeout(15, TimeUnit.SECONDS)
+            .writeTimeout(12, TimeUnit.SECONDS)
+            .build()
     }
 
-    fun getSavedLicenseKey(): String =
-        MmkvManager.decodeSettingsString(PREF_SAVED_LICENSE_KEY, "").orEmpty().trim()
-
-    fun setSavedLicenseKey(key: String) {
-        val normalized = key.trim().uppercase()
-        MmkvManager.encodeSettings(PREF_SAVED_LICENSE_KEY, normalized)
-        MmkvManager.encodeSettings(PREF_LICENSE_SESSION_ACTIVE, normalized.isNotEmpty())
+    fun isLicenseSessionActive(): Boolean {
+        if (LicenseSessionStore.hasActiveSession()) return true
+        return runCatching { MmkvManager.decodeSettingsBool(PREF_LICENSE_SESSION_ACTIVE, false) }.getOrDefault(false) &&
+            LicenseSessionStore.getSnapshot().sessionToken.isNotBlank()
     }
 
     fun getActiveLicenseSubId(): String =
-        MmkvManager.decodeSettingsString(PREF_ACTIVE_LICENSE_SUB_ID, "").orEmpty().trim()
+        runCatching { MmkvManager.decodeSettingsString(PREF_LICENSE_SUB_ID, "").orEmpty() }.getOrDefault("")
 
     fun setActiveLicenseSubId(subId: String) {
-        MmkvManager.encodeSettings(PREF_ACTIVE_LICENSE_SUB_ID, subId.trim())
+        runCatching { MmkvManager.encodeSettings(PREF_LICENSE_SUB_ID, subId) }
     }
 
-    fun isLicenseSessionActive(): Boolean =
-        MmkvManager.decodeSettingsBool(PREF_LICENSE_SESSION_ACTIVE, false) || getSavedLicenseKey().isNotEmpty()
-
-    fun clearSavedLicenseKey() {
-        MmkvManager.encodeSettings(PREF_SAVED_LICENSE_KEY, "")
-        MmkvManager.encodeSettings(PREF_ACTIVE_LICENSE_SUB_ID, "")
-        MmkvManager.encodeSettings(PREF_LICENSE_SESSION_ACTIVE, false)
+    fun getSavedLicenseKey(): String {
+        val fromSecure = LicenseSessionStore.getSnapshot().licenseKey
+        if (fromSecure.isNotBlank()) return fromSecure
+        return runCatching { MmkvManager.decodeSettingsString(PREF_LICENSE_KEY, "").orEmpty().trim() }.getOrDefault("")
     }
 
     fun clearActiveLicenseSession() {
-        clearSavedLicenseKey()
+        LicenseSessionStore.clearActiveSession()
+        runCatching {
+            MmkvManager.encodeSettings(PREF_LICENSE_SESSION_ACTIVE, false)
+            MmkvManager.encodeSettings(PREF_LICENSE_SUB_ID, "")
+            MmkvManager.encodeSettings(PREF_LICENSE_KEY, "")
+        }
+    }
+
+    fun isProtectedSubscriptionUrl(url: String?): Boolean {
+        val raw = url?.trim().orEmpty()
+        if (raw.isEmpty()) return false
+        val uri = runCatching { URI(raw) }.getOrNull() ?: return false
+        val path = uri.path.orEmpty().trimEnd('/')
+        if (path != "/api/v1/license/sub" && !path.startsWith("/api/v1/license/sub/")) return false
+        val expectedHost = runCatching { URI(resolveBaseUrl()).host }.getOrNull()
+        return expectedHost.isNullOrBlank() || uri.host.equals(expectedHost, ignoreCase = true)
+    }
+
+    fun sanitizeSubscriptionUrlForStorage(url: String?): String {
+        val raw = url?.trim().orEmpty()
+        if (raw.isEmpty()) return cleanSubscriptionEndpoint
+        return if (isProtectedSubscriptionUrl(raw)) cleanSubscriptionEndpoint else raw
+    }
+
+    fun buildSubscriptionAuthHeaders(): Map<String, String> {
+        val snap = LicenseSessionStore.getSnapshot()
+        val devId = runCatching { DeviceIdentityManager.getDeviceId() }.getOrDefault("")
+        if (!snap.active || snap.sessionToken.isBlank() || devId.isBlank()) {
+            return emptyMap()
+        }
+        return mapOf(
+            "Authorization" to "Bearer ${snap.sessionToken}",
+            "X-Device-Id" to devId,
+            "Cache-Control" to "no-store",
+        )
     }
 
     fun sanitizeForDisplay(raw: String?): String {
-        var text = raw.orEmpty()
-        val saved = runCatching { getSavedLicenseKey() }.getOrDefault("")
-        if (saved.length >= 4) {
-            text = text.replace(saved, "[***]", ignoreCase = true)
-        }
-        return text.replace(LICENSE_TOKEN_REGEX, "[***]")
+        val text = raw?.trim().orEmpty()
+        if (text.isEmpty()) return ""
+        return RAW_KEY_REDACT_REGEX.replace(text, "[***]")
     }
 
-    fun classifyInput(raw: String): ActivationInput {
-        val trimmed = raw.trim()
-        if (trimmed.isEmpty()) return ActivationInput.Invalid
+    fun classifyInput(rawInput: String): ActivationInput {
+        val trimmed = rawInput.trim()
+        if (trimmed.isEmpty()) return ActivationInput.Empty
         val lower = trimmed.lowercase()
-        if (FORBIDDEN_URL_SCHEMES.any { lower.startsWith(it) } || "://" in lower) {
+        if (lower.startsWith("http://") ||
+            lower.startsWith("https://") ||
+            lower.startsWith("vless://") ||
+            lower.startsWith("vmess://") ||
+            lower.startsWith("trojan://") ||
+            lower.startsWith("ss://") ||
+            lower.contains("://")
+        ) {
             return ActivationInput.RejectedUrl(
-                "این بخش فقط کد لایسنس معتبر قبول می‌کند؛ لطفاً کد لایسنس خود را وارد کنید."
+                "ورودی نامعتبر است؛ فقط کد لایسنس معتبر را وارد کنید."
             )
         }
-        if (trimmed.length >= 4 && !trimmed.any { it.isWhitespace() }) {
-            return ActivationInput.LicenseKey(trimmed.uppercase())
+        return if (KEY_PATTERN.matches(trimmed)) {
+            ActivationInput.LicenseKey(trimmed.uppercase())
+        } else {
+            ActivationInput.RejectedUrl("فرمت کد لایسنس نامعتبر است.")
         }
-        return ActivationInput.Invalid
     }
 
-    fun parseRedeemJson(json: String): LicenseRedeemResponse? =
-        runCatching { gson.fromJson(json, LicenseRedeemResponse::class.java) }.getOrNull()
+    internal fun parseRedeemJson(rawJson: String?): LicenseRedeemResponse? {
+        if (rawJson.isNullOrBlank()) return null
+        return runCatching {
+            gson.fromJson(rawJson, LicenseRedeemResponse::class.java)
+        }.getOrNull()
+    }
+
+    internal fun isDefinitiveAuthRejection(httpCode: Int, statusCode: String): Boolean {
+        if (httpCode == 429 || httpCode >= 500 || httpCode <= 0) return false
+        if (httpCode == 401 || httpCode == 403) return true
+        if (httpCode == 404) {
+            return statusCode in setOf(
+                "invalid_license",
+                "session_invalid",
+                "session_revoked",
+                "session_logged_out",
+                "session_expired",
+                "not_found",
+            )
+        }
+        return statusCode in setOf(
+            "revoked",
+            "disabled",
+            "expired",
+            "quota_exceeded",
+            "device_limit",
+            "device_mismatch",
+            "device_key_mismatch",
+            "session_required",
+            "session_invalid",
+            "session_revoked",
+            "session_logged_out",
+            "session_expired",
+            "session_legacy_upgrade_required",
+            "invalid_license",
+        )
+    }
+
+    fun flushPendingLogoutIfNeeded(
+        backendBaseUrlOverride: String? = null,
+        client: OkHttpClient? = null,
+    ) {
+        val pending = LicenseSessionStore.getPendingLogout() ?: return
+        val outcome = performLogoutCall(
+            sessionToken = pending.sessionToken,
+            deviceId = pending.deviceId,
+            backendBaseUrlOverride = backendBaseUrlOverride,
+            client = client,
+        )
+        if (outcome is LogoutOutcome.Success || outcome is LogoutOutcome.AlreadyInvalid) {
+            LicenseSessionStore.clearPendingLogout()
+        }
+    }
 
     fun redeem(
         rawInput: String,
         remarksHint: String = "NovaPulse",
-        deviceId: String = "",
+        deviceId: String? = null,
         backendBaseUrlOverride: String? = null,
-        client: OkHttpClient = defaultClient(),
-    ): LicenseResolutionResult = callLicenseEndpoint(
-        endpointSuffix = "/api/v1/license/redeem",
-        rawInput = rawInput,
-        remarksHint = remarksHint,
-        deviceId = deviceId,
-        backendBaseUrlOverride = backendBaseUrlOverride,
-        client = client,
-    )
-
-    fun refreshStatus(
-        licenseKey: String,
-        deviceId: String,
-        remarksHint: String = "NovaPulse",
-        backendBaseUrlOverride: String? = null,
-        client: OkHttpClient = defaultClient(),
-    ): LicenseResolutionResult = callLicenseEndpoint(
-        endpointSuffix = "/api/v1/license/status",
-        rawInput = licenseKey,
-        remarksHint = remarksHint,
-        deviceId = deviceId,
-        backendBaseUrlOverride = backendBaseUrlOverride,
-        client = client,
-    )
-
-    private fun callLicenseEndpoint(
-        endpointSuffix: String,
-        rawInput: String,
-        remarksHint: String,
-        deviceId: String,
-        backendBaseUrlOverride: String?,
-        client: OkHttpClient,
+        client: OkHttpClient? = null,
     ): LicenseResolutionResult {
-        if (AppSecurityGuard.isRuntimeTampered()) {
-            return LicenseResolutionResult.Failure(
-                reason = "نسخه اپلیکیشن معتبر نیست یا دستکاری شده است. لطفاً نسخه رسمی را نصب کنید.",
-                isDefinitiveRejection = true,
-            )
-        }
-        return when (val input = classifyInput(rawInput)) {
-            is ActivationInput.Invalid ->
-                LicenseResolutionResult.Failure("کد لایسنس وارد شده نامعتبر است.", isDefinitiveRejection = true)
+        when (val classified = classifyInput(rawInput)) {
+            ActivationInput.Empty ->
+                return LicenseResolutionResult.Failure("کد لایسنس وارد نشده است.", isDefinitiveRejection = true)
 
             is ActivationInput.RejectedUrl ->
-                LicenseResolutionResult.Failure(input.reason, isDefinitiveRejection = true)
+                return LicenseResolutionResult.Failure(classified.reason, isDefinitiveRejection = true)
 
             is ActivationInput.LicenseKey -> {
-                val baseUrl = (backendBaseUrlOverride ?: getBackendBaseUrl()).trim().trimEnd('/')
-                if (baseUrl.isEmpty()) {
-                    return LicenseResolutionResult.BackendEndpointRequired(input.key)
-                }
-                val payload = gson.toJson(
-                    mapOf(
-                        "license_key" to input.key,
-                        "device_id" to deviceId,
-                    )
-                )
-                val req = Request.Builder()
-                    .url("$baseUrl$endpointSuffix")
-                    .post(payload.toRequestBody("application/json; charset=utf-8".toMediaType()))
-                    .build()
-                runCatching {
-                    client.newCall(req).execute().use { resp ->
-                        val body = resp.body.string()
-                        if (!resp.isSuccessful) {
-                            val parsedErr = parseRedeemJson(body)?.message
-                            return LicenseResolutionResult.Failure(
-                                reason = parsedErr ?: "خطای سرور لایسنس (${resp.code})",
-                                isDefinitiveRejection = resp.code in 400..499,
-                            )
-                        }
-                        val parsed = parseRedeemJson(body)
-                            ?: return LicenseResolutionResult.Failure("پاسخ سرور لایسنس نامعتبر بود")
-                        val subUrl = parsed.resolvedSubscriptionUrl()
-                            ?: return LicenseResolutionResult.Failure(
-                                reason = sanitizeForDisplay(parsed.message)
-                                    .ifBlank { "سرویس لایسنس اطلاعات اتصال را برنگرداند." },
-                                isDefinitiveRejection = true,
-                            )
-                        val resolvedKey = parsed.licenseKey?.takeIf { it.isNotBlank() } ?: input.key
-                        setSavedLicenseKey(resolvedKey)
-                        val resolvedName = parsed.planName?.takeIf { it.isNotBlank() }
-                            ?: parsed.remarks?.takeIf { it.isNotBlank() }
-                            ?: remarksHint
-                        val quota = SubscriptionQuotaInfo(
-                            uploadBytes = parsed.uploadBytes,
-                            downloadBytes = parsed.downloadBytes,
-                            totalBytes = parsed.totalBytes,
-                            expireAtSeconds = parsed.expireAtSeconds,
-                            planName = resolvedName,
-                            createdAtSeconds = parsed.createdAtSeconds,
-                            maxDevices = parsed.maxDevices.coerceAtLeast(1),
-                            usedDevices = parsed.usedDevices.coerceAtLeast(0),
-                            licenseStatus = parsed.status ?: "active",
+                val baseUrl = resolveBaseUrl(backendBaseUrlOverride)
+                if (baseUrl.isBlank()) return LicenseResolutionResult.BackendEndpointRequired
+
+                val http = client ?: defaultClient
+                val devId = deviceId?.takeIf { it.isNotBlank() && it != DeviceIdentityManager.LEGACY_SHARED_ANDROID_ID }
+                    ?: DeviceIdentityManager.getDeviceId()
+                flushPendingLogoutIfNeeded(baseUrl, http)
+
+                val previousSnap = LicenseSessionStore.getSnapshot()
+
+                return try {
+                    val pubKeyB64 = DeviceIdentityManager.getPublicKeySpkiB64()
+                    val chReqJson = gson.toJson(
+                        mapOf(
+                            "device_id" to devId,
+                            "purpose" to "redeem",
+                            "public_key" to pubKeyB64,
                         )
-                        LicenseResolutionResult.ReadySubscription(
-                            subscriptionUrl = subUrl,
-                            remarks = resolvedName,
-                            licenseKey = resolvedKey,
-                            quota = quota,
+                    )
+                    val (chCode, chBody) = executeHttpJson(
+                        client = http,
+                        url = "$baseUrl/api/v1/license/challenge",
+                        jsonBody = chReqJson,
+                        headers = mapOf("X-Device-Id" to devId),
+                    )
+                    if (chCode !in 200..299) {
+                        val parsedErr = parseRedeemJson(chBody)
+                        val stCode = parsedErr?.resolvedStatusCode().orEmpty()
+                        val errMsg = parsedErr?.message ?: parsedErr?.detail ?: "خطا در دریافت چالش امنیتی (کد $chCode)"
+                        return LicenseResolutionResult.Failure(
+                            reason = sanitizeForDisplay(errMsg),
+                            isDefinitiveRejection = isDefinitiveAuthRejection(chCode, stCode),
+                            httpCode = chCode,
+                            statusCode = stCode,
                         )
                     }
-                }.getOrElse { err ->
-                    LicenseResolutionResult.Failure(err.message ?: "خطا در ارتباط با سرور لایسنس")
+                    val nonce = runCatching { gson.fromJson(chBody, ChallengeResponsePayload::class.java)?.nonce.orEmpty() }
+                        .getOrDefault("")
+                    if (nonce.isBlank()) {
+                        return LicenseResolutionResult.Failure("پاسخ چالش امنیتی نامعتبر است.")
+                    }
+
+                    val signatureB64 = DeviceIdentityManager.signChallenge(nonce, "redeem")
+                    val meta = DeviceIdentityManager.getDeviceInfo()
+                    val deviceInfoMap = mapOf(
+                        "device_name" to meta.deviceName,
+                        "manufacturer" to meta.manufacturer,
+                        "model" to meta.model,
+                        "brand" to meta.brand,
+                        "os_version" to meta.osVersion,
+                        "api_level" to meta.apiLevel,
+                        "app_version" to meta.appVersion,
+                    )
+
+                    val reqJsonStr = gson.toJson(
+                        mapOf(
+                            "license_key" to classified.key,
+                            "device_id" to devId,
+                            "public_key" to pubKeyB64,
+                            "challenge_nonce" to nonce,
+                            "device_signature" to signatureB64,
+                            "device_info" to deviceInfoMap,
+                        )
+                    )
+
+                    val (code, bodyStr) = executeHttpJson(
+                        client = http,
+                        url = "$baseUrl/api/v1/license/redeem",
+                        jsonBody = reqJsonStr,
+                        headers = mapOf("X-Device-Id" to devId),
+                    )
+                    val parsed = parseRedeemJson(bodyStr)
+                    val stCode = parsed?.resolvedStatusCode().orEmpty()
+                    if (code !in 200..299 || parsed == null) {
+                        val errMsg = parsed?.message ?: parsed?.detail ?: when (code) {
+                            401, 403 -> "دسترسی این لایسنس مسدود یا سقف دستگاه آن تکمیل شده است."
+                            404 -> "کد لایسنس وارد شده معتبر نیست یا یافت نشد."
+                            429 -> "تعداد تلاش‌ها بیش از حد مجاز است. لطفاً لحظاتی صبر کنید."
+                            else -> "خطا در برقراری ارتباط با سرور لایسنس (کد $code)"
+                        }
+                        return LicenseResolutionResult.Failure(
+                            reason = sanitizeForDisplay(errMsg),
+                            isDefinitiveRejection = isDefinitiveAuthRejection(code, stCode),
+                            httpCode = code,
+                            statusCode = stCode,
+                        )
+                    }
+
+                    val sessTok = parsed.sessionToken?.trim().orEmpty()
+                    val sessId = parsed.sessionId?.trim().orEmpty()
+                    if (sessTok.isBlank()) {
+                        return LicenseResolutionResult.Failure("سرور توکن نشست معتبر صادر نکرد.")
+                    }
+
+                    val resolvedUrl = sanitizeSubscriptionUrlForStorage(
+                        parsed.resolvedSubscriptionUrl().ifBlank { "$baseUrl/api/v1/license/sub" },
+                    )
+                    val activeKey = parsed.licenseKey?.trim()?.uppercase().orEmpty().ifBlank { classified.key }
+
+                    // Release old license session cleanly if switching from another active license
+                    if (previousSnap.active &&
+                        previousSnap.sessionToken.isNotBlank() &&
+                        previousSnap.sessionToken != sessTok &&
+                        !previousSnap.licenseKey.equals(activeKey, ignoreCase = true)
+                    ) {
+                        val oldOut = performLogoutCall(previousSnap.sessionToken, devId, baseUrl, http)
+                        if (oldOut is LogoutOutcome.NetworkFailure) {
+                            LicenseSessionStore.enqueuePendingLogout(previousSnap.sessionToken, devId)
+                        }
+                    }
+
+                    LicenseSessionStore.saveSession(
+                        licenseKey = activeKey,
+                        sessionId = sessId,
+                        sessionToken = sessTok,
+                        subscriptionUrl = resolvedUrl,
+                        expiresAtSec = parsed.sessionExpiresAt,
+                    )
+                    runCatching {
+                        MmkvManager.encodeSettings(PREF_LICENSE_KEY, "")
+                        MmkvManager.encodeSettings(PREF_LICENSE_SESSION_ACTIVE, true)
+                    }
+
+                    LicenseResolutionResult.ReadySubscription(
+                        subscriptionUrl = resolvedUrl,
+                        remarks = parsed.resolvedRemarks(remarksHint),
+                        quota = parsed.toQuotaInfo(remarksHint),
+                    )
+                } catch (e: IOException) {
+                    LicenseResolutionResult.Failure(
+                        reason = sanitizeForDisplay(e.message ?: "خطای اتصال به سرور لایسنس"),
+                        isDefinitiveRejection = false,
+                    )
+                } catch (e: Exception) {
+                    LicenseResolutionResult.Failure(
+                        reason = sanitizeForDisplay(e.message ?: "خطای غیرمنتظره در فعال‌سازی لایسنس"),
+                        isDefinitiveRejection = false,
+                    )
                 }
             }
         }
     }
 
-    private fun defaultClient(): OkHttpClient =
-        OkHttpClient.Builder()
-            .connectTimeout(12, TimeUnit.SECONDS)
-            .readTimeout(15, TimeUnit.SECONDS)
-            .build()
+    fun refreshStatus(
+        licenseKey: String,
+        deviceId: String? = null,
+        remarksHint: String = "NovaPulse",
+        backendBaseUrlOverride: String? = null,
+        client: OkHttpClient? = null,
+        sessionTokenOverride: String? = null,
+    ): LicenseResolutionResult {
+        val baseUrl = resolveBaseUrl(backendBaseUrlOverride)
+        if (baseUrl.isBlank()) return LicenseResolutionResult.BackendEndpointRequired
+
+        val snap = LicenseSessionStore.getSnapshot()
+        val sessionToken = sessionTokenOverride?.takeIf { it.isNotBlank() } ?: snap.sessionToken
+        val devId = deviceId?.takeIf { it.isNotBlank() && it != DeviceIdentityManager.LEGACY_SHARED_ANDROID_ID }
+            ?: runCatching { DeviceIdentityManager.getDeviceId() }.getOrDefault("")
+        val cleanKey = licenseKey.trim().uppercase().ifBlank { snap.licenseKey }
+
+        if (sessionToken.isBlank() && client == null) {
+            return LicenseResolutionResult.Failure(
+                reason = "نشست فعال دستگاه یافت نشد؛ لطفاً دوباره وارد شوید.",
+                isDefinitiveRejection = true,
+                httpCode = 401,
+                statusCode = "session_required",
+            )
+        }
+
+        val http = client ?: defaultClient
+        val reqBodyMap = buildMap<String, Any> {
+            if (cleanKey.isNotBlank()) put("license_key", cleanKey)
+            if (devId.isNotBlank()) put("device_id", devId)
+        }
+        val headers = buildMap {
+            if (sessionToken.isNotBlank()) put("Authorization", "Bearer $sessionToken")
+            if (devId.isNotBlank()) put("X-Device-Id", devId)
+        }
+
+        return try {
+            val (code, bodyStr) = executeHttpJson(
+                client = http,
+                url = "$baseUrl/api/v1/license/status",
+                jsonBody = gson.toJson(reqBodyMap),
+                headers = headers,
+            )
+            val parsed = parseRedeemJson(bodyStr)
+            val statusCode = parsed?.resolvedStatusCode().orEmpty()
+            if (code in 200..299 && parsed != null) {
+                val resolvedUrl = sanitizeSubscriptionUrlForStorage(
+                    parsed.resolvedSubscriptionUrl().ifBlank { "$baseUrl/api/v1/license/sub" },
+                )
+                if (snap.active) {
+                    LicenseSessionStore.touchVerified(
+                        expiresAtSec = parsed.sessionExpiresAt,
+                        subscriptionUrl = resolvedUrl,
+                    )
+                    maybeRefreshSessionTokenInBackground(snap, devId, baseUrl, http)
+                }
+                LicenseResolutionResult.ReadySubscription(
+                    subscriptionUrl = resolvedUrl,
+                    remarks = parsed.resolvedRemarks(remarksHint),
+                    quota = parsed.toQuotaInfo(remarksHint),
+                )
+            } else {
+                val definitive = isDefinitiveAuthRejection(code, statusCode)
+                val msg = sanitizeForDisplay(
+                    parsed?.message
+                        ?: parsed?.detail
+                        ?: when (code) {
+                            429 -> "محدودیت موقت تعداد درخواست‌ها (لطفاً کمی صبر کنید)"
+                            else -> "اعتبار لایسنس یا نشست این دستگاه منقضی یا لغو شده است (کد $code)"
+                        },
+                )
+                LicenseResolutionResult.Failure(
+                    reason = msg,
+                    isDefinitiveRejection = definitive,
+                    httpCode = code,
+                    statusCode = statusCode,
+                )
+            }
+        } catch (e: Exception) {
+            LicenseResolutionResult.Failure(
+                reason = sanitizeForDisplay(e.message ?: "خطای ارتباط با سرور"),
+                isDefinitiveRejection = false,
+            )
+        }
+    }
+
+    private fun maybeRefreshSessionTokenInBackground(
+        snap: LicenseSessionStore.SessionSnapshot,
+        devId: String,
+        baseUrl: String,
+        http: OkHttpClient,
+    ) {
+        val nowSec = System.currentTimeMillis() / 1000L
+        if (snap.lastRefreshedAtSec <= 0L || (nowSec - snap.lastRefreshedAtSec) < SESSION_REFRESH_INTERVAL_SEC) {
+            return
+        }
+        runCatching { refreshSessionToken(devId, baseUrl, http) }
+            .onFailure { LogUtil.w(AppConfig.TAG, "Non-fatal session refresh failure: ${it.message}") }
+    }
+
+    fun refreshSessionToken(
+        deviceId: String? = null,
+        backendBaseUrlOverride: String? = null,
+        client: OkHttpClient? = null,
+    ): Boolean {
+        val baseUrl = resolveBaseUrl(backendBaseUrlOverride)
+        val snap = LicenseSessionStore.getSnapshot()
+        if (baseUrl.isBlank() || !snap.active || snap.sessionToken.isBlank()) return false
+        val devId = deviceId?.takeIf { it.isNotBlank() } ?: DeviceIdentityManager.getDeviceId()
+        val http = client ?: defaultClient
+
+        val chReqJson = gson.toJson(mapOf("device_id" to devId, "purpose" to "refresh"))
+        val (chCode, chBody) = executeHttpJson(
+            client = http,
+            url = "$baseUrl/api/v1/license/challenge",
+            jsonBody = chReqJson,
+            headers = mapOf("X-Device-Id" to devId),
+        )
+        val nonce = if (chCode in 200..299) {
+            runCatching { gson.fromJson(chBody, ChallengeResponsePayload::class.java)?.nonce.orEmpty() }.getOrDefault("")
+        } else {
+            ""
+        }
+        val sig = if (nonce.isNotBlank()) DeviceIdentityManager.signChallenge(nonce, "refresh") else ""
+
+        val reqBodyMap = buildMap<String, Any> {
+            put("device_id", devId)
+            put("app_version", BuildConfig.VERSION_NAME)
+            if (nonce.isNotBlank() && sig.isNotBlank()) {
+                put("challenge_nonce", nonce)
+                put("device_signature", sig)
+            }
+        }
+        val (code, bodyStr) = executeHttpJson(
+            client = http,
+            url = "$baseUrl/api/v1/license/refresh",
+            jsonBody = gson.toJson(reqBodyMap),
+            headers = mapOf(
+                "Authorization" to "Bearer ${snap.sessionToken}",
+                "X-Device-Id" to devId,
+            ),
+        )
+        if (code in 200..299) {
+            val parsed = parseRedeemJson(bodyStr)
+            val nextTok = parsed?.sessionToken?.trim().orEmpty()
+            if (nextTok.isNotBlank()) {
+                LicenseSessionStore.updateRotatedToken(
+                    sessionToken = nextTok,
+                    expiresAtSec = parsed?.sessionExpiresAt ?: 0L,
+                    subscriptionUrl = sanitizeSubscriptionUrlForStorage(parsed?.resolvedSubscriptionUrl()),
+                )
+                return true
+            }
+        }
+        return false
+    }
+
+    fun logoutFromServer(
+        backendBaseUrlOverride: String? = null,
+        client: OkHttpClient? = null,
+    ): LogoutOutcome {
+        val snap = LicenseSessionStore.getSnapshot()
+        if (!snap.active || snap.sessionToken.isBlank()) {
+            return LogoutOutcome.AlreadyInvalid("no_local_session")
+        }
+        val devId = runCatching { DeviceIdentityManager.getDeviceId() }.getOrDefault("")
+        if (devId.isBlank()) {
+            return LogoutOutcome.NetworkFailure("شناسه دستگاه در دسترس نیست.")
+        }
+        return performLogoutCall(snap.sessionToken, devId, backendBaseUrlOverride, client)
+    }
+
+    private fun performLogoutCall(
+        sessionToken: String,
+        deviceId: String,
+        backendBaseUrlOverride: String? = null,
+        client: OkHttpClient? = null,
+    ): LogoutOutcome {
+        val baseUrl = resolveBaseUrl(backendBaseUrlOverride)
+        if (baseUrl.isBlank()) return LogoutOutcome.NetworkFailure("آدرس سرور تنظیم نشده است.")
+        val http = client ?: defaultClient
+        return try {
+            val (code, bodyStr) = executeHttpJson(
+                client = http,
+                url = "$baseUrl/api/v1/license/logout",
+                jsonBody = "{}",
+                headers = mapOf(
+                    "Authorization" to "Bearer $sessionToken",
+                    "X-Device-Id" to deviceId,
+                ),
+            )
+            val parsed = parseRedeemJson(bodyStr)
+            when {
+                code in 200..299 -> LogoutOutcome.Success(parsed?.usedDevices ?: 0)
+                code == 401 || code == 403 || code == 404 ->
+                    LogoutOutcome.AlreadyInvalid(parsed?.resolvedStatusCode().orEmpty())
+
+                else -> LogoutOutcome.NetworkFailure(
+                    sanitizeForDisplay(parsed?.message ?: "عدم پاسخ‌گویی سرور برای خروج (کد $code)"),
+                )
+            }
+        } catch (e: Exception) {
+            LogoutOutcome.NetworkFailure(sanitizeForDisplay(e.message ?: "خطا در اتصال به سرور"))
+        }
+    }
+
+    private fun executeHttpJson(
+        client: OkHttpClient,
+        url: String,
+        jsonBody: String,
+        headers: Map<String, String> = emptyMap(),
+    ): Pair<Int, String> {
+        val builder = Request.Builder()
+            .url(url)
+            .post(jsonBody.toRequestBody(JSON_MEDIA))
+            .header("Accept", "application/json")
+            .header("User-Agent", "NovaPulse/${BuildConfig.VERSION_NAME}")
+        for ((k, v) in headers) {
+            builder.header(k, v)
+        }
+        client.newCall(builder.build()).execute().use { resp ->
+            return resp.code to resp.body?.string().orEmpty()
+        }
+    }
 }

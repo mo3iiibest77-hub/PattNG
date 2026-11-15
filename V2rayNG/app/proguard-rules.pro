@@ -31,6 +31,7 @@
 # Preserve Gson models & TypeTokens used in reflection serialization/deserialization
 -keep class com.v2ray.ang.dto.** { *; }
 -keep class com.v2ray.ang.senpai.LicenseRedeemResponse { *; }
+-keep class com.v2ray.ang.senpai.LicenseBackendClient$ChallengeResponsePayload { *; }
 -keep class com.v2ray.ang.senpai.PersistedProviderRanges { *; }
 -keep class com.v2ray.ang.senpai.SubscriptionQuotaInfo { *; }
 -keepclassmembers class * {

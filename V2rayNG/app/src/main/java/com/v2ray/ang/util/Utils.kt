@@ -369,10 +369,9 @@ object Utils {
      */
     fun getDeviceIdForXUDPBaseKey(): String {
         return try {
-            val androidId = Settings.Secure.ANDROID_ID.toByteArray(Charsets.UTF_8)
-            Base64.encodeToString(androidId.copyOf(32), Base64.NO_PADDING.or(Base64.URL_SAFE))
+            com.v2ray.ang.senpai.DeviceIdentityManager.getXudpBaseKey()
         } catch (e: Exception) {
-            LogUtil.e(AppConfig.TAG, "Failed to generate device ID", e)
+            LogUtil.e(AppConfig.TAG, "Failed to generate device XUDP key", e)
             ""
         }
     }
