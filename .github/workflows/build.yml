@@ -12,6 +12,11 @@ on:
       - master
       - recovery/qsn-ref-stage1
       - feat/qsn-3d-smart-stage1
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '.github/ISSUE_TEMPLATE/**'
+      - 'LICENSE*'
     tags:
       - 'v*'
 
