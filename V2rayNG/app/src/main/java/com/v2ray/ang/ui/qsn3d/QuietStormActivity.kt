@@ -96,6 +96,11 @@ class QuietStormActivity : BaseComponentActivity() {
         perAppViewModel.loadApps(this)
     }
 
+    override fun onResume() {
+        super.onResume()
+        viewModel.verifyLicenseSessionNow(force = false)
+    }
+
     private fun requestNotificationPermissionIfNeeded() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)

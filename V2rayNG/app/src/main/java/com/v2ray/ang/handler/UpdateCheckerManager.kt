@@ -1,6 +1,8 @@
 package com.v2ray.ang.handler
 
+import android.content.Context
 import android.os.Build
+import com.v2ray.ang.AngApplication
 import com.v2ray.ang.AppConfig
 import com.v2ray.ang.BuildConfig
 import com.v2ray.ang.dto.ApkAssetOption
@@ -13,13 +15,51 @@ import com.v2ray.ang.util.JsonUtil
 import com.v2ray.ang.util.LogUtil
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.io.File
+import java.util.zip.ZipFile
 
 object UpdateCheckerManager {
 
     private val KNOWN_ABIS = listOf("arm64-v8a", "armeabi-v7a", "x86_64", "x86", "universal")
+    private val NATIVE_ABIS = setOf("arm64-v8a", "armeabi-v7a", "x86_64", "x86")
 
-    suspend fun checkForUpdate(includePreRelease: Boolean = false): CheckUpdateResult = withContext(Dispatchers.IO) {
+    fun detectInstalledApkAbi(context: Context? = null): String? {
+        val ctx = context ?: runCatching { AngApplication.application }.getOrNull() ?: return null
+        val sourcePath = runCatching { ctx.applicationInfo?.sourceDir }.getOrNull().orEmpty()
+        if (sourcePath.isBlank()) return null
+        val apkFile = File(sourcePath)
+        if (!apkFile.isFile) return null
+        return runCatching {
+            ZipFile(apkFile).use { zip ->
+                val entries = zip.entries()
+                val names = generateSequence { if (entries.hasMoreElements()) entries.nextElement().name else null }
+                detectApkAbiFromLibEntries(names)
+            }
+        }.getOrNull()
+    }
+
+    fun detectApkAbiFromLibEntries(entryNames: Sequence<String>): String? {
+        val foundAbis = linkedSetOf<String>()
+        for (name in entryNames) {
+            if (!name.startsWith("lib/")) continue
+            val abi = name.removePrefix("lib/").substringBefore('/', "")
+            if (abi in NATIVE_ABIS) {
+                foundAbis.add(abi)
+            }
+        }
+        return when {
+            foundAbis.size > 1 -> "universal"
+            foundAbis.size == 1 -> foundAbis.first()
+            else -> null
+        }
+    }
+
+    suspend fun checkForUpdate(
+        includePreRelease: Boolean = false,
+        context: Context? = null,
+    ): CheckUpdateResult = withContext(Dispatchers.IO) {
         val supportedAbis = Build.SUPPORTED_ABIS?.toList().orEmpty()
+        val installedApkAbi = detectInstalledApkAbi(context)
         val serverUrl = buildString {
             append(AppConfig.APP_UPDATE_SERVER_URL)
             if (includePreRelease) append("?prerelease=1")
@@ -46,10 +86,11 @@ object UpdateCheckerManager {
             currentVersionName = BuildConfig.VERSION_NAME,
             currentVersionCode = BuildConfig.VERSION_CODE,
             supportedAbis = supportedAbis,
+            installedApkAbi = installedApkAbi,
         )
         LogUtil.i(
             AppConfig.TAG,
-            "Update check: hasUpdate=${result.hasUpdate}, latest=${result.latestVersion}, abi=${result.recommendedAbi}"
+            "Update check: hasUpdate=${result.hasUpdate}, latest=${result.latestVersion}, installedVariant=$installedApkAbi, recommended=${result.recommendedAbi}"
         )
         result
     }
@@ -96,14 +137,22 @@ object UpdateCheckerManager {
         currentVersionName: String,
         currentVersionCode: Int,
         supportedAbis: List<String>,
+        installedApkAbi: String? = null,
     ): CheckUpdateResult {
         val cleanVersion = normalizeVersion(release.tagName)
         val hasNewer = isNewerRelease(release, currentVersionName, currentVersionCode)
-        val devicePrimaryAbi = supportedAbis.firstOrNull { abi ->
-            KNOWN_ABIS.any { it.equals(abi, ignoreCase = true) }
-        } ?: supportedAbis.firstOrNull().orEmpty().ifBlank { "arm64-v8a" }
+        val installedClean = installedApkAbi?.trim()?.lowercase()?.takeIf { it in KNOWN_ABIS }
+        val devicePrimaryAbi = installedClean
+            ?: supportedAbis.firstOrNull { abi ->
+                KNOWN_ABIS.any { it.equals(abi, ignoreCase = true) }
+            }
+            ?: supportedAbis.firstOrNull().orEmpty().ifBlank { "arm64-v8a" }
 
-        val selectableAssets = buildApkAssetOptions(release.assets, supportedAbis)
+        val selectableAssets = buildApkAssetOptions(
+            assets = release.assets,
+            supportedAbis = supportedAbis,
+            installedApkAbi = installedClean,
+        )
         val universalOption = selectableAssets.firstOrNull { it.isUniversal }
         val recommendedOption = selectableAssets.firstOrNull { it.isDeviceMatch }
             ?: universalOption
@@ -144,21 +193,27 @@ object UpdateCheckerManager {
     fun buildApkAssetOptions(
         assets: List<GitHubRelease.Asset>,
         supportedAbis: List<String>,
+        installedApkAbi: String? = null,
     ): List<ApkAssetOption> {
         val cleanAssets = assets.filter { asset ->
             val lower = asset.name.lowercase()
             lower.endsWith(".apk") && !lower.contains("fdroid")
         }
 
+        val installedNorm = installedApkAbi?.trim()?.lowercase()?.takeIf { it in KNOWN_ABIS }
         val normalizedDeviceAbis = supportedAbis.map { it.lowercase() }
-        val matchedDeviceAbi = normalizedDeviceAbis.firstOrNull { devAbi ->
-            cleanAssets.any { extractAbiTag(it.name).equals(devAbi, ignoreCase = true) }
+        val matchedTargetAbi = if (installedNorm != null && cleanAssets.any { extractAbiTag(it.name).equals(installedNorm, ignoreCase = true) }) {
+            installedNorm
+        } else {
+            normalizedDeviceAbis.firstOrNull { devAbi ->
+                cleanAssets.any { extractAbiTag(it.name).equals(devAbi, ignoreCase = true) }
+            }
         }
 
         return cleanAssets.map { asset ->
             val abiTag = extractAbiTag(asset.name)
             val isUniversal = abiTag.equals("universal", ignoreCase = true)
-            val isMatch = matchedDeviceAbi != null && abiTag.equals(matchedDeviceAbi, ignoreCase = true)
+            val isMatch = matchedTargetAbi != null && abiTag.equals(matchedTargetAbi, ignoreCase = true)
             ApkAssetOption(
                 abi = abiTag,
                 fileName = asset.name,

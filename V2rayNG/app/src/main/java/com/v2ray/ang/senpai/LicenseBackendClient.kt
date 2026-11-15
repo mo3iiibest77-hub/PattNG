@@ -50,7 +50,10 @@ sealed class LicenseResolutionResult {
     ) : LicenseResolutionResult()
 
     data class BackendEndpointRequired(val licenseKey: String) : LicenseResolutionResult()
-    data class Failure(val reason: String) : LicenseResolutionResult()
+    data class Failure(
+        val reason: String,
+        val isDefinitiveRejection: Boolean = false,
+    ) : LicenseResolutionResult()
 }
 
 /**
@@ -176,14 +179,17 @@ object LicenseBackendClient {
         client: OkHttpClient,
     ): LicenseResolutionResult {
         if (AppSecurityGuard.isRuntimeTampered()) {
-            return LicenseResolutionResult.Failure("نسخه اپلیکیشن معتبر نیست یا دستکاری شده است. لطفاً نسخه رسمی را نصب کنید.")
+            return LicenseResolutionResult.Failure(
+                reason = "نسخه اپلیکیشن معتبر نیست یا دستکاری شده است. لطفاً نسخه رسمی را نصب کنید.",
+                isDefinitiveRejection = true,
+            )
         }
         return when (val input = classifyInput(rawInput)) {
             is ActivationInput.Invalid ->
-                LicenseResolutionResult.Failure("کد لایسنس وارد شده نامعتبر است.")
+                LicenseResolutionResult.Failure("کد لایسنس وارد شده نامعتبر است.", isDefinitiveRejection = true)
 
             is ActivationInput.RejectedUrl ->
-                LicenseResolutionResult.Failure(input.reason)
+                LicenseResolutionResult.Failure(input.reason, isDefinitiveRejection = true)
 
             is ActivationInput.LicenseKey -> {
                 val baseUrl = (backendBaseUrlOverride ?: getBackendBaseUrl()).trim().trimEnd('/')
@@ -206,15 +212,17 @@ object LicenseBackendClient {
                         if (!resp.isSuccessful) {
                             val parsedErr = parseRedeemJson(body)?.message
                             return LicenseResolutionResult.Failure(
-                                parsedErr ?: "خطای سرور لایسنس (${resp.code})"
+                                reason = parsedErr ?: "خطای سرور لایسنس (${resp.code})",
+                                isDefinitiveRejection = resp.code in 400..499,
                             )
                         }
                         val parsed = parseRedeemJson(body)
                             ?: return LicenseResolutionResult.Failure("پاسخ سرور لایسنس نامعتبر بود")
                         val subUrl = parsed.resolvedSubscriptionUrl()
                             ?: return LicenseResolutionResult.Failure(
-                                sanitizeForDisplay(parsed.message)
-                                    .ifBlank { "سرویس لایسنس اطلاعات اتصال را برنگرداند." }
+                                reason = sanitizeForDisplay(parsed.message)
+                                    .ifBlank { "سرویس لایسنس اطلاعات اتصال را برنگرداند." },
+                                isDefinitiveRejection = true,
                             )
                         val resolvedKey = parsed.licenseKey?.takeIf { it.isNotBlank() } ?: input.key
                         setSavedLicenseKey(resolvedKey)

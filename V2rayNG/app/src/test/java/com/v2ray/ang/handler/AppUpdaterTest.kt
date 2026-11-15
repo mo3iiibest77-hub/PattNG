@@ -127,4 +127,60 @@ class AppUpdaterTest {
             dir.deleteRecursively()
         }
     }
+
+    @Test
+    fun `detects universal vs single-abi installed apk and selects matching update variant`() {
+        val universalVariant = UpdateCheckerManager.detectApkAbiFromLibEntries(
+            sequenceOf(
+                "AndroidManifest.xml",
+                "classes.dex",
+                "lib/arm64-v8a/libtun2socks.so",
+                "lib/armeabi-v7a/libtun2socks.so",
+                "lib/x86_64/libtun2socks.so",
+            )
+        )
+        assertEquals("universal", universalVariant)
+
+        val arm64Variant = UpdateCheckerManager.detectApkAbiFromLibEntries(
+            sequenceOf(
+                "AndroidManifest.xml",
+                "classes.dex",
+                "lib/arm64-v8a/libtun2socks.so",
+                "lib/arm64-v8a/libmmkv.so",
+            )
+        )
+        assertEquals("arm64-v8a", arm64Variant)
+
+        // When Universal APK is installed on an arm64-v8a device, updater MUST recommend universal!
+        val universalResult = UpdateCheckerManager.evaluateReleaseUpdate(
+            release = sampleRelease(),
+            currentVersionName = "2.4.1",
+            currentVersionCode = 4000749,
+            supportedAbis = listOf("arm64-v8a", "armeabi-v7a"),
+            installedApkAbi = universalVariant,
+        )
+        assertTrue(universalResult.hasUpdate)
+        assertEquals("universal", universalResult.recommendedAbi)
+        assertEquals(
+            "https://nova.dontbedumb.ir/api/v1/license/app-update/files/NovaPulse_2.5.0_universal.apk",
+            universalResult.downloadUrl
+        )
+        assertTrue(universalResult.availableAssets.first().isUniversal)
+        assertTrue(universalResult.availableAssets.first().isDeviceMatch)
+
+        // When arm64-v8a split APK is installed on the same device, updater MUST recommend arm64-v8a!
+        val arm64Result = UpdateCheckerManager.evaluateReleaseUpdate(
+            release = sampleRelease(),
+            currentVersionName = "2.4.1",
+            currentVersionCode = 4000749,
+            supportedAbis = listOf("arm64-v8a", "armeabi-v7a"),
+            installedApkAbi = arm64Variant,
+        )
+        assertTrue(arm64Result.hasUpdate)
+        assertEquals("arm64-v8a", arm64Result.recommendedAbi)
+        assertEquals(
+            "https://nova.dontbedumb.ir/api/v1/license/app-update/files/NovaPulse_2.5.0_arm64-v8a.apk",
+            arm64Result.downloadUrl
+        )
+    }
 }

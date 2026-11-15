@@ -762,6 +762,7 @@
     <string name="novapulse_logout_confirm_title">Log out current license?</string>
     <string name="novapulse_logout_confirm_body">Logging out stops the active VPN connection and removes the bound license session, servers, and cached quota from this device.</string>
     <string name="novapulse_logout_success">VPN stopped and license logged out cleanly.</string>
+    <string name="novapulse_license_force_revoked">Your license key was rotated or revoked on the server. VPN disconnected.</string>
     <string name="novapulse_logout_stop_failed">Could not confirm VPN tunnel stopped yet. Please disconnect VPN first and try again.</string>
     <string name="novapulse_speed_display_label">Live Speed Monitor</string>
     <string name="novapulse_speed_display_desc">Show live upload/download speed in dashboard and VPN notification.</string>

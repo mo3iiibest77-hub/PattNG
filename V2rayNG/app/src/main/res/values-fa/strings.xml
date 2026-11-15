@@ -762,6 +762,7 @@
     <string name="novapulse_logout_confirm_title">خروج از لایسنس فعلی؟</string>
     <string name="novapulse_logout_confirm_body">با خروج از لایسنس، اتصال VPN قطع می‌شه و سرورها و اطلاعات اشتراک فعلی از گوشی پاک می‌شن تا بتونی کد لایسنس جدید وارد کنی.</string>
     <string name="novapulse_logout_success">اتصال قطع شد و با موفقیت از لایسنس خارج شدی.</string>
+    <string name="novapulse_license_force_revoked">کد لایسنس شما در سرور تغییر یافت یا مسدود شد؛ اتصال بلافاصله قطع گردید.</string>
     <string name="novapulse_logout_stop_failed">توقف کامل تونل VPN زمان‌بر شد و خروج انجام نشد. اول اتصال رو قطع کن و دوباره بزن.</string>
     <string name="novapulse_speed_display_label">نمایش سرعت لحظه‌ای</string>
     <string name="novapulse_speed_display_desc">سرعت دانلود و آپلود هم تو داشبورد و هم تو نوتیفیکیشن VPN نمایش داده بشه.</string>

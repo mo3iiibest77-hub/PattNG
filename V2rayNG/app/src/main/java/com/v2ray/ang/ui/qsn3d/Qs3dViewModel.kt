@@ -35,6 +35,7 @@ import com.v2ray.ang.senpai.CdnType
 import com.v2ray.ang.senpai.CloudFrontScanner
 import com.v2ray.ang.senpai.CloudflareScanner
 import com.v2ray.ang.senpai.LicenseBackendClient
+import com.v2ray.ang.senpai.LicenseResolutionResult
 import com.v2ray.ang.senpai.OriginDomainStore
 import com.v2ray.ang.senpai.PostConnectDiscoveryRunner
 import com.v2ray.ang.senpai.PostConnectDiscoveryState
@@ -48,13 +49,16 @@ import com.v2ray.ang.senpai.SubscriptionQuotaStore
 import com.v2ray.ang.ui.main.MainDataSource
 import com.v2ray.ang.ui.main.MainRepository
 import com.v2ray.ang.ui.main.MainServiceEvent
+import com.v2ray.ang.util.Utils
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 
@@ -158,6 +162,11 @@ class Qs3dViewModel(
     private var backgroundClassifyLaunched = false
     @Volatile
     private var autoCountryProbeDoneForSession = false
+    @Volatile
+    private var lastLicenseVerifyMs = 0L
+    @Volatile
+    private var forceRevokingLicense = false
+    private var licenseWatchdogJob: Job? = null
 
     init {
         viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
@@ -166,6 +175,7 @@ class Qs3dViewModel(
         collectServiceEvents()
         collectCoordinatorFlows()
         refreshAllData(fetchRemoteQuota = true)
+        verifyLicenseSessionNow(force = true)
         viewModelScope.launch(Dispatchers.IO) {
             delay(1500L)
             checkForAppUpdates(silent = true)
@@ -180,6 +190,7 @@ class Qs3dViewModel(
                         _uiState.update { it.copy(coreRunning = true) }
                         SmartConnectCoordinator.notifyVpnConnected(getApplication(), MmkvManager.getSelectServer())
                         scheduleAutoCountryPing()
+                        startLicenseWatchdog()
                     }
 
                     MainServiceEvent.StateStartSuccess -> {
@@ -193,11 +204,14 @@ class Qs3dViewModel(
                         SmartConnectCoordinator.notifyVpnConnected(getApplication(), MmkvManager.getSelectServer())
                         loadConfigsAndSubs()
                         scheduleAutoCountryPing()
+                        startLicenseWatchdog()
                     }
 
                     MainServiceEvent.StateNotRunning,
                     MainServiceEvent.StateStopSuccess -> {
                         autoCountryProbeDoneForSession = false
+                        licenseWatchdogJob?.cancel()
+                        licenseWatchdogJob = null
                         _uiState.update {
                             it.copy(
                                 coreRunning = false,
@@ -523,93 +537,172 @@ class Qs3dViewModel(
         }
     }
 
+    fun verifyLicenseSessionNow(force: Boolean = false) {
+        val now = System.currentTimeMillis()
+        if (!force && (now - lastLicenseVerifyMs) < 5_000L) return
+        val savedKey = LicenseBackendClient.getSavedLicenseKey()
+        if (savedKey.isBlank()) return
+        lastLicenseVerifyMs = now
+        val ctx = getApplication<Application>()
+        viewModelScope.launch(Dispatchers.IO) {
+            val deviceId = runCatching { Utils.getDeviceIdForXUDPBaseKey() }.getOrDefault("")
+            if (deviceId.isBlank()) return@launch
+            val res = LicenseBackendClient.refreshStatus(
+                licenseKey = savedKey,
+                deviceId = deviceId,
+            )
+            when (res) {
+                is LicenseResolutionResult.Failure -> {
+                    if (res.isDefinitiveRejection) {
+                        val msg = res.reason.ifBlank {
+                            ctx.getString(R.string.novapulse_license_force_revoked)
+                        }
+                        forceDisconnectRevokedLicense(msg)
+                    }
+                }
+                is LicenseResolutionResult.ReadySubscription -> {
+                    res.quota?.let { q ->
+                        val activeSubId = LicenseBackendClient.getActiveLicenseSubId()
+                        if (activeSubId.isNotBlank()) {
+                            SubscriptionQuotaStore.save(activeSubId, q)
+                        }
+                    }
+                }
+                else -> Unit
+            }
+        }
+    }
+
+    private fun startLicenseWatchdog() {
+        if (licenseWatchdogJob?.isActive == true) return
+        licenseWatchdogJob = viewModelScope.launch(Dispatchers.IO) {
+            while (isActive) {
+                verifyLicenseSessionNow(force = true)
+                delay(20_000L)
+            }
+        }
+    }
+
+    private suspend fun forceDisconnectRevokedLicense(message: String) {
+        if (forceRevokingLicense) return
+        forceRevokingLicense = true
+        try {
+            licenseWatchdogJob?.cancel()
+            licenseWatchdogJob = null
+            stopAndWipeLicenseSession(
+                ctx = getApplication(),
+                resultMessage = message,
+                abortIfStopFails = false,
+            )
+        } finally {
+            forceRevokingLicense = false
+        }
+    }
+
     fun logoutLicense() {
         if (_uiState.value.isLoggingOut) return
         val ctx = getApplication<Application>()
         _uiState.update { it.copy(isLoggingOut = true) }
 
         viewModelScope.launch(Dispatchers.IO) {
-            val stopSucceeded = LicenseLogoutOrchestrator.stopRuntimeAndConfirm(
-                isCoreRunning = { _uiState.value.coreRunning || isSystemVpnInterfaceActive(ctx) },
-                cancelBackgroundWork = {
-                    SmartConnectCoordinator.cancelActiveFlow()
-                    PostConnectDiscoveryRunner.cancel()
-                    CloudflareScanner.cancel()
-                    CloudFrontScanner.cancel()
-                    SmartOptimizeWorker.cancel(ctx)
-                    dataSource.cancelAllPing()
-                },
-                requestStopVpn = { LauncherManager.stopService(ctx) },
-                awaitStopEvent = { timeoutMs ->
-                    withTimeoutOrNull(timeoutMs) {
-                        dataSource.mainServiceEvent.first {
-                            it is MainServiceEvent.StateStopSuccess || it is MainServiceEvent.StateNotRunning
-                        }
-                    } != null
-                }
+            stopAndWipeLicenseSession(
+                ctx = ctx,
+                resultMessage = ctx.getString(R.string.novapulse_logout_success),
+                abortIfStopFails = true,
             )
+        }
+    }
 
-            if (!stopSucceeded) {
-                _uiState.update {
-                    it.copy(
-                        isLoggingOut = false,
-                        toastMessage = ctx.getString(R.string.novapulse_logout_stop_failed)
-                    )
-                }
-                return@launch
+    private suspend fun stopAndWipeLicenseSession(
+        ctx: Application,
+        resultMessage: String,
+        abortIfStopFails: Boolean,
+    ): Boolean {
+        val stopSucceeded = LicenseLogoutOrchestrator.stopRuntimeAndConfirm(
+            isCoreRunning = { _uiState.value.coreRunning || isSystemVpnInterfaceActive(ctx) },
+            cancelBackgroundWork = {
+                SmartConnectCoordinator.cancelActiveFlow()
+                PostConnectDiscoveryRunner.cancel()
+                CloudflareScanner.cancel()
+                CloudFrontScanner.cancel()
+                SmartOptimizeWorker.cancel(ctx)
+                dataSource.cancelAllPing()
+            },
+            requestStopVpn = { LauncherManager.stopService(ctx) },
+            awaitStopEvent = { timeoutMs ->
+                withTimeoutOrNull(timeoutMs) {
+                    dataSource.mainServiceEvent.first {
+                        it is MainServiceEvent.StateStopSuccess || it is MainServiceEvent.StateNotRunning
+                    }
+                } != null
             }
+        )
 
-            LicenseLogoutOrchestrator.wipeBoundLicenseData(
-                object : LicenseLogoutStorage {
-                    override fun getActiveLicenseSubId(): String = LicenseBackendClient.getActiveLicenseSubId()
-                    override fun getAllSubscriptionIds(): List<String> =
-                        MmkvManager.decodeSubscriptions().map { it.guid }
-                    override fun removeSubscription(subId: String) {
-                        MmkvManager.removeSubscription(subId)
-                    }
-                    override fun removeServersWithoutSubIfNeeded(boundSubIds: Set<String>) {
-                        val selected = MmkvManager.getSelectServer()
-                        for (guid in MmkvManager.decodeAllServerList()) {
-                            val item = MmkvManager.decodeServerConfig(guid) ?: continue
-                            if (item.subscriptionId in boundSubIds || boundSubIds.isEmpty()) {
-                                MmkvManager.removeServer(guid)
-                                if (guid == selected) {
-                                    MmkvManager.setSelectServer("")
-                                }
-                            }
-                        }
-                    }
-                    override fun clearQuota(subId: String) = SubscriptionQuotaStore.clear(subId)
-                    override fun clearSelectedServer() = MmkvManager.setSelectServer("")
-                    override fun clearExplicitSelection() = SmartConnectCoordinator.markExplicitServerSelected(false)
-                    override fun clearActiveLicenseSession() = LicenseBackendClient.clearActiveLicenseSession()
-                }
-            )
-
-            autoCountryProbeDoneForSession = false
+        if (abortIfStopFails && !stopSucceeded) {
             _uiState.update {
                 it.copy(
                     isLoggingOut = false,
-                    hasActiveLicense = false,
-                    coreRunning = false,
-                    configs = emptyList(),
-                    subscriptions = emptyList(),
-                    selectedGuid = null,
-                    bulkSelectedGuids = emptySet(),
-                    activationInput = "",
-                    connectedLatencyMs = null,
-                    connectedCountry = "",
-                    connectedTestMessage = null,
-                    liveDownloadBps = 0L,
-                    liveUploadBps = 0L,
-                    lastCdnDetection = null,
-                    showSubscriptionDetails = false,
-                    showRangeExplorer = false,
-                    showAboutPromo = false,
-                    toastMessage = ctx.getString(R.string.novapulse_logout_success),
+                    toastMessage = ctx.getString(R.string.novapulse_logout_stop_failed)
                 )
             }
+            return false
         }
+
+        if (!stopSucceeded) {
+            runCatching { LauncherManager.stopService(ctx) }
+        }
+
+        LicenseLogoutOrchestrator.wipeBoundLicenseData(
+            object : LicenseLogoutStorage {
+                override fun getActiveLicenseSubId(): String = LicenseBackendClient.getActiveLicenseSubId()
+                override fun getAllSubscriptionIds(): List<String> =
+                    MmkvManager.decodeSubscriptions().map { it.guid }
+                override fun removeSubscription(subId: String) {
+                    MmkvManager.removeSubscription(subId)
+                }
+                override fun removeServersWithoutSubIfNeeded(boundSubIds: Set<String>) {
+                    val selected = MmkvManager.getSelectServer()
+                    for (guid in MmkvManager.decodeAllServerList()) {
+                        val item = MmkvManager.decodeServerConfig(guid) ?: continue
+                        if (item.subscriptionId in boundSubIds || boundSubIds.isEmpty()) {
+                            MmkvManager.removeServer(guid)
+                            if (guid == selected) {
+                                MmkvManager.setSelectServer("")
+                            }
+                        }
+                    }
+                }
+                override fun clearQuota(subId: String) = SubscriptionQuotaStore.clear(subId)
+                override fun clearSelectedServer() = MmkvManager.setSelectServer("")
+                override fun clearExplicitSelection() = SmartConnectCoordinator.markExplicitServerSelected(false)
+                override fun clearActiveLicenseSession() = LicenseBackendClient.clearActiveLicenseSession()
+            }
+        )
+
+        autoCountryProbeDoneForSession = false
+        _uiState.update {
+            it.copy(
+                isLoggingOut = false,
+                hasActiveLicense = false,
+                coreRunning = false,
+                configs = emptyList(),
+                subscriptions = emptyList(),
+                selectedGuid = null,
+                bulkSelectedGuids = emptySet(),
+                activationInput = "",
+                connectedLatencyMs = null,
+                connectedCountry = "",
+                connectedTestMessage = null,
+                liveDownloadBps = 0L,
+                liveUploadBps = 0L,
+                lastCdnDetection = null,
+                showSubscriptionDetails = false,
+                showRangeExplorer = false,
+                showAboutPromo = false,
+                toastMessage = resultMessage,
+            )
+        }
+        return true
     }
 
     private fun isSystemVpnInterfaceActive(context: Context): Boolean = runCatching {
@@ -841,7 +934,7 @@ class Qs3dViewModel(
         viewModelScope.launch(Dispatchers.IO) {
             _uiState.update { it.copy(isCheckingUpdate = true) }
             try {
-                val res = UpdateCheckerManager.checkForUpdate(includePreRelease = false)
+                val res = UpdateCheckerManager.checkForUpdate(includePreRelease = false, context = app)
                 if (res.hasUpdate) {
                     _uiState.update {
                         it.copy(

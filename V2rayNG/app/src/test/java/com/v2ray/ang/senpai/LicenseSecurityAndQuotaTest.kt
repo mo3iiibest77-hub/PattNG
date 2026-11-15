@@ -5,11 +5,17 @@ import com.v2ray.ang.ui.qsn3d.LicenseLogoutStorage
 import com.v2ray.ang.ui.qsn3d.Qs3dUiState
 import com.v2ray.ang.ui.qsn3d.SupportLinks
 import kotlinx.coroutines.runBlocking
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Protocol
+import okhttp3.Response
+import okhttp3.ResponseBody.Companion.toResponseBody
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.IOException
 
 class LicenseSecurityAndQuotaTest {
 
@@ -156,5 +162,40 @@ class LicenseSecurityAndQuotaTest {
         assertEquals("Mo3i_Best", SupportLinks.TELEGRAM_USERNAME)
         assertEquals("tg://resolve?domain=Mo3i_Best", SupportLinks.telegramDeepLink)
         assertEquals("https://t.me/Mo3i_Best", SupportLinks.telegramWebUrl)
+    }
+
+    @Test
+    fun refreshStatus_distinguishesDefinitiveRejectionFromTransientError() {
+        val revokedClient = OkHttpClient.Builder().addInterceptor { chain ->
+            Response.Builder()
+                .request(chain.request())
+                .protocol(Protocol.HTTP_1_1)
+                .code(403)
+                .message("Forbidden")
+                .body("""{"message":"این دستگاه برای این لایسنس فعال نشده است."}""".toResponseBody("application/json".toMediaType()))
+                .build()
+        }.build()
+
+        val revokedRes = LicenseBackendClient.refreshStatus(
+            licenseKey = "NP-AAAA-BBBB-CCCC",
+            deviceId = "dev-123",
+            backendBaseUrlOverride = "https://127.0.0.1:4150",
+            client = revokedClient,
+        )
+        assertTrue(revokedRes is LicenseResolutionResult.Failure)
+        assertTrue((revokedRes as LicenseResolutionResult.Failure).isDefinitiveRejection)
+
+        val transientClient = OkHttpClient.Builder().addInterceptor { _ ->
+            throw IOException("Network timeout")
+        }.build()
+
+        val transientRes = LicenseBackendClient.refreshStatus(
+            licenseKey = "NP-AAAA-BBBB-CCCC",
+            deviceId = "dev-123",
+            backendBaseUrlOverride = "https://127.0.0.1:4150",
+            client = transientClient,
+        )
+        assertTrue(transientRes is LicenseResolutionResult.Failure)
+        assertFalse((transientRes as LicenseResolutionResult.Failure).isDefinitiveRejection)
     }
 }
