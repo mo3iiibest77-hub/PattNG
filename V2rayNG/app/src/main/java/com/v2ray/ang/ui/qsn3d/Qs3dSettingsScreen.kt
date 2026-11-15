@@ -1,5 +1,6 @@
 package com.v2ray.ang.ui.qsn3d
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -9,6 +10,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -29,6 +32,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -60,33 +64,65 @@ fun Qs3dSettingsScreen(
     onRedeemNewLicense: (String) -> Unit,
     onScanLicenseQr: () -> Unit,
     onOpenMySubscription: () -> Unit,
+    onOpenAboutPromo: () -> Unit,
     onLogoutLicense: () -> Unit,
 ) {
     var showChangeLicenseDialog by remember { mutableStateOf(false) }
+    var showLogoutConfirmDialog by remember { mutableStateOf(false) }
     var licenseDraft by remember { mutableStateOf("") }
     var appQuery by remember { mutableStateOf("") }
+
+    val activeSub = state.subscriptions.firstOrNull { it.enabled } ?: state.subscriptions.firstOrNull()
+    val quota = activeSub?.quota
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        // 1. Account & License Management Card
+        // 1. Account & License Management Card (Privacy-hardened: NEVER displays the license code)
         item {
-            Glass3dCard(glowColor = QsColors.PlasmaViolet.copy(alpha = 0.40f)) {
-                Text(
-                    text = stringResource(R.string.novapulse_license_section_title),
-                    color = QsColors.TextPrimary,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 15.sp
-                )
+            Glass3dCard(beamSeed = 3, glowColor = QsColors.PlasmaViolet.copy(alpha = 0.40f)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = stringResource(R.string.novapulse_license_section_title),
+                        color = QsColors.TextPrimary,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 15.sp
+                    )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(QsColors.ConnectedEmerald.copy(alpha = 0.16f))
+                            .padding(horizontal = 10.dp, vertical = 4.dp)
+                    ) {
+                        StatusDot(active = state.hasActiveLicense)
+                        Text(
+                            text = stringResource(R.string.novapulse_license_active_status),
+                            color = QsColors.ConnectedEmerald,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
                 Spacer(Modifier.height(6.dp))
-                val maskedKey = state.savedLicenseKey.takeIf { it.isNotEmpty() } ?: "—"
+                val quotaSummary = when {
+                    quota?.remainingBytes != null -> stringResource(
+                        R.string.novapulse_settings_quota_summary_fmt,
+                        formatGbCompact(quota.remainingBytes!!)
+                    )
+                    quota != null && quota.totalBytes <= 0L -> stringResource(R.string.novapulse_unlimited)
+                    else -> activeSub?.remarks ?: stringResource(R.string.novapulse_sub_default_title)
+                }
                 Text(
-                    text = "${stringResource(R.string.novapulse_current_license_label)}: $maskedKey",
-                    color = QsColors.AuroraMint,
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.SemiBold
+                    text = quotaSummary,
+                    color = QsColors.TextSecondary,
+                    fontSize = 12.sp
                 )
                 Spacer(Modifier.height(10.dp))
                 Row(
@@ -115,18 +151,58 @@ fun Qs3dSettingsScreen(
                 ) {
                     OutlinedButton(
                         onClick = onScanLicenseQr,
+                        enabled = !state.isLoggingOut,
                         modifier = Modifier.weight(1f),
                         shape = RoundedCornerShape(12.dp)
                     ) {
                         Text(stringResource(R.string.novapulse_license_scan_qr))
                     }
                     OutlinedButton(
-                        onClick = onLogoutLicense,
+                        onClick = { showLogoutConfirmDialog = true },
+                        enabled = !state.isLoggingOut,
                         modifier = Modifier.weight(1f),
                         shape = RoundedCornerShape(12.dp)
                     ) {
+                        if (state.isLoggingOut) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(16.dp),
+                                strokeWidth = 2.dp,
+                                color = QsColors.DangerCrimson
+                            )
+                            Spacer(Modifier.width(6.dp))
+                        }
                         Text(stringResource(R.string.novapulse_logout_license_btn), color = QsColors.DangerCrimson)
                     }
+                }
+            }
+        }
+
+        // 1.5 Standalone Promo, Guide & Support Telegram Entry Card
+        item {
+            Glass3dCard(beamSeed = 17, glowColor = QsColors.AuroraMint.copy(alpha = 0.40f)) {
+                Text(
+                    text = stringResource(R.string.novapulse_promo_card_title),
+                    color = QsColors.TextPrimary,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 15.sp
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    text = stringResource(R.string.novapulse_promo_card_desc),
+                    color = QsColors.TextSecondary,
+                    fontSize = 12.sp
+                )
+                Spacer(Modifier.height(10.dp))
+                OutlinedButton(
+                    onClick = onOpenAboutPromo,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Text(
+                        text = stringResource(R.string.novapulse_open_promo_guide_btn),
+                        color = QsColors.AuroraMint,
+                        fontWeight = FontWeight.SemiBold
+                    )
                 }
             }
         }
@@ -285,6 +361,27 @@ fun Qs3dSettingsScreen(
             },
             dismissButton = {
                 TextButton(onClick = { showChangeLicenseDialog = false }) {
+                    Text(stringResource(R.string.action_cancel))
+                }
+            }
+        )
+    }
+
+    if (showLogoutConfirmDialog) {
+        AlertDialog(
+            onDismissRequest = { showLogoutConfirmDialog = false },
+            title = { Text(stringResource(R.string.novapulse_logout_confirm_title)) },
+            text = { Text(stringResource(R.string.novapulse_logout_confirm_body)) },
+            confirmButton = {
+                Button(onClick = {
+                    showLogoutConfirmDialog = false
+                    onLogoutLicense()
+                }) {
+                    Text(stringResource(R.string.novapulse_logout_license_btn))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showLogoutConfirmDialog = false }) {
                     Text(stringResource(R.string.action_cancel))
                 }
             }

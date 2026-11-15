@@ -10,13 +10,13 @@ enum class NotificationChannelType(
     val notificationId: Int
 ) {
     SUBSCRIPTION_UPDATE(
-        channelId = "subscription_update_channel",
-        channelName = "Subscription Update Service",
+        channelId = "novapulse_sync_channel",
+        channelName = "NovaPulse Sync",
         notificationId = 13
     ),
     CORE_TEST(
-        channelId = "core_test_channel",
-        channelName = "Core Test Service",
+        channelId = "novapulse_latency_channel",
+        channelName = "NovaPulse Latency Check",
         notificationId = 12
     )
 }

@@ -44,15 +44,19 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.RoundRect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathMeasure
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -147,8 +151,6 @@ fun Cosmic3dBackdrop(
     modifier: Modifier = Modifier,
     isConnected: Boolean = false,
     @DrawableRes backgroundImageRes: Int? = null,
-    connectedCountryCode: String = "",
-    showCountryFlag: Boolean = false,
 ) {
     val motionActive = rememberMotionActive()
     val spin: Float
@@ -241,8 +243,6 @@ fun Cosmic3dBackdrop(
         }
     }
 
-    val flagActive = showCountryFlag && connectedCountryCode.isNotBlank()
-
     Box(
         modifier = modifier
             .fillMaxSize()
@@ -267,19 +267,9 @@ fun Cosmic3dBackdrop(
                             translationX = 10f * sin(spin * 0.5f)
                             translationY = 8f * cos(spin * 0.4f)
                         }
-                        .alpha(if (flagActive && isConnected) 0.32f else 0.78f)
+                        .alpha(0.78f)
                 )
             }
-        }
-
-        if (flagActive) {
-            WindscribeCountryFlagBackdrop(
-                countryCode = connectedCountryCode,
-                motionActive = motionActive,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .alpha(if (isConnected) 0.72f else 0.26f)
-            )
         }
 
         // Subtle atmospheric contrast vignette so transparent cards stay crisp and legible
@@ -416,31 +406,40 @@ private fun absSin(rad: Float): Float {
 }
 
 /**
- * Mirror-transparent Liquid Glass card with subtle specular reflection and a slow,
- * continuous multi-color rotating neon perimeter light halo.
+ * Mirror-transparent Liquid Glass card with subtle specular reflection and a stationary
+ * rounded-rectangle perimeter light beam traveling cleanly along the card frame (never spinning).
  */
 @Composable
 fun Glass3dCard(
     modifier: Modifier = Modifier,
     cornerRadius: Dp = 22.dp,
     glowColor: Color = QsColors.ElectricCyan.copy(alpha = 0.36f),
+    beamSeed: Int = 0,
     onClick: (() -> Unit)? = null,
+    backdropContent: (@Composable BoxScope.() -> Unit)? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val density = LocalDensity.current.density
     val motionActive = rememberMotionActive()
-    val borderAngle = if (motionActive) {
-        rememberInfiniteTransition(label = "card_halo_spin").animateFloat(
+    val seedVal = remember(glowColor, beamSeed) {
+        kotlin.math.abs(glowColor.value.toInt() xor (beamSeed * 2654435761L).toInt())
+    }
+    val initialPhase = remember(seedVal) { (seedVal % 100) / 100f }
+    val clockwise = remember(seedVal) { (seedVal % 2) == 0 }
+    val durationMs = remember(seedVal) { 5200 + (seedVal % 4) * 950 }
+
+    val beamPhase = if (motionActive) {
+        rememberInfiniteTransition(label = "card_beam_flow").animateFloat(
             initialValue = 0f,
-            targetValue = 360f,
+            targetValue = 1f,
             animationSpec = infiniteRepeatable(
-                animation = tween(durationMillis = 9000, easing = LinearEasing),
+                animation = tween(durationMillis = durationMs, easing = LinearEasing),
                 repeatMode = RepeatMode.Restart
             ),
-            label = "card_halo_angle"
+            label = "card_beam_phase"
         ).value
     } else {
-        45f
+        0.18f
     }
 
     val interaction = remember { MutableInteractionSource() }
@@ -464,8 +463,24 @@ fun Glass3dCard(
         )
     } else Modifier
 
-    val leadColor = glowColor.copy(alpha = 0.95f)
+    val leadColor = glowColor.copy(alpha = 0.96f)
+    val palettePairs = remember {
+        listOf(
+            QsColors.ElectricCyan to QsColors.PlasmaViolet,
+            QsColors.AuroraMint to QsColors.ElectricCyan,
+            QsColors.PlasmaViolet to QsColors.NeonRose,
+            QsColors.ConnectedEmerald to QsColors.ElectricCyan,
+            QsColors.CloudFrontSky to QsColors.AuroraMint,
+        )
+    }
+    val pair = palettePairs[seedVal % palettePairs.size]
+    val beamPrimary = if (beamSeed == 0) leadColor else pair.first.copy(alpha = 0.95f)
+    val beamSecondary = pair.second.copy(alpha = 0.92f)
     val shape = RoundedCornerShape(cornerRadius)
+    val perimeterPath = remember { Path() }
+    val beamSegmentPath = remember { Path() }
+    val coreSegmentPath = remember { Path() }
+    val pathMeasure = remember { PathMeasure() }
 
     Surface(
         modifier = modifier
@@ -477,30 +492,65 @@ fun Glass3dCard(
             }
             .drawWithContent {
                 drawContent()
-                val cr = CornerRadius(cornerRadius.toPx(), cornerRadius.toPx())
-                val haloColors = listOf(
-                    leadColor,
-                    QsColors.PlasmaViolet.copy(alpha = 0.88f),
-                    QsColors.NeonRose.copy(alpha = 0.78f),
-                    QsColors.ElectricCyan.copy(alpha = 0.85f),
-                    QsColors.ConnectedEmerald.copy(alpha = 0.70f),
-                    leadColor,
-                )
-                rotate(degrees = borderAngle, pivot = center) {
-                    val brush = Brush.sweepGradient(colors = haloColors, center = center)
-                    // Soft ambient neon bloom
-                    drawRoundRect(
-                        brush = brush,
-                        cornerRadius = cr,
-                        alpha = 0.28f,
-                        style = Stroke(width = 3.2.dp.toPx(), join = StrokeJoin.Round)
+                val crPx = cornerRadius.toPx().coerceAtMost(size.minDimension * 0.48f)
+                val inset = 0.9.dp.toPx()
+                val w = (size.width - inset * 2f).coerceAtLeast(2f)
+                val h = (size.height - inset * 2f).coerceAtLeast(2f)
+                perimeterPath.reset()
+                perimeterPath.addRoundRect(
+                    RoundRect(
+                        rect = Rect(inset, inset, inset + w, inset + h),
+                        cornerRadius = CornerRadius(crPx, crPx)
                     )
-                    // Sharp luminous mirror edge trace
-                    drawRoundRect(
-                        brush = brush,
-                        cornerRadius = cr,
-                        alpha = 0.88f,
-                        style = Stroke(width = 1.35.dp.toPx(), join = StrokeJoin.Round)
+                )
+                pathMeasure.setPath(perimeterPath, forceClosed = true)
+                val totalLen = pathMeasure.length
+                if (totalLen > 4f) {
+                    val progress = ((beamPhase + initialPhase) % 1f).let { if (clockwise) it else 1f - it }
+                    val beamFraction = 0.24f
+                    val coreFraction = 0.08f
+                    val startDist = progress * totalLen
+                    val endDist = startDist + totalLen * beamFraction
+
+                    beamSegmentPath.reset()
+                    extractWrappedSegment(pathMeasure, totalLen, startDist, endDist, beamSegmentPath)
+
+                    val coreStartDist = startDist + totalLen * (beamFraction - coreFraction)
+                    coreSegmentPath.reset()
+                    extractWrappedSegment(pathMeasure, totalLen, coreStartDist, endDist, coreSegmentPath)
+
+                    val tangentOffset = pathMeasure.getPosition(endDist % totalLen)
+                    val tailOffset = pathMeasure.getPosition(startDist % totalLen)
+                    val beamBrush = Brush.linearGradient(
+                        colors = listOf(
+                            Color.Transparent,
+                            beamSecondary.copy(alpha = 0.55f),
+                            beamPrimary,
+                            Color.White.copy(alpha = 0.95f),
+                        ),
+                        start = tailOffset,
+                        end = tangentOffset
+                    )
+
+                    // 1. Soft outer halo along the stationary rounded card perimeter
+                    drawPath(
+                        path = beamSegmentPath,
+                        brush = beamBrush,
+                        alpha = 0.34f,
+                        style = Stroke(width = 4.6.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
+                    )
+                    // 2. Vibrant main neon perimeter laser
+                    drawPath(
+                        path = beamSegmentPath,
+                        brush = beamBrush,
+                        alpha = 0.92f,
+                        style = Stroke(width = 1.9.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
+                    )
+                    // 3. Bright crisp core trace at the leading edge
+                    drawPath(
+                        path = coreSegmentPath,
+                        color = Color.White.copy(alpha = 0.92f),
+                        style = Stroke(width = 1.05.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
                     )
                 }
             }
@@ -512,9 +562,9 @@ fun Glass3dCard(
             width = 0.65.dp,
             brush = Brush.verticalGradient(
                 colors = listOf(
-                    Color.White.copy(alpha = 0.34f),
+                    Color.White.copy(alpha = 0.32f),
                     Color.White.copy(alpha = 0.08f),
-                    leadColor.copy(alpha = 0.28f),
+                    beamPrimary.copy(alpha = 0.24f),
                 )
             )
         )
@@ -532,6 +582,9 @@ fun Glass3dCard(
                     )
                 )
         ) {
+            if (backdropContent != null) {
+                backdropContent()
+            }
             // Mirror top-left specular sheen so the surface feels like reflective frosted crystal
             Box(
                 modifier = Modifier
@@ -555,6 +608,25 @@ fun Glass3dCard(
                 content = content
             )
         }
+    }
+}
+
+private fun extractWrappedSegment(
+    measure: PathMeasure,
+    totalLen: Float,
+    startDist: Float,
+    endDist: Float,
+    outPath: Path,
+) {
+    val start = ((startDist % totalLen) + totalLen) % totalLen
+    val span = (endDist - startDist).coerceIn(0f, totalLen)
+    if (span <= 0.5f) return
+    val end = start + span
+    if (end <= totalLen) {
+        measure.getSegment(start, end, outPath, startWithMoveTo = true)
+    } else {
+        measure.getSegment(start, totalLen, outPath, startWithMoveTo = true)
+        measure.getSegment(0f, end - totalLen, outPath, startWithMoveTo = true)
     }
 }
 

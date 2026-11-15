@@ -7,6 +7,8 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.os.Build
 import androidx.annotation.RequiresApi
@@ -39,6 +41,16 @@ object NotificationManager {
     private var mBuilder: NotificationCompat.Builder? = null
     private var speedNotificationJob: Job? = null
     private var mNotificationManager: NotificationManager? = null
+    @Volatile
+    private var cachedBrandIcon: Bitmap? = null
+
+    private fun getBrandLargeIcon(context: Context): Bitmap? {
+        cachedBrandIcon?.let { return it }
+        return runCatching {
+            BitmapFactory.decodeResource(context.resources, R.mipmap.ic_launcher_round)
+                ?: BitmapFactory.decodeResource(context.resources, R.mipmap.ic_launcher)
+        }.getOrNull()?.also { cachedBrandIcon = it }
+    }
 
     /**
      * Starts the speed notification.
@@ -101,16 +113,20 @@ object NotificationManager {
 
         mBuilder = NotificationCompat.Builder(service, channelId)
             .setSmallIcon(R.drawable.ic_stat_name)
-            .setColor(Color.parseColor("#22D3EE"))
+            .setLargeIcon(getBrandLargeIcon(service))
+            .setColor(Color.parseColor("#00E5FF"))
             .setContentTitle(fullTitle)
+            .setSubText(service.getString(R.string.novapulse_notif_subtext))
             .setContentText(service.getString(R.string.novapulse_notif_connected_ready))
+            .setCategory(NotificationCompat.CATEGORY_SERVICE)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setOngoing(true)
             .setShowWhen(false)
             .setOnlyAlertOnce(true)
             .setContentIntent(contentPendingIntent)
             .addAction(
-                R.drawable.ic_delete_24dp,
+                R.drawable.ic_stop_24dp,
                 service.getString(R.string.novapulse_notif_action_disconnect),
                 stopV2RayPendingIntent
             )
@@ -119,8 +135,6 @@ object NotificationManager {
                 service.getString(R.string.novapulse_notif_action_reconnect),
                 restartV2RayPendingIntent
             )
-
-        //mBuilder?.setDefaults(NotificationCompat.FLAG_ONLY_ALERT_ONCE)
 
         service.startForeground(NOTIFICATION_ID, mBuilder?.build())
     }
@@ -167,11 +181,16 @@ object NotificationManager {
     @RequiresApi(Build.VERSION_CODES.O)
     private fun createNotificationChannel(): String {
         val channelId = AppConfig.RAY_NG_CHANNEL_ID
-        val channelName = AppConfig.RAY_NG_CHANNEL_NAME
+        val svc = getService()
+        val channelName = svc?.getString(R.string.novapulse_notif_channel_name) ?: AppConfig.RAY_NG_CHANNEL_NAME
         // Foreground-service notifications must remain visible; LOW is silent but valid.
-        val chan = NotificationChannel(channelId, channelName, NotificationManager.IMPORTANCE_LOW)
-        chan.lightColor = Color.DKGRAY
-        chan.lockscreenVisibility = Notification.VISIBILITY_PRIVATE
+        val chan = NotificationChannel(channelId, channelName, NotificationManager.IMPORTANCE_LOW).apply {
+            description = svc?.getString(R.string.novapulse_notif_channel_desc)
+            lightColor = Color.parseColor("#00E5FF")
+            enableLights(false)
+            setShowBadge(false)
+            lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+        }
         getNotificationManager()?.createNotificationChannel(chan)
         return channelId
     }

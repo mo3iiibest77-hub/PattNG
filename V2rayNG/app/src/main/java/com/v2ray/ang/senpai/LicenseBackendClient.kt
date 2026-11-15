@@ -62,10 +62,13 @@ object LicenseBackendClient {
     const val DEFAULT_BACKEND_BASE_URL = "https://nova.dontbedumb.ir"
     private const val PREF_BACKEND_BASE_URL = "qsn_backend_base_url"
     private const val PREF_SAVED_LICENSE_KEY = "qsn_saved_license_key"
+    private const val PREF_ACTIVE_LICENSE_SUB_ID = "qsn_active_license_sub_id"
+    private const val PREF_LICENSE_SESSION_ACTIVE = "qsn_license_session_active"
     private val FORBIDDEN_URL_SCHEMES = listOf(
         "https://", "http://", "vless://", "vmess://", "trojan://", "ss://",
         "hy2://", "hysteria2://", "hysteria://", "tuic://", "socks://", "wireguard://"
     )
+    private val LICENSE_TOKEN_REGEX = Regex("""\bNP-[A-Z0-9]{2,}(?:-[A-Z0-9]{2,}){1,}\b""", RegexOption.IGNORE_CASE)
     private val gson = Gson()
 
     fun getBackendBaseUrl(): String {
@@ -81,11 +84,38 @@ object LicenseBackendClient {
         MmkvManager.decodeSettingsString(PREF_SAVED_LICENSE_KEY, "").orEmpty().trim()
 
     fun setSavedLicenseKey(key: String) {
-        MmkvManager.encodeSettings(PREF_SAVED_LICENSE_KEY, key.trim().uppercase())
+        val normalized = key.trim().uppercase()
+        MmkvManager.encodeSettings(PREF_SAVED_LICENSE_KEY, normalized)
+        MmkvManager.encodeSettings(PREF_LICENSE_SESSION_ACTIVE, normalized.isNotEmpty())
     }
+
+    fun getActiveLicenseSubId(): String =
+        MmkvManager.decodeSettingsString(PREF_ACTIVE_LICENSE_SUB_ID, "").orEmpty().trim()
+
+    fun setActiveLicenseSubId(subId: String) {
+        MmkvManager.encodeSettings(PREF_ACTIVE_LICENSE_SUB_ID, subId.trim())
+    }
+
+    fun isLicenseSessionActive(): Boolean =
+        MmkvManager.decodeSettingsBool(PREF_LICENSE_SESSION_ACTIVE, false) || getSavedLicenseKey().isNotEmpty()
 
     fun clearSavedLicenseKey() {
         MmkvManager.encodeSettings(PREF_SAVED_LICENSE_KEY, "")
+        MmkvManager.encodeSettings(PREF_ACTIVE_LICENSE_SUB_ID, "")
+        MmkvManager.encodeSettings(PREF_LICENSE_SESSION_ACTIVE, false)
+    }
+
+    fun clearActiveLicenseSession() {
+        clearSavedLicenseKey()
+    }
+
+    fun sanitizeForDisplay(raw: String?): String {
+        var text = raw.orEmpty()
+        val saved = getSavedLicenseKey()
+        if (saved.length >= 4) {
+            text = text.replace(saved, "[***]", ignoreCase = true)
+        }
+        return text.replace(LICENSE_TOKEN_REGEX, "[***]")
     }
 
     fun classifyInput(raw: String): ActivationInput {
@@ -94,7 +124,7 @@ object LicenseBackendClient {
         val lower = trimmed.lowercase()
         if (FORBIDDEN_URL_SCHEMES.any { lower.startsWith(it) } || "://" in lower) {
             return ActivationInput.RejectedUrl(
-                "ورود لینک اشتراک مجاز نیست؛ لطفاً فقط کد لایسنس وارد کنید."
+                "این بخش فقط کد لایسنس معتبر قبول می‌کند؛ لطفاً کد لایسنس خود را وارد کنید."
             )
         }
         if (trimmed.length >= 4 && !trimmed.any { it.isWhitespace() }) {
@@ -179,7 +209,8 @@ object LicenseBackendClient {
                             ?: return LicenseResolutionResult.Failure("پاسخ سرور لایسنس نامعتبر بود")
                         val subUrl = parsed.resolvedSubscriptionUrl()
                             ?: return LicenseResolutionResult.Failure(
-                                parsed.message ?: "سرویس لایسنس آدرس اشتراک برنگرداند"
+                                sanitizeForDisplay(parsed.message)
+                                    .ifBlank { "سرویس لایسنس اطلاعات اتصال را برنگرداند." }
                             )
                         val resolvedKey = parsed.licenseKey?.takeIf { it.isNotBlank() } ?: input.key
                         setSavedLicenseKey(resolvedKey)

@@ -14,6 +14,7 @@ import android.os.StrictMode
 import com.v2ray.ang.AppConfig
 import com.v2ray.ang.AppConfig.LOOPBACK
 import com.v2ray.ang.BuildConfig
+import com.v2ray.ang.R
 import com.v2ray.ang.contracts.ServiceControl
 import com.v2ray.ang.contracts.Tun2SocksControl
 import com.v2ray.ang.core.CoreServiceManager
@@ -240,7 +241,11 @@ class CoreVpnService : VpnService(), ServiceControl {
             }
         }
 
-        //builder.setSession(V2RayServiceManager.getRunningServerName())
+        val sessionTitle = CoreServiceManager.getRunningServerName().takeIf { it.isNotBlank() }
+        builder.setSession(
+            if (sessionTitle != null) "${getString(R.string.app_name)} • $sessionTitle"
+            else getString(R.string.app_name)
+        )
     }
 
     /**

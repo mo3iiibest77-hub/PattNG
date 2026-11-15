@@ -153,8 +153,14 @@ class CfScanService : Service() {
 
     private fun createChannel() {
         val ch = NotificationChannel(
-            CHANNEL_ID, "CF Scanner", NotificationManager.IMPORTANCE_LOW
-        ).apply { description = "اسکن Cloudflare در پس‌زمینه" }
+            CHANNEL_ID,
+            getString(R.string.novapulse_scanner_channel_name),
+            NotificationManager.IMPORTANCE_LOW
+        ).apply {
+            description = getString(R.string.novapulse_scanner_channel_desc)
+            lightColor = android.graphics.Color.parseColor("#00E5FF")
+            setShowBadge(false)
+        }
         getSystemService(NotificationManager::class.java).createNotificationChannel(ch)
     }
 
@@ -166,9 +172,11 @@ class CfScanService : Service() {
         )
         return Notification.Builder(this, CHANNEL_ID)
             .setContentTitle(getString(R.string.app_name))
+            .setSubText(getString(R.string.novapulse_scanner_subtext))
             .setContentText(text)
             .setSmallIcon(R.drawable.ic_stat_name)
-            .addAction(Notification.Action.Builder(null, "توقف", stopPi).build())
+            .setColor(android.graphics.Color.parseColor("#00E5FF"))
+            .addAction(Notification.Action.Builder(null, getString(R.string.novapulse_notif_action_stop), stopPi).build())
             .setOngoing(true)
             .build()
     }

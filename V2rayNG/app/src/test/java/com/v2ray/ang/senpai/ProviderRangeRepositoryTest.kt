@@ -78,4 +78,21 @@ class ProviderRangeRepositoryTest {
         repo.resetSeeds(CdnType.CLOUDFLARE)
         assertTrue(firstSeed in repo.getScanPoolCidrs(CdnType.CLOUDFLARE))
     }
+
+    @Test
+    fun cloudflareCuratedMerge_preserves46SeedsAndDeduplicates60DiscoveredCidrs() {
+        assertEquals(60, CloudflareSeedRanges.CURATED_DISCOVERED_CIDRS.distinct().size)
+        val overlap = CloudflareSeedRanges.SEED_CIDRS.toSet().intersect(CloudflareSeedRanges.CURATED_DISCOVERED_CIDRS.toSet())
+        assertTrue("Expected zero overlap between 46 seeds and 60 curated discovered CIDRs", overlap.isEmpty())
+
+        val repo = ProviderRangeRepository(
+            store = InMemoryRangeStore(),
+            defaultCloudflareDiscoveredProvider = { CloudflareSeedRanges.CURATED_DISCOVERED_CIDRS },
+        )
+        val entries = repo.getEntries(CdnType.CLOUDFLARE)
+        assertEquals(106, entries.size)
+        assertEquals(106, entries.map { it.cidr }.distinct().size)
+        assertEquals(46, entries.count { it.origin == RangeOrigin.SEED })
+        assertEquals(60, entries.count { it.origin == RangeOrigin.DISCOVERED })
+    }
 }

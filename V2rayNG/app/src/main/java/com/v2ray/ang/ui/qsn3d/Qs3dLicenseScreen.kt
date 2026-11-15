@@ -57,6 +57,7 @@ fun Qs3dLicenseGateScreen(
     onInputChange: (String) -> Unit,
     onRedeemClick: () -> Unit,
     onScanLicenseQrClick: () -> Unit,
+    onOpenAboutPromo: () -> Unit,
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -154,6 +155,38 @@ fun Qs3dLicenseGateScreen(
                 }
             }
         }
+
+        item {
+            Glass3dCard(
+                beamSeed = 19,
+                glowColor = QsColors.AuroraMint.copy(alpha = 0.36f)
+            ) {
+                Text(
+                    text = stringResource(R.string.novapulse_gate_need_license_title),
+                    color = QsColors.TextPrimary,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 14.sp
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    text = stringResource(R.string.novapulse_gate_need_license_desc),
+                    color = QsColors.TextSecondary,
+                    fontSize = 12.sp
+                )
+                Spacer(Modifier.height(10.dp))
+                OutlinedButton(
+                    onClick = onOpenAboutPromo,
+                    modifier = Modifier.fillMaxWidth().height(44.dp),
+                    shape = RoundedCornerShape(14.dp)
+                ) {
+                    Text(
+                        text = stringResource(R.string.novapulse_open_promo_guide_btn),
+                        color = QsColors.AuroraMint,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -174,17 +207,20 @@ fun Qs3dSubscriptionScreen(
     val totalB = quota?.totalBytes ?: 0L
     val usedB = quota?.usedBytes ?: 0L
     val remB = quota?.remainingBytes
-    val remainingFraction = when {
-        totalB > 0L && remB != null -> (remB.toFloat() / totalB.toFloat()).coerceIn(0f, 1f)
-        else -> 1f
-    }
+    val usedPct = quota?.usagePercent
+    val remPct = quota?.remainingPercent
+    val remainingFraction = quota?.remainingFraction ?: 1f
 
     val centerBig = when {
         remB != null -> formatGbCompact(remB)
         totalB <= 0L -> stringResource(R.string.novapulse_unlimited)
         else -> "—"
     }
-    val centerSub = stringResource(R.string.novapulse_remaining_traffic_label)
+    val centerSub = if (remPct != null) {
+        stringResource(R.string.novapulse_remaining_pct_fmt, remPct)
+    } else {
+        stringResource(R.string.novapulse_remaining_traffic_label)
+    }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -268,7 +304,60 @@ fun Qs3dSubscriptionScreen(
                         centerPrimary = centerBig,
                         centerSecondary = centerSub
                     )
-                    Spacer(Modifier.height(14.dp))
+                    Spacer(Modifier.height(12.dp))
+
+                    // Dual Usage Percentage vs Remaining Percentage Bar (shown only when total quota > 0)
+                    if (usedPct != null && remPct != null) {
+                        val usedFrac = (quota.usageFraction ?: 0f).coerceIn(0f, 1f)
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(14.dp))
+                                .background(Color(0x2A0A1328))
+                                .border(0.75.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(14.dp))
+                                .padding(horizontal = 12.dp, vertical = 10.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = stringResource(R.string.novapulse_used_pct_fmt, usedPct),
+                                    color = QsColors.PlasmaViolet,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    text = stringResource(R.string.novapulse_remaining_pct_fmt, remPct),
+                                    color = QsColors.AuroraMint,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                            Spacer(Modifier.height(7.dp))
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(10.dp)
+                                    .clip(RoundedCornerShape(5.dp))
+                                    .background(QsColors.AuroraMint.copy(alpha = 0.25f))
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth(fraction = usedFrac)
+                                        .height(10.dp)
+                                        .clip(RoundedCornerShape(5.dp))
+                                        .background(
+                                            Brush.horizontalGradient(
+                                                listOf(QsColors.PlasmaViolet, QsColors.NeonRose)
+                                            )
+                                        )
+                                )
+                            }
+                        }
+                        Spacer(Modifier.height(12.dp))
+                    }
 
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -339,6 +428,12 @@ fun Qs3dSubscriptionScreen(
                     stringResource(R.string.novapulse_upload_download_breakdown),
                     "↑ ${formatGbCompact(quota?.uploadBytes ?: 0L)}  •  ↓ ${formatGbCompact(quota?.downloadBytes ?: 0L)}"
                 )
+                val syncedAt = quota?.updatedAtMs?.takeIf { it > 0L } ?: activeSub?.lastUpdated?.takeIf { it > 0L }
+                val syncedText = syncedAt?.let {
+                    DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT, Locale.getDefault())
+                        .format(Date(it))
+                } ?: "—"
+                InfoKeyValueRow(stringResource(R.string.novapulse_sub_last_synced), syncedText)
             }
         }
     }

@@ -1,5 +1,9 @@
 package com.v2ray.ang.ui.qsn3d
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -23,7 +27,9 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -98,12 +104,47 @@ fun Qs3dConnectScreen(
     ) {
         // 1. Hero 3D Orbital Sphere Card + Fresh IP Optimization Action
         item {
+            val motionActive = rememberMotionActive()
+            val showConnectCardFlag = state.coreRunning && countryCode.isNotBlank()
             Glass3dCard(
+                beamSeed = 1,
                 glowColor = when (orbMode) {
                     OrbVisualMode.CONNECTED -> QsColors.ConnectedEmerald.copy(alpha = 0.52f)
                     OrbVisualMode.PROCESSING -> QsColors.PlasmaViolet.copy(alpha = 0.52f)
                     OrbVisualMode.ERROR -> QsColors.DangerCrimson.copy(alpha = 0.52f)
                     OrbVisualMode.DISCONNECTED -> QsColors.ElectricCyan.copy(alpha = 0.36f)
+                },
+                backdropContent = {
+                    AnimatedVisibility(
+                        visible = showConnectCardFlag,
+                        enter = fadeIn(animationSpec = tween(420)),
+                        exit = fadeOut(animationSpec = tween(320)),
+                        modifier = Modifier.matchParentSize()
+                    ) {
+                        Box(modifier = Modifier.fillMaxSize()) {
+                            WindscribeCountryFlagBackdrop(
+                                countryCode = countryCode,
+                                motionActive = motionActive,
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .alpha(0.58f)
+                            )
+                            // Contrast scrim inside card so orb, flag badge & typography remain crisp
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .background(
+                                        Brush.verticalGradient(
+                                            colors = listOf(
+                                                Color(0x90050B1C),
+                                                Color(0x52060E24),
+                                                Color(0xA4050B1C),
+                                            )
+                                        )
+                                    )
+                            )
+                        }
+                    }
                 }
             ) {
                 Row(

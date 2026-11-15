@@ -517,6 +517,7 @@ object SmartConnectCoordinator {
                     enabled = true,
                 )
                 MmkvManager.encodeSubscription(subId, item)
+                LicenseBackendClient.setActiveLicenseSubId(subId)
                 val cache = SubscriptionCache(subId, item)
                 val updateRes = AngConfigManager.updateConfigViaSub(cache)
                 purgeNonCdnConfigs()

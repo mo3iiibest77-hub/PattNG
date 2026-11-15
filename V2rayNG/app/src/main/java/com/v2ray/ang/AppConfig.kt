@@ -192,9 +192,9 @@ object AppConfig {
     const val MSG_SUB_UPDATE_CANCEL = 81
 
     /** Notification channel IDs and names. */
-    // Use a new ID because Android does not let an app raise an existing channel's importance.
-    const val RAY_NG_CHANNEL_ID = "NOVAPULSE_VPN_CH_V1"
-    const val RAY_NG_CHANNEL_NAME = "NovaPulse Service"
+    // Use a new channel ID so Android picks up NovaPulse branding and channel metadata cleanly.
+    const val RAY_NG_CHANNEL_ID = "NOVAPULSE_VPN_CH_V2"
+    const val RAY_NG_CHANNEL_NAME = "NovaPulse Tunnel"
 
     /** Protocols Scheme **/
     const val VMESS = "vmess://"

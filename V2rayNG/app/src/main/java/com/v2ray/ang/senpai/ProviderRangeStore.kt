@@ -27,6 +27,7 @@ internal data class PersistedProviderRanges(
     @SerializedName("manual") val manual: List<String> = emptyList(),
     @SerializedName("disabled") val disabled: List<String> = emptyList(),
     @SerializedName("last_synced_at") val lastSyncedAt: Long = 0L,
+    @SerializedName("curated_migrated") val curatedMigrated: Boolean = false,
 )
 
 /**
@@ -42,6 +43,7 @@ internal data class PersistedProviderRanges(
 class ProviderRangeRepository(
     private val store: RangeKeyValueStore = MmkvRangeKeyValueStore,
     private val defaultCloudFrontCidrsProvider: () -> List<String> = { emptyList() },
+    private val defaultCloudflareDiscoveredProvider: () -> List<String> = { emptyList() },
 ) {
     private val gson = Gson()
     private val lock = Any()
@@ -200,27 +202,45 @@ class ProviderRangeRepository(
             runCatching { gson.fromJson(it, PersistedProviderRanges::class.java) }.getOrNull()
         }
         if (decoded != null) {
+            var current = decoded
+            var dirty = false
             // Guarantee Cloudflare seeds exist on first launch / migration without removing anything else
-            if (provider == CdnType.CLOUDFLARE && decoded.seeds.isEmpty() && raw.contains("\"seeds\":[]")) {
-                val seeded = decoded.copy(seeds = CloudflareSeedRanges.SEED_CIDRS)
-                saveLocked(provider, seeded)
-                return seeded
+            if (provider == CdnType.CLOUDFLARE && current.seeds.isEmpty() && raw.contains("\"seeds\":[]")) {
+                current = current.copy(seeds = CloudflareSeedRanges.SEED_CIDRS)
+                dirty = true
             }
-            if (provider == CdnType.CLOUDFRONT && decoded.fetched.isEmpty()) {
+            if (provider == CdnType.CLOUDFLARE && !current.curatedMigrated) {
+                val extra = defaultCloudflareDiscoveredProvider()
+                    .mapNotNull { CloudflareSeedRanges.normalizeIpv4Cidr(it) }
+                val existingAll = (current.seeds + current.discovered + current.manual + current.fetched).toSet()
+                val mergedDiscovered = (current.discovered + extra.filterNot { it in existingAll }).distinct()
+                current = current.copy(discovered = mergedDiscovered, curatedMigrated = true)
+                dirty = true
+            }
+            if (provider == CdnType.CLOUDFRONT && current.fetched.isEmpty()) {
                 val defaults = defaultCloudFrontCidrsProvider()
                 if (defaults.isNotEmpty()) {
-                    val populated = decoded.copy(fetched = defaults)
-                    saveLocked(provider, populated)
-                    return populated
+                    current = current.copy(fetched = defaults)
+                    dirty = true
                 }
             }
-            return decoded
+            if (dirty) saveLocked(provider, current)
+            return current
         }
 
         val initial = when (provider) {
-            CdnType.CLOUDFLARE -> PersistedProviderRanges(
-                seeds = CloudflareSeedRanges.SEED_CIDRS
-            )
+            CdnType.CLOUDFLARE -> {
+                val seedSet = CloudflareSeedRanges.SEED_CIDRS.toSet()
+                val extraDiscovered = defaultCloudflareDiscoveredProvider()
+                    .mapNotNull { CloudflareSeedRanges.normalizeIpv4Cidr(it) }
+                    .filterNot { it in seedSet }
+                    .distinct()
+                PersistedProviderRanges(
+                    seeds = CloudflareSeedRanges.SEED_CIDRS,
+                    discovered = extraDiscovered,
+                    curatedMigrated = true,
+                )
+            }
             CdnType.CLOUDFRONT -> PersistedProviderRanges(
                 fetched = defaultCloudFrontCidrsProvider()
             )
@@ -248,7 +268,8 @@ object ProviderRangeStore {
     private val repo by lazy {
         ProviderRangeRepository(
             store = MmkvRangeKeyValueStore,
-            defaultCloudFrontCidrsProvider = { loadBundledCloudFrontCidrs(defaultAssetContext) }
+            defaultCloudFrontCidrsProvider = { loadBundledCloudFrontCidrs(defaultAssetContext) },
+            defaultCloudflareDiscoveredProvider = { CloudflareSeedRanges.CURATED_DISCOVERED_CIDRS },
         )
     }
 

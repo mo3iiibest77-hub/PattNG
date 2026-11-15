@@ -2,6 +2,7 @@ package com.v2ray.ang.senpai
 
 import com.google.gson.Gson
 import com.v2ray.ang.handler.MmkvManager
+import kotlin.math.roundToInt
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.util.concurrent.TimeUnit
@@ -23,10 +24,15 @@ data class SubscriptionQuotaInfo(
 ) {
     val usedBytes: Long get() = (uploadBytes + downloadBytes).coerceAtLeast(0L)
     val remainingBytes: Long? get() = if (totalBytes > 0L) (totalBytes - usedBytes).coerceAtLeast(0L) else null
+    val hasBoundedQuota: Boolean get() = totalBytes > 0L
     val usageFraction: Float?
         get() = if (totalBytes > 0L) (usedBytes.toFloat() / totalBytes.toFloat()).coerceIn(0f, 1f) else null
+    val remainingFraction: Float?
+        get() = remainingBytes?.let { (it.toFloat() / totalBytes.toFloat()).coerceIn(0f, 1f) }
     val usagePercent: Int?
-        get() = usageFraction?.let { (it * 100f).toInt().coerceIn(0, 100) }
+        get() = if (totalBytes > 0L) ((usedBytes.toDouble() * 100.0) / totalBytes.toDouble()).roundToInt().coerceIn(0, 100) else null
+    val remainingPercent: Int?
+        get() = usagePercent?.let { (100 - it).coerceIn(0, 100) }
 }
 
 /**
@@ -71,6 +77,12 @@ object SubscriptionQuotaStore {
     fun get(subId: String): SubscriptionQuotaInfo? {
         val raw = MmkvManager.decodeSettingsString(KEY_PREFIX + subId) ?: return null
         return runCatching { gson.fromJson(raw, SubscriptionQuotaInfo::class.java) }.getOrNull()
+    }
+
+    fun clear(subId: String) {
+        if (subId.isNotBlank()) {
+            MmkvManager.encodeSettings(KEY_PREFIX + subId, "")
+        }
     }
 
     fun fetchAndSaveHeader(subId: String, url: String, userAgent: String? = null) {

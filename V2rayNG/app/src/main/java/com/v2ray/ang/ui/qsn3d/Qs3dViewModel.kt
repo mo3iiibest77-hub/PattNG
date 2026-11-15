@@ -4,6 +4,9 @@ import android.app.Application
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
+import android.os.Build
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
@@ -11,6 +14,7 @@ import androidx.lifecycle.viewModelScope
 import com.v2ray.ang.AngApplication
 import com.v2ray.ang.AppConfig
 import com.v2ray.ang.R
+import com.v2ray.ang.core.LauncherManager
 import com.v2ray.ang.dto.TestServiceMessage
 import com.v2ray.ang.dto.entities.ProfileItem
 import com.v2ray.ang.extension.toSpeedString
@@ -33,15 +37,19 @@ import com.v2ray.ang.senpai.SmartConnectCoordinator
 import com.v2ray.ang.senpai.SmartFlowState
 import com.v2ray.ang.senpai.SmartOptimizeWorker
 import com.v2ray.ang.senpai.SubscriptionQuotaInfo
+import com.v2ray.ang.senpai.SubscriptionQuotaStore
 import com.v2ray.ang.ui.main.MainDataSource
 import com.v2ray.ang.ui.main.MainRepository
 import com.v2ray.ang.ui.main.MainServiceEvent
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 enum class Qs3dTab { Connect, Configs, Ranges, Apps }
 
@@ -71,10 +79,11 @@ data class Qs3dUiState(
     val activeTab: Qs3dTab = Qs3dTab.Connect,
     val showSubscriptionDetails: Boolean = false,
     val showRangeExplorer: Boolean = false,
+    val showAboutPromo: Boolean = false,
     val showOptimizeConsentPrompt: Boolean = false,
     val hasActiveLicense: Boolean = false,
-    val savedLicenseKey: String = "",
     val isRedeemingLicense: Boolean = false,
+    val isLoggingOut: Boolean = false,
     val coreRunning: Boolean = false,
     val selectedGuid: String? = null,
     val connectedLatencyMs: Long? = null,
@@ -269,6 +278,7 @@ class Qs3dViewModel(
                 activeTab = tab,
                 showSubscriptionDetails = false,
                 showRangeExplorer = false,
+                showAboutPromo = false,
             )
         }
         if (tab == Qs3dTab.Ranges) loadRanges(_uiState.value.activeRangeProvider)
@@ -276,13 +286,33 @@ class Qs3dViewModel(
     }
 
     fun openSubscriptionDetails(open: Boolean) {
-        _uiState.update { it.copy(showSubscriptionDetails = open) }
+        _uiState.update {
+            it.copy(
+                showSubscriptionDetails = open,
+                showAboutPromo = if (open) false else it.showAboutPromo,
+            )
+        }
         if (open) refreshQuotaOnly()
     }
 
     fun openRangeExplorer(open: Boolean) {
-        _uiState.update { it.copy(showRangeExplorer = open) }
+        _uiState.update {
+            it.copy(
+                showRangeExplorer = open,
+                showAboutPromo = if (open) false else it.showAboutPromo,
+            )
+        }
         if (open) loadRanges(_uiState.value.activeRangeProvider)
+    }
+
+    fun openAboutPromo(open: Boolean) {
+        _uiState.update {
+            it.copy(
+                showAboutPromo = open,
+                showSubscriptionDetails = if (open) false else it.showSubscriptionDetails,
+                showRangeExplorer = if (open) false else it.showRangeExplorer,
+            )
+        }
     }
 
     fun respondToOptimizeConsent(accepted: Boolean) {
@@ -366,8 +396,8 @@ class Qs3dViewModel(
                 )
             }
 
-            val savedKey = LicenseBackendClient.getSavedLicenseKey()
-            val licensed = savedKey.isNotEmpty() || rawConfigs.isNotEmpty() || subs.isNotEmpty()
+            val sessionActive = LicenseBackendClient.isLicenseSessionActive()
+            val licensed = sessionActive && (rawConfigs.isNotEmpty() || subs.isNotEmpty() || LicenseBackendClient.getSavedLicenseKey().isNotEmpty())
             val cachedCdnMap = CdnPingClassifier.CdnDetectionStore.getAllSaved(allGuids)
 
             val effectiveSelected = AutoConfigFilter.pickBestConnectGuid(
@@ -392,14 +422,13 @@ class Qs3dViewModel(
                     enabled = cache.subscription.enabled,
                     lastUpdated = cache.subscription.lastUpdated,
                     configCount = subCounts[cache.guid] ?: 0,
-                    quota = com.v2ray.ang.senpai.SubscriptionQuotaStore.get(cache.guid),
+                    quota = SubscriptionQuotaStore.get(cache.guid),
                 )
             }
 
             _uiState.update {
                 it.copy(
                     hasActiveLicense = licensed,
-                    savedLicenseKey = savedKey,
                     selectedGuid = effectiveSelected,
                     subscriptions = subRows,
                     configs = sortedPinned,
@@ -456,18 +485,20 @@ class Qs3dViewModel(
                     it.copy(
                         isRedeemingLicense = false,
                         hasActiveLicense = true,
-                        savedLicenseKey = LicenseBackendClient.getSavedLicenseKey(),
                         activationInput = "",
+                        showAboutPromo = false,
                         toastMessage = ctx.getString(R.string.novapulse_license_activated_fmt, count)
                     )
                 }
                 loadConfigsAndSubs()
                 detectCdnForSelected()
             }.onFailure { err ->
+                val cleanErr = LicenseBackendClient.sanitizeForDisplay(err.message)
+                    .ifBlank { ctx.getString(R.string.novapulse_license_failed) }
                 _uiState.update {
                     it.copy(
                         isRedeemingLicense = false,
-                        toastMessage = err.message ?: ctx.getString(R.string.novapulse_license_failed)
+                        toastMessage = cleanErr
                     )
                 }
             }
@@ -475,22 +506,101 @@ class Qs3dViewModel(
     }
 
     fun logoutLicense() {
+        if (_uiState.value.isLoggingOut) return
+        val ctx = getApplication<Application>()
+        _uiState.update { it.copy(isLoggingOut = true) }
+
         viewModelScope.launch(Dispatchers.IO) {
-            MmkvManager.removeAllServer()
-            MmkvManager.decodeSubscriptions().forEach { MmkvManager.removeSubscription(it.guid) }
-            LicenseBackendClient.clearSavedLicenseKey()
+            val stopSucceeded = LicenseLogoutOrchestrator.stopRuntimeAndConfirm(
+                isCoreRunning = { _uiState.value.coreRunning || isSystemVpnInterfaceActive(ctx) },
+                cancelBackgroundWork = {
+                    SmartConnectCoordinator.cancelActiveFlow()
+                    PostConnectDiscoveryRunner.cancel()
+                    CloudflareScanner.cancel()
+                    CloudFrontScanner.cancel()
+                    SmartOptimizeWorker.cancel(ctx)
+                    dataSource.cancelAllPing()
+                },
+                requestStopVpn = { LauncherManager.stopService(ctx) },
+                awaitStopEvent = { timeoutMs ->
+                    withTimeoutOrNull(timeoutMs) {
+                        dataSource.mainServiceEvent.first {
+                            it is MainServiceEvent.StateStopSuccess || it is MainServiceEvent.StateNotRunning
+                        }
+                    } != null
+                }
+            )
+
+            if (!stopSucceeded) {
+                _uiState.update {
+                    it.copy(
+                        isLoggingOut = false,
+                        toastMessage = ctx.getString(R.string.novapulse_logout_stop_failed)
+                    )
+                }
+                return@launch
+            }
+
+            LicenseLogoutOrchestrator.wipeBoundLicenseData(
+                object : LicenseLogoutStorage {
+                    override fun getActiveLicenseSubId(): String = LicenseBackendClient.getActiveLicenseSubId()
+                    override fun getAllSubscriptionIds(): List<String> =
+                        MmkvManager.decodeSubscriptions().map { it.guid }
+                    override fun removeSubscription(subId: String) {
+                        MmkvManager.removeSubscription(subId)
+                    }
+                    override fun removeServersWithoutSubIfNeeded(boundSubIds: Set<String>) {
+                        val selected = MmkvManager.getSelectServer()
+                        for (guid in MmkvManager.decodeAllServerList()) {
+                            val item = MmkvManager.decodeServerConfig(guid) ?: continue
+                            if (item.subscriptionId in boundSubIds || boundSubIds.isEmpty()) {
+                                MmkvManager.removeServer(guid)
+                                if (guid == selected) {
+                                    MmkvManager.setSelectServer("")
+                                }
+                            }
+                        }
+                    }
+                    override fun clearQuota(subId: String) = SubscriptionQuotaStore.clear(subId)
+                    override fun clearSelectedServer() = MmkvManager.setSelectServer("")
+                    override fun clearExplicitSelection() = SmartConnectCoordinator.markExplicitServerSelected(false)
+                    override fun clearActiveLicenseSession() = LicenseBackendClient.clearActiveLicenseSession()
+                }
+            )
+
+            autoCountryProbeDoneForSession = false
             _uiState.update {
                 it.copy(
+                    isLoggingOut = false,
                     hasActiveLicense = false,
-                    savedLicenseKey = "",
+                    coreRunning = false,
                     configs = emptyList(),
                     subscriptions = emptyList(),
                     selectedGuid = null,
+                    bulkSelectedGuids = emptySet(),
+                    activationInput = "",
+                    connectedLatencyMs = null,
+                    connectedCountry = "",
+                    connectedTestMessage = null,
+                    liveDownloadBps = 0L,
+                    liveUploadBps = 0L,
+                    lastCdnDetection = null,
                     showSubscriptionDetails = false,
+                    showRangeExplorer = false,
+                    showAboutPromo = false,
+                    toastMessage = ctx.getString(R.string.novapulse_logout_success),
                 )
             }
         }
     }
+
+    private fun isSystemVpnInterfaceActive(context: Context): Boolean = runCatching {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return@runCatching false
+        val cm = context.getSystemService(ConnectivityManager::class.java) ?: return@runCatching false
+        val activeNet = cm.activeNetwork ?: return@runCatching false
+        val caps = cm.getNetworkCapabilities(activeNet) ?: return@runCatching false
+        caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
+    }.getOrDefault(false)
 
     // ---------- Config Management (Privacy-Hardened) ----------
 
@@ -716,5 +826,72 @@ class Qs3dViewModel(
             val repo = MainRepository(application as AngApplication)
             return Qs3dViewModel(application, repo) as T
         }
+    }
+}
+
+internal interface LicenseLogoutStorage {
+    fun getActiveLicenseSubId(): String
+    fun getAllSubscriptionIds(): List<String>
+    fun removeSubscription(subId: String)
+    fun removeServersWithoutSubIfNeeded(boundSubIds: Set<String>)
+    fun clearQuota(subId: String)
+    fun clearSelectedServer()
+    fun clearExplicitSelection()
+    fun clearActiveLicenseSession()
+}
+
+internal object LicenseLogoutOrchestrator {
+    suspend fun stopRuntimeAndConfirm(
+        isCoreRunning: () -> Boolean,
+        cancelBackgroundWork: () -> Unit,
+        requestStopVpn: () -> Unit,
+        awaitStopEvent: suspend (Long) -> Boolean,
+        pollIntervalMs: Long = 150L,
+    ): Boolean {
+        cancelBackgroundWork()
+        if (!isCoreRunning()) {
+            return true
+        }
+
+        requestStopVpn()
+        awaitStopEvent(4500L)
+
+        var elapsed = 0L
+        while (isCoreRunning() && elapsed < 1800L) {
+            delay(pollIntervalMs)
+            elapsed += pollIntervalMs
+        }
+
+        if (isCoreRunning()) {
+            // Second stop attempt in case first broadcast hit daemon warmup
+            requestStopVpn()
+            awaitStopEvent(1500L)
+            var extraElapsed = 0L
+            while (isCoreRunning() && extraElapsed < 1000L) {
+                delay(pollIntervalMs)
+                extraElapsed += pollIntervalMs
+            }
+        }
+
+        return !isCoreRunning()
+    }
+
+    fun wipeBoundLicenseData(storage: LicenseLogoutStorage) {
+        val activeSubId = storage.getActiveLicenseSubId()
+        val allSubIds = storage.getAllSubscriptionIds()
+        val targetSubIds = if (activeSubId.isNotBlank()) {
+            setOf(activeSubId)
+        } else {
+            allSubIds.toSet()
+        }
+
+        for (subId in targetSubIds) {
+            storage.clearQuota(subId)
+            storage.removeSubscription(subId)
+        }
+        storage.removeServersWithoutSubIfNeeded(targetSubIds)
+        storage.clearSelectedServer()
+        storage.clearExplicitSelection()
+        storage.clearActiveLicenseSession()
     }
 }

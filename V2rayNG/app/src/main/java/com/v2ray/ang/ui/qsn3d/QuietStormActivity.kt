@@ -5,6 +5,7 @@ import android.content.Intent
 import android.net.VpnService
 import android.os.Build
 import android.os.Bundle
+import androidx.activity.compose.BackHandler
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.foundation.Image
@@ -145,10 +146,19 @@ class QuietStormActivity : BaseComponentActivity() {
                 viewModel.consumeToast()
             }
 
+            BackHandler(
+                enabled = state.showAboutPromo || state.showSubscriptionDetails || state.showRangeExplorer
+            ) {
+                when {
+                    state.showAboutPromo -> viewModel.openAboutPromo(false)
+                    state.showSubscriptionDetails -> viewModel.openSubscriptionDetails(false)
+                    state.showRangeExplorer -> viewModel.openRangeExplorer(false)
+                }
+            }
+
             Box(modifier = Modifier.fillMaxSize()) {
-                val activeConfigRemarks = state.configs.firstOrNull { it.guid == state.selectedGuid }?.remarks.orEmpty()
-                val flagIso = normalizeCountryCode(state.connectedCountry, activeConfigRemarks)
                 val activeBgRes = when {
+                    state.showAboutPromo -> R.drawable.np_promo_hero
                     !state.hasActiveLicense -> R.drawable.np_hero_license
                     state.activeTab == Qs3dTab.Connect -> R.drawable.np_hero_connect_globe
                     state.activeTab == Qs3dTab.Configs -> R.drawable.np_hero_configs_nodes
@@ -158,11 +168,6 @@ class QuietStormActivity : BaseComponentActivity() {
                 Cosmic3dBackdrop(
                     isConnected = state.coreRunning,
                     backgroundImageRes = activeBgRes,
-                    connectedCountryCode = flagIso,
-                    showCountryFlag = state.hasActiveLicense &&
-                        !state.showSubscriptionDetails &&
-                        !state.showRangeExplorer &&
-                        state.activeTab == Qs3dTab.Connect
                 )
 
                 if (!state.hasActiveLicense) {
@@ -174,15 +179,23 @@ class QuietStormActivity : BaseComponentActivity() {
                         snackbarHost = { SnackbarHost(snackbarHost) }
                     ) { innerPadding ->
                         Box(modifier = Modifier.fillMaxSize().padding(innerPadding)) {
-                            Qs3dLicenseGateScreen(
-                                activationInput = state.activationInput,
-                                isRedeeming = state.isRedeemingLicense,
-                                onInputChange = viewModel::setActivationInput,
-                                onRedeemClick = { viewModel.redeemActivationInput() },
-                                onScanLicenseQrClick = {
-                                    qrScannerLauncher.launch(Intent(this@QuietStormActivity, ScannerActivity::class.java))
-                                }
-                            )
+                            if (state.showAboutPromo) {
+                                Qs3dAboutPromoScreen(
+                                    hasActiveLicense = false,
+                                    onBack = { viewModel.openAboutPromo(false) }
+                                )
+                            } else {
+                                Qs3dLicenseGateScreen(
+                                    activationInput = state.activationInput,
+                                    isRedeeming = state.isRedeemingLicense,
+                                    onInputChange = viewModel::setActivationInput,
+                                    onRedeemClick = { viewModel.redeemActivationInput() },
+                                    onScanLicenseQrClick = {
+                                        qrScannerLauncher.launch(Intent(this@QuietStormActivity, ScannerActivity::class.java))
+                                    },
+                                    onOpenAboutPromo = { viewModel.openAboutPromo(true) }
+                                )
+                            }
                         }
                     }
                 } else {
@@ -196,6 +209,7 @@ class QuietStormActivity : BaseComponentActivity() {
                             NovaPulseTopBar(
                                 isRunning = state.coreRunning,
                                 onOpenSubscription = { viewModel.openSubscriptionDetails(true) },
+                                onOpenPromo = { viewModel.openAboutPromo(true) },
                                 onRefresh = { viewModel.refreshAllData(fetchRemoteQuota = true) }
                             )
                         },
@@ -212,6 +226,13 @@ class QuietStormActivity : BaseComponentActivity() {
                                 .padding(innerPadding)
                         ) {
                             when {
+                                state.showAboutPromo -> {
+                                    Qs3dAboutPromoScreen(
+                                        hasActiveLicense = true,
+                                        onBack = { viewModel.openAboutPromo(false) }
+                                    )
+                                }
+
                                 state.showSubscriptionDetails -> {
                                     Qs3dSubscriptionScreen(
                                         state = state,
@@ -305,6 +326,7 @@ class QuietStormActivity : BaseComponentActivity() {
                                             qrScannerLauncher.launch(Intent(this@QuietStormActivity, ScannerActivity::class.java))
                                         },
                                         onOpenMySubscription = { viewModel.openSubscriptionDetails(true) },
+                                        onOpenAboutPromo = { viewModel.openAboutPromo(true) },
                                         onLogoutLicense = viewModel::logoutLicense
                                     )
                                 }
@@ -339,16 +361,20 @@ class QuietStormActivity : BaseComponentActivity() {
 private fun NovaPulseTopBar(
     isRunning: Boolean,
     onOpenSubscription: () -> Unit,
+    onOpenPromo: () -> Unit,
     onRefresh: () -> Unit,
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 10.dp),
+            .padding(horizontal = 14.dp, vertical = 10.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.weight(1f, fill = false)
+        ) {
             Image(
                 painter = painterResource(R.drawable.ic_stat_name),
                 contentDescription = null,
@@ -360,10 +386,16 @@ private fun NovaPulseTopBar(
                 text = stringResource(R.string.app_name),
                 color = QsColors.TextPrimary,
                 fontSize = 18.sp,
-                fontWeight = FontWeight.ExtraBold
+                fontWeight = FontWeight.ExtraBold,
+                maxLines = 1
             )
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            TopBadgeButton(
+                label = stringResource(R.string.novapulse_promo_top_badge),
+                accent = QsColors.AuroraMint,
+                onClick = onOpenPromo
+            )
             TopBadgeButton(
                 label = stringResource(R.string.novapulse_my_subscription_short),
                 accent = QsColors.PlasmaViolet,
@@ -386,9 +418,9 @@ private fun TopBadgeButton(label: String, accent: Color, onClick: () -> Unit) {
             .background(accent.copy(alpha = 0.16f))
             .border(0.8.dp, accent.copy(alpha = 0.45f), RoundedCornerShape(12.dp))
             .clickable(onClick = onClick)
-            .padding(horizontal = 10.dp, vertical = 6.dp)
+            .padding(horizontal = 9.dp, vertical = 6.dp)
     ) {
-        Text(text = label, color = accent, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+        Text(text = label, color = accent, fontSize = 11.sp, fontWeight = FontWeight.Bold, maxLines = 1)
     }
 }
 
