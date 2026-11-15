@@ -37,7 +37,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.HorizontalDivider
@@ -47,7 +46,6 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -67,9 +65,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
-import com.v2ray.ang.BuildConfig
 import com.v2ray.ang.R
 import com.v2ray.ang.core.LauncherManager
 import com.v2ray.ang.handler.MmkvManager
@@ -203,7 +198,7 @@ class QuietStormActivity : BaseComponentActivity() {
                             .fillMaxSize()
                             .safeDrawingPadding(),
                         containerColor = Color.Transparent,
-                        snackbarHost = { SnackbarHost(snackbarHost) }
+                        snackbarHost = { Qs3dSnackbarHost(snackbarHost) }
                     ) { innerPadding ->
                         Box(modifier = Modifier.fillMaxSize().padding(innerPadding)) {
                             if (state.showAboutPromo) {
@@ -231,7 +226,7 @@ class QuietStormActivity : BaseComponentActivity() {
                             .fillMaxSize()
                             .safeDrawingPadding(),
                         containerColor = Color.Transparent,
-                        snackbarHost = { SnackbarHost(snackbarHost) },
+                        snackbarHost = { Qs3dSnackbarHost(snackbarHost) },
                         topBar = {
                             Column {
                                 NovaPulseTopBar(
@@ -373,20 +368,13 @@ class QuietStormActivity : BaseComponentActivity() {
                     }
 
                     if (state.showOptimizeConsentPrompt) {
-                        AlertDialog(
-                            onDismissRequest = { viewModel.respondToOptimizeConsent(true) },
-                            title = { Text(stringResource(R.string.novapulse_optimize_consent_title)) },
-                            text = { Text(stringResource(R.string.novapulse_optimize_consent_body)) },
-                            confirmButton = {
-                                Button(onClick = { viewModel.respondToOptimizeConsent(true) }) {
-                                    Text(stringResource(R.string.novapulse_consent_allow))
-                                }
-                            },
-                            dismissButton = {
-                                TextButton(onClick = { viewModel.respondToOptimizeConsent(false) }) {
-                                    Text(stringResource(R.string.novapulse_consent_decline))
-                                }
-                            }
+                        NovaPulseConfirmNoticeDialog(
+                            title = stringResource(R.string.novapulse_optimize_consent_title),
+                            body = stringResource(R.string.novapulse_optimize_consent_body),
+                            confirmText = stringResource(R.string.novapulse_consent_allow),
+                            dismissText = stringResource(R.string.novapulse_consent_decline),
+                            onConfirm = { viewModel.respondToOptimizeConsent(true) },
+                            onDismiss = { viewModel.respondToOptimizeConsent(false) },
                         )
                     }
                 }
@@ -399,6 +387,14 @@ class QuietStormActivity : BaseComponentActivity() {
                         onInstallReady = viewModel::installReadyUpdateApk,
                         onRecheck = { viewModel.checkForAppUpdates(silent = false, openDialogIfUpdate = true) },
                         onDismiss = { viewModel.openUpdateDialog(false) }
+                    )
+                }
+
+                val noticeMsg = state.activeNoticeDialog
+                if (!noticeMsg.isNullOrBlank()) {
+                    NovaPulseSecurityNoticeDialog(
+                        message = noticeMsg,
+                        onDismiss = viewModel::dismissNoticeDialog,
                     )
                 }
             }
@@ -493,362 +489,6 @@ private fun UpdateAvailableStrip(
     }
 }
 
-@Composable
-private fun NovaPulseUpdateDialog(
-    state: Qs3dUiState,
-    onDownloadOption: (com.v2ray.ang.dto.ApkAssetOption) -> Unit,
-    onInstallReady: () -> Unit,
-    onRecheck: () -> Unit,
-    onDismiss: () -> Unit,
-) {
-    val result = state.availableUpdate ?: return
-    val versionStr = result.latestVersion ?: ""
-    val recommended = result.availableAssets.firstOrNull { it.isDeviceMatch }
-        ?: result.availableAssets.firstOrNull()
-    val universal = result.availableAssets.firstOrNull { it.isUniversal && it != recommended }
-
-    val pulseTransition = rememberInfiniteTransition(label = "update_dialog_halo")
-    val haloAlpha by pulseTransition.animateFloat(
-        initialValue = 0.35f,
-        targetValue = 0.90f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 1600, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse,
-        ),
-        label = "halo_alpha",
-    )
-
-    Dialog(
-        onDismissRequest = onDismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = false),
-    ) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 20.dp)
-                .clip(RoundedCornerShape(24.dp))
-                .background(
-                    Brush.verticalGradient(
-                        listOf(
-                            Color(0xF5111D3B),
-                            QsColors.MidnightNavy.copy(alpha = 0.97f),
-                            QsColors.DeepVoid.copy(alpha = 0.98f),
-                        )
-                    )
-                )
-                .border(
-                    width = 1.2.dp,
-                    brush = Brush.linearGradient(
-                        listOf(
-                            QsColors.ElectricCyan.copy(alpha = haloAlpha),
-                            QsColors.PlasmaViolet.copy(alpha = 0.55f),
-                            QsColors.AuroraMint.copy(alpha = haloAlpha),
-                        )
-                    ),
-                    shape = RoundedCornerShape(24.dp),
-                )
-                .padding(20.dp)
-        ) {
-            Column(
-                modifier = Modifier.fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                // Header: Orbital Emblem + Title + New Badge
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(46.dp)
-                            .clip(CircleShape)
-                            .background(
-                                Brush.radialGradient(
-                                    listOf(
-                                        QsColors.AuroraMint.copy(alpha = 0.34f),
-                                        QsColors.ElectricCyan.copy(alpha = 0.12f),
-                                    )
-                                )
-                            )
-                            .border(1.2.dp, QsColors.AuroraMint.copy(alpha = haloAlpha), CircleShape),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Text(
-                            text = "↑",
-                            color = QsColors.AuroraMint,
-                            fontSize = 21.sp,
-                            fontWeight = FontWeight.Black,
-                        )
-                    }
-                    Column(modifier = Modifier.weight(1f)) {
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(999.dp))
-                                .background(QsColors.AuroraMint.copy(alpha = 0.16f))
-                                .padding(horizontal = 8.dp, vertical = 2.dp)
-                        ) {
-                            Text(
-                                text = stringResource(R.string.novapulse_update_badge_new),
-                                color = QsColors.AuroraMint,
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.ExtraBold,
-                            )
-                        }
-                        Spacer(Modifier.height(4.dp))
-                        Text(
-                            text = stringResource(R.string.novapulse_update_available_title_fmt, versionStr),
-                            color = QsColors.TextPrimary,
-                            fontSize = 16.sp,
-                            fontWeight = FontWeight.ExtraBold,
-                        )
-                    }
-                }
-
-                // Version transition pills: current -> latest
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(14.dp))
-                        .background(QsColors.GlassSurface)
-                        .border(0.8.dp, QsColors.GlassBorderBottom, RoundedCornerShape(14.dp))
-                        .padding(horizontal = 12.dp, vertical = 9.dp),
-                    horizontalArrangement = Arrangement.Center,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(QsColors.TextMuted.copy(alpha = 0.22f))
-                            .padding(horizontal = 9.dp, vertical = 3.dp)
-                    ) {
-                        Text(
-                            text = "v${BuildConfig.VERSION_NAME}",
-                            color = QsColors.TextSecondary,
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold,
-                        )
-                    }
-                    Text(
-                        text = "  ➜  ",
-                        color = QsColors.ElectricCyan,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Bold,
-                    )
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(QsColors.AuroraMint.copy(alpha = 0.22f))
-                            .border(0.8.dp, QsColors.AuroraMint.copy(alpha = 0.6f), RoundedCornerShape(8.dp))
-                            .padding(horizontal = 9.dp, vertical = 3.dp)
-                    ) {
-                        Text(
-                            text = "v$versionStr",
-                            color = QsColors.AuroraMint,
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.ExtraBold,
-                        )
-                    }
-                }
-
-                if (state.isCheckingUpdate && state.updateDownloadProgress == null) {
-                    Text(
-                        text = stringResource(R.string.novapulse_update_checking),
-                        color = QsColors.ElectricCyan,
-                        fontSize = 11.5.sp,
-                        fontWeight = FontWeight.Medium,
-                    )
-                }
-
-                if (!result.releaseNotes.isNullOrBlank()) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(14.dp))
-                            .background(QsColors.GlassSurfaceElevated.copy(alpha = 0.45f))
-                            .border(0.8.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(14.dp))
-                            .padding(12.dp)
-                    ) {
-                        Text(
-                            text = stringResource(R.string.novapulse_update_whats_new),
-                            color = QsColors.ElectricCyan,
-                            fontSize = 11.5.sp,
-                            fontWeight = FontWeight.Bold,
-                        )
-                        Spacer(Modifier.height(6.dp))
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .heightIn(max = 155.dp)
-                                .verticalScroll(rememberScrollState())
-                        ) {
-                            Text(
-                                text = result.releaseNotes,
-                                color = QsColors.TextSecondary,
-                                fontSize = 12.sp,
-                                lineHeight = 18.sp,
-                            )
-                        }
-                    }
-                }
-
-                // Action / Progress Section
-                when {
-                    state.updateDownloadProgress != null -> {
-                        val pct = state.updateDownloadProgress.coerceIn(0, 100)
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(14.dp))
-                                .background(QsColors.GlassSurface)
-                                .padding(12.dp),
-                            verticalArrangement = Arrangement.spacedBy(8.dp),
-                        ) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Text(
-                                    text = stringResource(R.string.novapulse_update_downloading_fmt, pct),
-                                    color = QsColors.TextPrimary,
-                                    fontSize = 12.5.sp,
-                                    fontWeight = FontWeight.Bold,
-                                )
-                                Text(
-                                    text = "$pct%",
-                                    color = QsColors.AuroraMint,
-                                    fontSize = 13.sp,
-                                    fontWeight = FontWeight.ExtraBold,
-                                )
-                            }
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(9.dp)
-                                    .clip(RoundedCornerShape(999.dp))
-                                    .background(Color.White.copy(alpha = 0.10f))
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxWidth((pct / 100f).coerceIn(0.03f, 1f))
-                                        .height(9.dp)
-                                        .clip(RoundedCornerShape(999.dp))
-                                        .background(
-                                            Brush.horizontalGradient(
-                                                listOf(QsColors.AuroraMint, QsColors.ElectricCyan, QsColors.PlasmaViolet)
-                                            )
-                                        )
-                                )
-                            }
-                            Text(
-                                text = stringResource(R.string.novapulse_update_fast_gateway_note),
-                                color = QsColors.TextMuted,
-                                fontSize = 10.5.sp,
-                            )
-                        }
-                    }
-
-                    state.readyUpdateApkPath != null -> {
-                        GradientUpdateButton(
-                            text = stringResource(R.string.novapulse_update_install_now_btn),
-                            onClick = onInstallReady,
-                        )
-                    }
-
-                    else -> {
-                        recommended?.let { opt ->
-                            GradientUpdateButton(
-                                text = stringResource(R.string.novapulse_update_device_abi_btn_fmt, opt.abi),
-                                onClick = { onDownloadOption(opt) },
-                            )
-                        }
-                        universal?.let { opt ->
-                            OutlinedButton(
-                                onClick = { onDownloadOption(opt) },
-                                modifier = Modifier.fillMaxWidth(),
-                                shape = RoundedCornerShape(14.dp),
-                                border = BorderStroke(1.dp, QsColors.ElectricCyan.copy(alpha = 0.45f)),
-                                contentPadding = PaddingValues(vertical = 11.dp),
-                            ) {
-                                Text(
-                                    text = stringResource(R.string.novapulse_update_universal_btn),
-                                    color = QsColors.ElectricCyan,
-                                    fontSize = 12.5.sp,
-                                    fontWeight = FontWeight.SemiBold,
-                                )
-                            }
-                        }
-                        Text(
-                            text = stringResource(R.string.novapulse_update_fast_gateway_note),
-                            color = QsColors.TextMuted,
-                            fontSize = 10.5.sp,
-                        )
-                    }
-                }
-
-                HorizontalDivider(color = Color.White.copy(alpha = 0.08f))
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    TextButton(
-                        onClick = onRecheck,
-                        enabled = !state.isCheckingUpdate && state.updateDownloadProgress == null,
-                    ) {
-                        Text(
-                            text = stringResource(R.string.novapulse_update_check_btn),
-                            color = QsColors.ElectricCyan,
-                            fontSize = 12.5.sp,
-                            fontWeight = FontWeight.SemiBold,
-                        )
-                    }
-                    TextButton(onClick = onDismiss) {
-                        Text(
-                            text = stringResource(R.string.novapulse_update_later_btn),
-                            color = QsColors.TextSecondary,
-                            fontSize = 12.5.sp,
-                            fontWeight = FontWeight.Medium,
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun GradientUpdateButton(
-    text: String,
-    onClick: () -> Unit,
-) {
-    Button(
-        onClick = onClick,
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(14.dp))
-            .background(
-                Brush.horizontalGradient(
-                    listOf(QsColors.AuroraMint, QsColors.ElectricCyan)
-                )
-            ),
-        colors = ButtonDefaults.buttonColors(
-            containerColor = Color.Transparent,
-            contentColor = QsColors.DeepVoid,
-        ),
-        shape = RoundedCornerShape(14.dp),
-        contentPadding = PaddingValues(vertical = 12.dp),
-    ) {
-        Text(
-            text = text,
-            color = QsColors.DeepVoid,
-            fontSize = 13.5.sp,
-            fontWeight = FontWeight.ExtraBold,
-        )
-    }
-}
 
 @Composable
 private fun NovaPulseTopBar(

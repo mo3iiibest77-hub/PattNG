@@ -108,6 +108,7 @@ data class Qs3dUiState(
     val speedDisplayEnabled: Boolean = true,
     val activationInput: String = "",
     val toastMessage: String? = null,
+    val activeNoticeDialog: String? = null,
     val smartFlow: SmartFlowState = SmartFlowState(),
     val discoveryState: PostConnectDiscoveryState = PostConnectDiscoveryState(),
     val lastCdnDetection: CdnDetectionResult? = null,
@@ -369,6 +370,10 @@ class Qs3dViewModel(
         _uiState.update { it.copy(toastMessage = null) }
     }
 
+    fun dismissNoticeDialog() {
+        _uiState.update { it.copy(activeNoticeDialog = null) }
+    }
+
     fun setActivationInput(text: String) {
         _uiState.update { it.copy(activationInput = text) }
     }
@@ -534,10 +539,12 @@ class Qs3dViewModel(
             }.onFailure { err ->
                 val cleanErr = LicenseBackendClient.sanitizeForDisplay(err.message)
                     .ifBlank { ctx.getString(R.string.novapulse_license_failed) }
+                val showModal = NovaPulseNoticeParser.shouldShowAsRichDialog(cleanErr)
                 _uiState.update {
                     it.copy(
                         isRedeemingLicense = false,
-                        toastMessage = cleanErr
+                        toastMessage = if (showModal) it.toastMessage else cleanErr,
+                        activeNoticeDialog = if (showModal) cleanErr else it.activeNoticeDialog,
                     )
                 }
             }
@@ -714,6 +721,7 @@ class Qs3dViewModel(
         )
 
         autoCountryProbeDoneForSession = false
+        val showModal = NovaPulseNoticeParser.shouldShowAsRichDialog(finalMessage)
         _uiState.update {
             it.copy(
                 isLoggingOut = false,
@@ -733,7 +741,8 @@ class Qs3dViewModel(
                 showSubscriptionDetails = false,
                 showRangeExplorer = false,
                 showAboutPromo = false,
-                toastMessage = finalMessage,
+                toastMessage = if (showModal) it.toastMessage else finalMessage,
+                activeNoticeDialog = if (showModal) finalMessage else it.activeNoticeDialog,
             )
         }
         return true

@@ -119,6 +119,14 @@ jobs:
         fi
         python3 -c 'import glob, xml.etree.ElementTree as ET; roots = [ET.parse(f).getroot() for f in glob.glob("app/build/test-results/testPlaystoreDebugUnitTest/*.xml")]; t = sum(int(r.attrib.get("tests", 0)) for r in roots); f = sum(int(r.attrib.get("failures", 0)) + int(r.attrib.get("errors", 0)) for r in roots); s = sum(int(r.attrib.get("skipped", 0)) for r in roots); print(f"::notice::Unit tests summary: total={t}, passed={t-f-s}, failed={f}, skipped={s}")'
 
+    - name: Upload UI screenshots
+      uses: actions/upload-artifact@v7
+      if: ${{ always() }}
+      with:
+        name: ui-screenshots
+        path: ${{ github.workspace }}/V2rayNG/app/build/outputs/screenshots/*.png
+        if-no-files-found: ignore
+
     - name: Build APK
       run: |
         cd ${{ github.workspace }}/V2rayNG

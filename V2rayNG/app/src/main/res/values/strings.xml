@@ -802,5 +802,12 @@
     <string name="novapulse_update_badge_up_to_date">UP TO DATE</string>
     <string name="novapulse_update_whats_new">What\'s New</string>
     <string name="novapulse_update_fast_gateway_note">High-speed download via NovaPulse secure gateway</string>
+    <string name="novapulse_notice_badge_mandatory">Mandatory Security Update</string>
+    <string name="novapulse_notice_badge_security">Security Notice</string>
+    <string name="novapulse_notice_badge_update">New Release</string>
+    <string name="novapulse_notice_badge_info">System Notice</string>
+    <string name="novapulse_notice_ack_btn">Got it</string>
+    <string name="novapulse_notice_security_title">Security &amp; License Notice</string>
+    <string name="novapulse_notice_official_support_title">Quick Support &amp; Official Channel</string>
 
 </resources>

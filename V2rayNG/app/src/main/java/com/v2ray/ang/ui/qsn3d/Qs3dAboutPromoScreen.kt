@@ -48,6 +48,7 @@ import com.v2ray.ang.R
  */
 object SupportLinks {
     const val TELEGRAM_USERNAME = "Mo3i_Best"
+    const val OFFICIAL_CHANNEL_USERNAME = "NovaPulseVPN"
 
     val telegramDeepLink: String
         get() = "tg://resolve?domain=$TELEGRAM_USERNAME"
@@ -55,24 +56,49 @@ object SupportLinks {
     val telegramWebUrl: String
         get() = "https://t.me/$TELEGRAM_USERNAME"
 
-    fun openTelegramSupport(context: Context): Boolean {
-        val deepIntent = Intent(Intent.ACTION_VIEW, Uri.parse(telegramDeepLink)).apply {
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        }
-        val openedDeep = runCatching {
-            context.startActivity(deepIntent)
-            true
-        }.getOrDefault(false)
-        if (openedDeep) return true
+    fun openTelegramSupport(context: Context): Boolean = openTelegramTarget(context, TELEGRAM_USERNAME)
 
-        val webIntent = Intent(Intent.ACTION_VIEW, Uri.parse(telegramWebUrl)).apply {
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    /**
+     * Opens any Telegram handle (`@user`), `t.me/...`, `tg://...`, or HTTPS URL cleanly,
+     * falling back from the native Telegram URI scheme to the web browser if needed.
+     */
+    fun openTelegramTarget(context: Context, target: String): Boolean {
+        val clean = target.trim()
+        if (clean.isEmpty()) return false
+
+        val telegramUser = NovaPulseNoticeParser.extractTelegramUsername(clean)
+            ?: clean.removePrefix("@").takeIf {
+                !clean.contains("://") && Regex("""^[A-Za-z][A-Za-z0-9_]{2,31}$""").matches(it)
+            }
+
+        if (telegramUser != null) {
+            val deepIntent = Intent(Intent.ACTION_VIEW, Uri.parse("tg://resolve?domain=$telegramUser")).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            val openedDeep = runCatching {
+                context.startActivity(deepIntent)
+                true
+            }.getOrDefault(false)
+            if (openedDeep) return true
+
+            val webIntent = Intent(Intent.ACTION_VIEW, Uri.parse("https://t.me/$telegramUser")).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            val openedWeb = runCatching {
+                context.startActivity(webIntent)
+                true
+            }.getOrDefault(false)
+            if (openedWeb) return true
+        } else if (clean.startsWith("https://", ignoreCase = true) || clean.startsWith("http://", ignoreCase = true)) {
+            val webIntent = Intent(Intent.ACTION_VIEW, Uri.parse(clean)).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            val openedWeb = runCatching {
+                context.startActivity(webIntent)
+                true
+            }.getOrDefault(false)
+            if (openedWeb) return true
         }
-        val openedWeb = runCatching {
-            context.startActivity(webIntent)
-            true
-        }.getOrDefault(false)
-        if (openedWeb) return true
 
         Toast.makeText(
             context,
