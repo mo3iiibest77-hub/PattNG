@@ -60,13 +60,17 @@ object LogUtil {
     private fun log(priority: Int, tag: String, message: String, throwable: Throwable? = null) {
         if (!isEnabled(priority)) return
 
-        when {
-            throwable == null -> Log.println(priority, tag, message)
-            priority >= Log.ERROR -> Log.e(tag, message, throwable)
-            priority == Log.WARN -> Log.w(tag, message, throwable)
-            priority == Log.INFO -> Log.i(tag, message, throwable)
-            priority == Log.DEBUG -> Log.d(tag, message, throwable)
-            else -> Log.v(tag, message, throwable)
+        try {
+            when {
+                throwable == null -> Log.println(priority, tag, message)
+                priority >= Log.ERROR -> Log.e(tag, message, throwable)
+                priority == Log.WARN -> Log.w(tag, message, throwable)
+                priority == Log.INFO -> Log.i(tag, message, throwable)
+                priority == Log.DEBUG -> Log.d(tag, message, throwable)
+                else -> Log.v(tag, message, throwable)
+            }
+        } catch (_: RuntimeException) {
+            // Pure JVM unit tests stub android.util.Log methods unless Robolectric is attached.
         }
     }
 
