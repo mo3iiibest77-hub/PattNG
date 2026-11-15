@@ -221,7 +221,7 @@
 | ایزوله‌سازی فایروال کانتینر و پورت‌های داخلی (`4150, 9090, 20870`) | **PASS** | مسدود از کانتینر `hmpanel-panel`؛ قابل‌دسترس فقط از `hmpanel-nginx` (`172.18.0.4`) |
 | دسترسی SSH کلیدمحور (`22` و `101`) بدون قطع دسترسی مالک | **DEFERRED (Safe)** | `SSH_KEY_22_OK` و `SSH_KEY_101_OK` موفق؛ ورود رمز عمداً تا تأیید کلید مالک باز ماند (`/usr/local/sbin/novapulse-lock-ssh-keyonly.sh` آماده اجرا) |
 | سلامت سرویس‌های VPN و شبکه (`ssh`, `fail2ban`, `ufw`, `docker`, `x-ui`, `novapulse-license`, `sysmon`, `agy-account-sync`, `xray-restart-watcher`) | **PASS** | تمام `9` سرویس `active`؛ `62` ردیف لایسنس (`16` مدرن `2.4.4`/`2.4.5`، `2` legacy فعال، `3` `legacy_ambiguous`، `2` revoked) |
-| تست واحد، RTL، کلیک چیپ‌ها و رندر سه‌بعدی در GitHub Actions (`feat/qsn-3d-smart-stage1`) | **PENDING_PUSH** | آخرین اجرا در Run [`43745916261`](https://github.com/mo3iiibest77-hub/PattNG/actions/runs/43745916261) (`a9f1ac74`: `98/98` موفق، `ui-screenshots` با حجم `2,555,713` بایت)؛ اجرای جدید با تست RTL/کلیک در حال ثبت است |
+| تست واحد، RTL، کلیک چیپ‌ها و رندر سه‌بعدی در GitHub Actions (`feat/qsn-3d-smart-stage1`) | **PASS** | Run [`43750483880`](https://github.com/mo3iiibest77-hub/PattNG/actions/runs/43750483880) (`e6e7f4fa`): `99/99` تست واحد موفق (`failed=0, skipped=0`)، تولید `ui-screenshots` (`2,555,713` بایت)، بیلد `NovaPulse_2.4.5_arm64-v8a.apk` (`sha256: 84584a8f417224b85763a6a67416ecc1704de2689bd863a14288d97881de3fa8`) و تأیید امضای گواهی Release (`a016c9bf...`) |
 
 ---
 
