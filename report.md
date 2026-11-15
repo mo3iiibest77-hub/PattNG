@@ -143,3 +143,79 @@
    * `https://127.0.0.1:2087/gXfxEJl46r0576NkI7/np-license-api/assets/panel-core.js` -> `200`
 4. **بیلد و تست واحد Android در GitHub Actions:**
    * بیلد و امضای رسمی APK نسخه `2.4.5` (`versionCode 753`) همراه با اجرای `./gradlew testPlaystoreDebugUnitTest --no-daemon` از طریق **GitHub Actions** (`.github/workflows/build.yml`) روی تگ `v2.4.5` انجام می‌شود.
+
+---
+
+## بخش چهارم: مقاوم‌سازی کامل زیرساخت، امنیت کلاینت Android و بازطراحی رابط اعلانات (Phase 2B & Phase 3)
+
+### ۱. بکاپ و بازیابی پیش از تغییرات زیرساخت
+* پوشه بکاپ امن: `/root/backups/phase3-hardening-20261115-174110Z/` (`chmod 700` و `go-rwx`)
+* محتویات بکاپ‌شده: SQLite `.backup` از `licenses.db` و `x-ui.db` (هر دو `PRAGMA integrity_check -> ok`)، `/etc/ssh`، فایل‌های systemd unit، `/opt/novapulse-license`، `/opt/hmpanel/{docker-compose.yml,.env,nginx}`، `/usr/local/bin/agy-account-sync.py`، تنظیمات `antigravity_tools`، پیکربندی `/etc/ufw` و خروجی‌های `iptables-save` (`iptables-before.v4` / `iptables-before.v6`).
+
+### ۲. مقاوم‌سازی سیستم‌عامل، شبکه، SSH و سرویس‌ها
+1. **احراز هویت صرفاً کلیدمحور SSH (`root` و `ubuntu`) روی پورت‌های `22` و `101`:**
+   * پیکربندی متمرکز در `/etc/ssh/sshd_config.d/00-novapulse-ssh-hardening.conf` و همگام‌سازی فایل‌های `50-cloud-init.conf`، `60-cloudimg-settings.conf` و `99-root-access.conf`:
+     * `PermitRootLogin prohibit-password`
+     * `PasswordAuthentication no` و `KbdInteractiveAuthentication no`
+     * `PubkeyAuthentication yes` و `AuthenticationMethods publickey`
+   * حساب `ubuntu` (`uid=1000`, `sudo` NOPASSWD) بدون تغییر حفظ شد.
+   * کلید جدید اختصاصی `ed25519` برای دسترسی `root` ساخته و به `/root/.ssh/authorized_keys` (`0600`) اضافه شد:
+     * **مسیر فایل کلید خصوصی روی سرور:** `/root/.ssh/novapulse_root_ed25519`
+     * **اثر انگشت کلید عمومی:** `SHA256:OpT/sCN1RXHZMzjpeejWEmKqY2RvA5jTNu2zABgLlUA`
+     * **نحوه دریافت کلید خصوصی در کلاینت:** اتصال با کاربر مجاز `ubuntu` و انتقال امن با `sudo cat /root/.ssh/novapulse_root_ed25519` (یا `sftp` پس از تنظیم مجوز موقت)، سپس ذخیره با `chmod 600` روی سیستم مدیر. پس از انتقال، نگهداری نسخه کلید خصوصی با دسترسی محدود ضروری است.
+   * تأیید عملی: ورود با کلید روی پورت‌های `22` و `101` موفق (`SSH_KEY_22_OK`, `SSH_KEY_101_OK`, `sftp> pwd`) و ورود با رمز برای `root` و `ubuntu` مسدود (`Permission denied (publickey)`). Fail2ban (`sshd`) فعال باقی ماند.
+
+2. **فایروال IPv4 + IPv6 (`UFW`) و فیلترینگ `DOCKER-USER`:**
+   * سیاست پیش‌فرض: `deny incoming`، `allow outgoing`، `deny routed` با `IPV6=yes`.
+   * پورت‌های عمومی باز (بدون اختلال در کاربران VPN): `22, 101, 80, 443, 2087, 2083, 2097, 2052, 2053, 2096, 8080, 8443, 8444, 8445, 8447/tcp`.
+   * پورت‌های داخلی `4150` (بک‌اند لایسنس)، `9090` (`sysmon`)، `20870` (`x-ui`) و پورت‌های داخلی Docker (`3100, 8088, 8090, 8100`) منحصراً از طریق رابط `br-50a43488fc95` برای IP ثابت **`172.18.0.4/32`** کانتینر Nginx مجاز هستند و از اینترنت یا سایر کانتینرها مسدود شدند.
+   * زنجیره `DOCKER-USER` در `/etc/ufw/after.rules` (IPv4) و `/etc/ufw/after6.rules` (IPv6) نیز ترافیک مستقیم خارجی روی پورت‌های داخلی را Drop می‌کند.
+
+3. **حذف رمزهای افشاشده و جداسازی محیطی `sysmon` و `agy-account-sync`:**
+   * حذف کامنت‌های حاوی رمز از `/opt/hmpanel/nginx/conf.d/agy.conf` و `/opt/hamsoo/agy.conf`.
+   * چرخش مستقل ۳ رمز (پسورد پنل `sysmon`، `API_KEY` و `WEB_PASSWORD` کانتینر `antigravity-manager`) بدون نگهداری در سورس یا کانفیگ وب‌سرور.
+   * انتقال متغیرهای محیطی به فایل‌های `0600 root:root` (`/etc/sysmon/env`، `/etc/agy-account-sync/env`، `/etc/agy-account-sync/container.env`)، اعمال محدودیت‌های systemd (`NoNewPrivileges`, `PrivateTmp`, `ProtectSystem`, `ProtectHome`) روی `sysmon.service` و `xray-restart-watcher.service` و حذف کامل رمز fallback از `/usr/local/bin/agy-account-sync.py` (`HTTP 200` در همگام‌سازی واقعی تأیید شد).
+
+4. **تثبیت IP کانتینر Nginx، اعتماد پروکسی، CORS و دسترسی کمینه‌سطح PostgreSQL:**
+   * تثبیت آدرس `ipv4_address: 172.18.0.4` برای `hmpanel-nginx` در `/opt/hmpanel/docker-compose.yml` (پایدار پس از recreate و restart).
+   * محدودسازی `TRUSTED_PROXY_CIDRS` در `/opt/novapulse-license/.env` به `127.0.0.0/8,::1/128,172.18.0.4/32`.
+   * محدودسازی سخت‌گیرانه CORS در `server.py` فقط به دامنه‌های مجاز (`https://nova.dontbedumb.ir`, `https://cdnflear.dontbedumb.ir:2087`) همراه با `Vary: Origin` و پاسخ `403` برای درخواست‌های `OPTIONS` از Origin نامعتبر.
+   * ایجاد نقش کمینه‌سطح PostgreSQL به نام `np_license_svc` (`NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT`) صرفاً با مجوز `SELECT`/`UPDATE` ستونی روی جدول‌های `"Panel"` و `"Client"` و تبدیل ۵ کوئری `psql` به اجرای پارامتریک (`-v` / `:'var'`) بدون الحاق رشته‌ای SQL. دسترسی به جداول حساس `"Admin"` و `"Panel".password` با خطای `permission denied` مسدود است.
+
+---
+
+### ۳. اصلاحات امنیتی کلاینت Android (`PattNG-stage1`)
+1. **پشتیبانی ایمن از چرخش گواهی امضای APK (`NovaPulseApkDownloader.kt` & `AppSecurityGuardTest.kt`):**
+   * افزودن متدهای خالص قابل‌تست JVM (`verifySigningCertificateDigests`، `verifyLegacySignatureDigests` و اضافه‌بارهای بایت‌محور) با حفظ گواهی فعلی Release (`A0:16:C9:...`).
+   * در Android 9+ (`API 28+`)، استخراج صحیح `SigningInfo` با تفکیک دقیق `hasMultipleSigners()`: بررسی `signingCertificateHistory` برای گواهی‌های چرخش‌یافته تک‌امضا و `apkContentsSigners` برای حالت چندامضا، با رد کامل حالت‌های ناقص/خالی (Fail-Closed).
+2. **غیرفعال‌سازی استخراج و پشتیبان‌گیری خودکار داده‌ها (`AndroidManifest.xml`, `res/xml/data_extraction_rules.xml`):**
+   * افزودن `android:fullBackupContent="false"` و `android:dataExtractionRules="@xml/data_extraction_rules"` برای مسدودسازی Cloud Backup و Device-to-Device Transfer روی تمام دامنه‌ها (`root`, `file`, `database`, `sharedpref`, `external`).
+3. **بستن مسیرهای بایپس گیت لایسنس و دستکاری زمان اجرا (`LauncherManager.kt`, `CoreVpnService.kt`, `CoreProxyOnlyService.kt`, `CoreRootService.kt`, `BootReceiver.kt`, `UrlSchemeActivity.kt`):**
+   * الزام بررسی هم‌زمان `!AppSecurityGuard.isRuntimeTampered()` و `LicenseBackendClient.isLicenseSessionActive()` پیش از راه‌اندازی تونل VPN (`setupVpnService()`), سرویس‌های پروکسی/روت، همگام‌سازی خودکار بوت و پردازش Deep Link/Intent خارجی.
+
+---
+
+### ۴. بازطراحی UI کامپوننت اعلانات، بروزرسانی و پیام‌های امنیتی (`Part 4`)
+* **به‌روزرسانی پیام‌های سرور (`server.py` و `np_license/sessions.py`):** ساختاردهی واضح پیام‌های فارسی بدون اموجی‌های شلوغ یا لینک‌های پرانتزدار، همراه با لینک و آیدی تمیز `@NovaPulseVPN`، `https://t.me/NovaPulseVPN` و `@Mo3i_Best`.
+* **پارسر متنی خالص JVM (`NovaPulseNoticeParser.kt` + `NovaPulseNoticeParserTest.kt`):**
+  * تشخیص هوشمند سطح اهمیت پیام (`MANDATORY_SECURITY`، `SECURITY_NOTICE`، `UPDATE_INFO`، `INFO`)، تفکیک بخش‌های هشدار، وضعیت ایمن و راهنمای پشتیبانی، جداسازی خودکار اعداد نسخه (`v2.4.5`) و لینک‌ها با کاراکترهای ایزوله‌ساز Bidi (`LRI/PDI`) برای نمایش بدون بهم‌ریختگی در متن فارسی راست‌به‌چپ، و حذف علائم نگارشی چسبیده از انتهای لینک‌ها (`@Mo3i_Best،`، `https://t.me/...).`).
+* **کامپوننت سه‌بعدی-شیشه‌ای یکپارچه (`NovaPulseNoticeDialog.kt`):**
+  * استفاده هم‌زمان در `QuietStormActivity.kt` (دیالوگ بروزرسانی، دیالوگ اعلان امنیتی/لایسنس و دیالوگ رضایت بهینه‌سازی)، `CheckUpdateActivity.kt` و جایگزینی اسنک‌بار پیش‌فرض با `Qs3dSnackbarHost` شیشه‌ای.
+  * طراحی چندلایه با هدر Emblem وکتور اختصاصی (متوقف در صورت خاموش‌بودن انیمیشن یا رفتن به پس‌زمینه توسط `rememberMotionActive()`)، نمایشگر انتقال نسخه (`v2.4.4 -> v2.4.5`) و ABI، کارت‌های رنگی بخش‌بندی‌شده، لینک‌های آبی/فیروزه‌ای قابل‌کلیک درون متن و چیپ‌های دسترسی مستقیم تلگرام (`SupportLinks.openTelegramTarget`) با ساختار واکنش‌گرا برای نمایشگرهای باریک `320dp`.
+* **تست اسکرین‌شات واقعی در CI (`NovaPulseNoticeUiScreenshotTest.kt` + `.github/workflows/build.yml`):**
+  * رندر واقعی Compose با Robolectric Native Graphics (`@GraphicsMode(NATIVE)`) در حالت‌های فارسی اجباری (`412dp`)، آپدیت اختیاری با نوار پیشرفت (`412dp`)، اعلان امنیتی در صفحه باریک (`320dp`) و حالت انگلیسی (`412dp`) و آپلود خروجی `ui-screenshots` به‌عنوان Artifact در گیت‌هاب اکشنز.
+
+---
+
+### ۵. ماتریس نهایی راستی‌آزمایی (Verification Matrix)
+
+| بخش / آزمون | وضعیت | نتیجه مشاهده‌شده |
+| :--- | :---: | :--- |
+| تست واحد و امنیت Backend (`unittest discover`) | **PASS** | `13/13` تست موفق (شامل تست Proxy CIDR `/32` و CORS و نودج نسخه < `2.4.4`) |
+| چرخه زنده API لایسنس (`challenge -> redeem -> status -> sub_noauth -> logout -> post_logout`) | **PASS** | پاسخ‌های `200 -> 200 -> 200 -> 401 -> 200 -> 401` و پاک‌سازی رکورد تست |
+| دسترسی کمینه‌سطح PostgreSQL (`np_license_svc`) | **PASS** | شمارش `Client` (`59`) موفق؛ `Panel.password` و `Admin` با `permission denied` مسدود |
+| ایزوله‌سازی فایروال کانتینر و پورت‌های داخلی (`4150, 9090, 20870`) | **PASS** | مسدود از کانتینر `hmpanel-panel`؛ قابل‌دسترس فقط از `hmpanel-nginx` (`172.18.0.4`) |
+| دسترسی SSH کلیدمحور (`22` و `101`) و رد رمز عبور | **PASS** | `SSH_KEY_22_OK`, `SSH_KEY_101_OK`, `sftp> pwd` موفق؛ رمز برای `root`/`ubuntu` رد (`255`) |
+| سلامت سرویس‌های VPN و شبکه (`x-ui`, `xray`, `novapulse-license`, `sysmon`, `agy-account-sync`, `xray-restart-watcher`) | **PASS** | تمام `9` سرویس `active`؛ تمامی پورت‌های Xray/MTProto/Sub فعال (`55` لایسنس فعال، `16` دستگاه فعال، `2` دستگاه legacy) |
+| تست واحد و رندر سه‌بعدی/اسکرین‌شات Android در GitHub Actions (`feat/qsn-3d-smart-stage1`) | **PENDING CI PUSH** | بلافاصله پس از پوش روی گیت‌هاب اکشنز اجرا و بازبینی تصویری خواهد شد |
+
