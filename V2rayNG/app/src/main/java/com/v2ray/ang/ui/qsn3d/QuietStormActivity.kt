@@ -104,6 +104,15 @@ class QuietStormActivity : BaseComponentActivity() {
         }
     }
 
+    private val configQrScannerLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        val raw = result.data?.getStringExtra("SCAN_RESULT")?.trim().orEmpty()
+        if (result.resultCode == RESULT_OK && raw.isNotEmpty()) {
+            viewModel.importManualConfigs(raw)
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         requestNotificationPermissionIfNeeded()
@@ -297,6 +306,9 @@ class QuietStormActivity : BaseComponentActivity() {
                                             }
                                             startSmartConnect(forceRescan = true)
                                         },
+                                        onSwitchToSmartAuto = {
+                                            viewModel.switchToSmartAutoMode(reconnectIfRunning = state.coreRunning)
+                                        },
                                         onCancelFlow = SmartConnectCoordinator::cancelActiveFlow,
                                         onOpenSubscriptionDetails = { viewModel.openSubscriptionDetails(true) },
                                         onRefreshSubs = { viewModel.refreshQuotaOnly() },
@@ -314,11 +326,16 @@ class QuietStormActivity : BaseComponentActivity() {
                                             }
                                         },
                                         onSearchChange = viewModel::setConfigSearch,
+                                        onBucketChange = viewModel::setConfigBucket,
                                         onToggleBulkSelect = viewModel::toggleBulkSelect,
                                         onClearBulkSelection = viewModel::clearBulkSelection,
                                         onDeleteBulkSelected = viewModel::deleteBulkSelected,
                                         onTestAllDelays = viewModel::testAllDelays,
-                                        onSortByDelay = viewModel::sortConfigsByDelay
+                                        onSortByDelay = viewModel::sortConfigsByDelay,
+                                        onImportManualConfig = { text -> viewModel.importManualConfigs(text) },
+                                        onScanConfigQr = {
+                                            configQrScannerLauncher.launch(Intent(this@QuietStormActivity, ScannerActivity::class.java))
+                                        }
                                     )
 
                                     Qs3dTab.Ranges -> Qs3dRangesScreen(
@@ -347,6 +364,7 @@ class QuietStormActivity : BaseComponentActivity() {
                                         onSearchApps = perAppViewModel::filterApps,
                                         onAutoDiscoveryChange = viewModel::setAutoPostConnectDiscovery,
                                         onAuto2hOptimizeChange = viewModel::setAuto2hOptimize,
+                                        onAutoSmartFailoverChange = viewModel::setAutoSmartFailover,
                                         onSpeedDisplayChange = viewModel::setSpeedDisplayEnabled,
                                         onLanguageSelected = { code ->
                                             viewModel.setLanguage(code)

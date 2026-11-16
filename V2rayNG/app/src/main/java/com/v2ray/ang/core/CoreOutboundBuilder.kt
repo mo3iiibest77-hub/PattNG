@@ -552,17 +552,23 @@ object CoreOutboundBuilder {
 
         streamSettings.security = streamSecurity.nullIfBlank()
         if (streamSettings.security == null) return
+        val isCdnEligible = com.v2ray.ang.senpai.AutoConfigFilter.isCdnScanEligible(profileItem)
         val isAmazonOrFront = com.v2ray.ang.senpai.CloudflareConfigEnricher.isAmazonOrCloudFront(profileItem)
-        val effectiveFingerprint = if (isAmazonOrFront) {
-            profileItem.fingerPrint.nullIfBlank() ?: "chrome"
-        } else {
-            profileItem.fingerPrint.nullIfBlank() ?: "unsafe"
+        val isCloudflareCdn = isCdnEligible && !isAmazonOrFront
+        val effectiveFingerprint = when {
+            isCloudflareCdn -> profileItem.fingerPrint.nullIfBlank() ?: "unsafe"
+            isAmazonOrFront -> profileItem.fingerPrint.nullIfBlank() ?: "chrome"
+            streamSettings.security == AppConfig.REALITY ->
+                profileItem.fingerPrint.nullIfBlank()
+                    ?.takeUnless { it.equals("unsafe", ignoreCase = true) }
+                    ?: "chrome"
+            else -> profileItem.fingerPrint.nullIfBlank()
         }
-        val effectiveCipherSuites = if (isAmazonOrFront) {
-            profileItem.cipherSuites.nullIfBlank()
-        } else {
+        val effectiveCipherSuites = if (isCloudflareCdn) {
             profileItem.cipherSuites.nullIfBlank()
                 ?: com.v2ray.ang.senpai.CloudflareScanner.PRODUCTION_CIPHERSUITES
+        } else {
+            profileItem.cipherSuites.nullIfBlank()
         }
         val tlsSetting = OutboundBean.StreamSettingsBean.TlsSettingsBean(
             allowInsecure = allowInsecure,
@@ -586,12 +592,21 @@ object CoreOutboundBuilder {
             streamSettings.realitySettings = tlsSetting
         }
 
-        if (profileItem.finalMask.isNullOrEmpty() && !isAmazonOrFront) {
-            val defaultFinalMask = """{"tcp":[{"type":"fragment","settings":{"packets":"tlshello","lengths":["5","94","1"],"delays":["0"],"maxSplit":"0"}},{"type":"fragment","settings":{"packets":"1-1","lengths":["109","1"],"delays":["1"],"maxSplit":"355"}}]}"""
-            val parsedDefault = JsonUtil.parseString(defaultFinalMask)
-            if (parsedDefault != null) {
-                streamSettings.finalmask = parsedDefault
-            } else {
+        if (profileItem.finalMask.isNullOrEmpty()) {
+            if (isCloudflareCdn) {
+                val defaultFinalMask = """{"tcp":[{"type":"fragment","settings":{"packets":"tlshello","lengths":["5","94","1"],"delays":["0"],"maxSplit":"0"}},{"type":"fragment","settings":{"packets":"1-1","lengths":["109","1"],"delays":["1"],"maxSplit":"355"}}]}"""
+                val parsedDefault = JsonUtil.parseString(defaultFinalMask)
+                if (parsedDefault != null) {
+                    streamSettings.finalmask = parsedDefault
+                } else {
+                    updateOutboundFragment(streamSettings)
+                }
+            } else if (
+                !isAmazonOrFront &&
+                streamSettings.finalmask == null &&
+                streamSettings.security != AppConfig.REALITY &&
+                profileItem.configType != EConfigType.HYSTERIA2
+            ) {
                 updateOutboundFragment(streamSettings)
             }
         }

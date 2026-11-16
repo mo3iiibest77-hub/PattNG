@@ -42,6 +42,10 @@ data class SmartFlowState(
     val step: SmartStep = SmartStep.Idle,
     val activeGuid: String? = null,
     val activeRemarks: String? = null,
+    val activePipeline: ConfigPipeline = ConfigPipeline.CDN,
+    val activeTransportBadge: String? = null,
+    val switchReason: SmartSwitchReason = SmartSwitchReason.NONE,
+    val switchNoticeText: String? = null,
     val originDomain: String? = null,
     val detectedCdn: CdnType = CdnType.UNKNOWN,
     val domainPingIp: String? = null,
@@ -164,14 +168,49 @@ object SmartConnectCoordinator {
                     refreshAllSubscriptionsWithQuota(appContext)
                 }
 
-                // 2) Apply Cloudflare-only hardening & pick Cloudflare-first CDN config
+                // 2) Apply Cloudflare-only hardening & pick active pipeline config (CDN-first or explicit Standard)
                 CloudflareConfigEnricher.enrichAllStoredCloudflareProfiles(appContext)
                 _state.value = _state.value.copy(busy = true, step = SmartStep.SelectingProfile, errorMessage = null)
                 val honorExplicit = !explicitGuid.isNullOrBlank() || isExplicitServerSelected()
-                val targetGuid = resolveTargetGuid(appContext, explicitGuid, honorExplicit)
-                    ?: error("هیچ کانفیگ CDN معتبری یافت نشد.")
+                var targetGuid = resolveTargetGuid(appContext, explicitGuid, honorExplicit)
+                    ?: error("هیچ کانفیگ معتبری برای اتصال یافت نشد.")
                 var profile = MmkvManager.decodeServerConfig(targetGuid)
                     ?: error("اطلاعات کانفیگ انتخاب‌شده یافت نشد.")
+                var activePipeline = ConfigPipelineClassifier.classify(profile)
+
+                // Standard pipeline (REALITY / Hysteria2 / VMess / Trojan / SS / WireGuard / Socks / HTTP):
+                // Completely bypasses CDN IP scanning, SNI rewriting, and Cloudflare TLS overrides.
+                if (activePipeline == ConfigPipeline.STANDARD) {
+                    SmartFailoverStore.setSmartFailoverArmed(false)
+                    SmartFailoverStore.clearSwitchEvent()
+                    pendingOptimization = null
+                    MmkvManager.setSelectServer(targetGuid)
+                    val stdState = _state.value.copy(
+                        busy = false,
+                        step = SmartStep.StartingVpn,
+                        activeGuid = targetGuid,
+                        activeRemarks = profile.remarks,
+                        activePipeline = ConfigPipeline.STANDARD,
+                        activeTransportBadge = ConfigPipelineClassifier.safeTransportBadge(profile),
+                        switchReason = SmartSwitchReason.NONE,
+                        switchNoticeText = null,
+                        originDomain = null,
+                        detectedCdn = CdnType.UNKNOWN,
+                        bestIp = null,
+                        scanDone = 0,
+                        scanTotal = 0,
+                    )
+                    _state.value = stdState
+                    kotlinx.coroutines.withContext(Dispatchers.Main) {
+                        onReadyToStartVpn(targetGuid, stdState)
+                    }
+                    return@launch
+                }
+
+                // Arm automatic degradation failover when running Smart Auto CDN mode
+                SmartFailoverStore.setSmartFailoverArmed(!honorExplicit && SmartFailoverStore.isAutoFailoverEnabled())
+                SmartFailoverStore.clearSwitchEvent()
+
                 OriginDomainStore.rememberIfDomain(targetGuid, profile)
                 MmkvManager.setSelectServer(targetGuid)
 
@@ -199,6 +238,10 @@ object SmartConnectCoordinator {
                         step = SmartStep.StartingVpn,
                         activeGuid = targetGuid,
                         activeRemarks = profile.remarks,
+                        activePipeline = ConfigPipeline.CDN,
+                        activeTransportBadge = ConfigPipelineClassifier.safeTransportBadge(profile),
+                        switchReason = SmartSwitchReason.NONE,
+                        switchNoticeText = null,
                         originDomain = originDomain,
                         detectedCdn = quickCdn,
                         bestIp = profile.server,
@@ -218,7 +261,43 @@ object SmartConnectCoordinator {
                     guid = targetGuid,
                     profile = profile,
                     cloudFrontCidrs = frontCidrs,
-                ) ?: error("کانفیگ انتخاب‌شده فاقد آدرس یا TLS SNI معتبر است.")
+                )
+
+                if (preparedProfile == null) {
+                    if (!honorExplicit && SmartFailoverStore.isAutoFailoverEnabled()) {
+                        val stdFallback = StandardConfigProber.probeBestStandard(appContext, excludeGuid = targetGuid)
+                        if (stdFallback != null) {
+                            SmartFailoverStore.setSmartFailoverArmed(false)
+                            SmartFailoverStore.recordSwitchEvent(
+                                reason = SmartSwitchReason.CDN_CONNECT_FAILED,
+                                transportBadge = stdFallback.transportBadge,
+                                delayMs = stdFallback.delayMs,
+                            )
+                            MmkvManager.setSelectServer(stdFallback.guid)
+                            pendingOptimization = null
+                            val fbState = _state.value.copy(
+                                busy = false,
+                                step = SmartStep.StartingVpn,
+                                activeGuid = stdFallback.guid,
+                                activeRemarks = stdFallback.profile.remarks,
+                                activePipeline = ConfigPipeline.STANDARD,
+                                activeTransportBadge = stdFallback.transportBadge,
+                                switchReason = SmartSwitchReason.CDN_CONNECT_FAILED,
+                                switchNoticeText = "${stdFallback.transportBadge} (${stdFallback.delayMs}ms)",
+                                detectedCdn = CdnType.UNKNOWN,
+                                bestIp = null,
+                                scanDone = 0,
+                                scanTotal = 0,
+                            )
+                            _state.value = fbState
+                            kotlinx.coroutines.withContext(Dispatchers.Main) {
+                                onReadyToStartVpn(stdFallback.guid, fbState)
+                            }
+                            return@launch
+                        }
+                    }
+                    error("کانفیگ انتخاب‌شده فاقد آدرس یا TLS SNI معتبر است.")
+                }
                 profile = preparedProfile
 
                 pendingOptimization = PendingOptimization(
@@ -233,6 +312,10 @@ object SmartConnectCoordinator {
                     step = SmartStep.StartingVpn,
                     activeGuid = targetGuid,
                     activeRemarks = profile.remarks,
+                    activePipeline = ConfigPipeline.CDN,
+                    activeTransportBadge = ConfigPipelineClassifier.safeTransportBadge(profile),
+                    switchReason = SmartSwitchReason.NONE,
+                    switchNoticeText = null,
                     originDomain = originDomain.ifBlank { profile.sni.orEmpty() },
                     detectedCdn = quickCdn,
                     bestIp = profile.server,
@@ -273,6 +356,61 @@ object SmartConnectCoordinator {
     }
 
     /**
+     * Triggered when starting a CDN profile in Smart Auto mode fails immediately: probes eligible
+     * Standard (`REALITY` / `Hysteria2` / `v2rayNG`) configs and launches the best reachable one.
+     */
+    fun tryFailoverOnStartFailure(
+        context: Context,
+        failedGuid: String?,
+        onFallbackReady: (guid: String, state: SmartFlowState) -> Unit,
+        onNoFallback: () -> Unit,
+    ) {
+        if (!SmartFailoverStore.isSmartFailoverArmed()) {
+            onNoFallback()
+            return
+        }
+        val appCtx = context.applicationContext
+        val failedProfile = failedGuid?.let { MmkvManager.decodeServerConfig(it) }
+        if (failedProfile != null && ConfigPipelineClassifier.classify(failedProfile) != ConfigPipeline.CDN) {
+            onNoFallback()
+            return
+        }
+        activeJob?.cancel()
+        activeJob = scope.launch {
+            val stdBest = StandardConfigProber.probeBestStandard(appCtx, excludeGuid = failedGuid)
+            if (stdBest == null) {
+                SmartFailoverStore.setSmartFailoverArmed(false)
+                kotlinx.coroutines.withContext(Dispatchers.Main) { onNoFallback() }
+                return@launch
+            }
+            SmartFailoverStore.setSmartFailoverArmed(false)
+            SmartFailoverStore.recordSwitchEvent(
+                reason = SmartSwitchReason.CDN_CONNECT_FAILED,
+                transportBadge = stdBest.transportBadge,
+                delayMs = stdBest.delayMs,
+            )
+            MmkvManager.setSelectServer(stdBest.guid)
+            val fbState = _state.value.copy(
+                busy = false,
+                step = SmartStep.StartingVpn,
+                activeGuid = stdBest.guid,
+                activeRemarks = stdBest.profile.remarks,
+                activePipeline = ConfigPipeline.STANDARD,
+                activeTransportBadge = stdBest.transportBadge,
+                switchReason = SmartSwitchReason.CDN_CONNECT_FAILED,
+                switchNoticeText = "${stdBest.transportBadge} (${stdBest.delayMs}ms)",
+                detectedCdn = CdnType.UNKNOWN,
+                bestIp = null,
+                errorMessage = null,
+            )
+            _state.value = fbState
+            kotlinx.coroutines.withContext(Dispatchers.Main) {
+                onFallbackReady(stdBest.guid, fbState)
+            }
+        }
+    }
+
+    /**
      * Called when VPN daemon confirms active running state.
      * - Completes any controlled-reconnect verification handshake cleanly.
      * - If initial connect used TLS SNI without a saved scanned IP, runs background 30-IP scan
@@ -294,13 +432,26 @@ object SmartConnectCoordinator {
             return
         }
 
+        val banner = SmartFailoverStore.readLastSwitchBanner()
+        val runningProfile = targetGuid?.let { MmkvManager.decodeServerConfig(it) }
+        val activePipeline = ConfigPipelineClassifier.classify(runningProfile)
         val prev = _state.value
         _state.value = prev.copy(
             busy = false,
             step = SmartStep.Connected,
             activeGuid = targetGuid,
+            activeRemarks = runningProfile?.remarks ?: prev.activeRemarks,
+            activePipeline = activePipeline,
+            activeTransportBadge = runningProfile?.let { ConfigPipelineClassifier.safeTransportBadge(it) }
+                ?: prev.activeTransportBadge,
+            switchReason = banner?.reason ?: prev.switchReason,
+            switchNoticeText = banner?.let { "${it.transportBadge} (${it.delayMs}ms)" } ?: prev.switchNoticeText,
             errorMessage = null,
         )
+        if (activePipeline == ConfigPipeline.STANDARD) {
+            pendingOptimization = null
+            return
+        }
         SmartOptimizeWorker.schedule(context)
         if (targetGuid.isNullOrBlank()) return
 
@@ -395,6 +546,33 @@ object SmartConnectCoordinator {
                                 markEdgeIpScanned(targetGuid, false)
                                 LauncherManager.restartService(appCtx)
                             }
+                        } else if (SmartFailoverStore.isSmartFailoverArmed() &&
+                            StandardConfigProber.hasStandardCandidates(excludeGuid = targetGuid)
+                        ) {
+                            val stdBest = StandardConfigProber.probeBestStandard(appCtx, excludeGuid = targetGuid)
+                            if (stdBest != null) {
+                                LogUtil.w(TAG, "CDN scan found no working IP; failing over to ${stdBest.transportBadge} (${stdBest.delayMs}ms)")
+                                SmartFailoverStore.setSmartFailoverArmed(false)
+                                SmartFailoverStore.recordSwitchEvent(
+                                    reason = SmartSwitchReason.CDN_CONNECT_FAILED,
+                                    transportBadge = stdBest.transportBadge,
+                                    delayMs = stdBest.delayMs,
+                                )
+                                MmkvManager.setSelectServer(stdBest.guid)
+                                _state.value = _state.value.copy(
+                                    busy = false,
+                                    step = SmartStep.Connected,
+                                    activeGuid = stdBest.guid,
+                                    activeRemarks = stdBest.profile.remarks,
+                                    activePipeline = ConfigPipeline.STANDARD,
+                                    activeTransportBadge = stdBest.transportBadge,
+                                    switchReason = SmartSwitchReason.CDN_CONNECT_FAILED,
+                                    switchNoticeText = "${stdBest.transportBadge} (${stdBest.delayMs}ms)",
+                                    detectedCdn = CdnType.UNKNOWN,
+                                )
+                                LauncherManager.restartService(appCtx)
+                                return@launch
+                            }
                         }
 
                         _state.value = _state.value.copy(
@@ -405,8 +583,10 @@ object SmartConnectCoordinator {
                 }
 
                 val refreshedProfile = MmkvManager.decodeServerConfig(targetGuid) ?: initialProfile
+                if (!ConfigPipelineClassifier.isCdn(refreshedProfile)) return@launch
                 val allProviders = MmkvManager.decodeAllServerList().mapNotNull { g ->
                     val p = MmkvManager.decodeServerConfig(g) ?: return@mapNotNull null
+                    if (!AutoConfigFilter.isCdnScanEligible(p)) return@mapNotNull null
                     val dom = OriginDomainStore.getOriginDomain(g, p) ?: p.server.orEmpty()
                     CdnPingClassifier.inferQuickCdnType(p, dom, frontCidrs, cfCidrs)
                 }
@@ -458,7 +638,6 @@ object SmartConnectCoordinator {
                 userAgent = subCache.subscription.userAgent
             )
         }
-        purgeNonCdnConfigs()
         CdnPingClassifier.classifyAllProfilesIfNeeded(context.applicationContext, forceRefresh = false)
         CloudflareConfigEnricher.enrichAllStoredCloudflareProfiles(context.applicationContext)
         ensureCloudflarePrioritySelection(context.applicationContext)
@@ -471,15 +650,6 @@ object SmartConnectCoordinator {
         val bestGuid = resolveTargetGuid(context, selected, honorExplicitSelection = honorExplicit)
         if (!bestGuid.isNullOrBlank() && bestGuid != selected) {
             MmkvManager.setSelectServer(bestGuid)
-        }
-    }
-
-    private fun purgeNonCdnConfigs() {
-        for (guid in MmkvManager.decodeAllServerList()) {
-            val profile = MmkvManager.decodeServerConfig(guid) ?: continue
-            if (!AutoConfigFilter.isCdnScanEligible(profile)) {
-                MmkvManager.removeServer(guid)
-            }
         }
     }
 
@@ -520,7 +690,6 @@ object SmartConnectCoordinator {
                 LicenseBackendClient.setActiveLicenseSubId(subId)
                 val cache = SubscriptionCache(subId, item)
                 val updateRes = AngConfigManager.updateConfigViaSub(cache)
-                purgeNonCdnConfigs()
                 val appCtx = context.applicationContext
                 CdnPingClassifier.classifyAllProfilesIfNeeded(appCtx, forceRefresh = !isStatusRefresh)
                 CloudflareConfigEnricher.enrichAllStoredCloudflareProfiles(appCtx)
@@ -536,7 +705,7 @@ object SmartConnectCoordinator {
                 if (updateRes.configCount > 0) {
                     Result.success(updateRes.configCount)
                 } else {
-                    Result.failure(IllegalStateException("هیچ کانفیگ CDN معتبری برای این لایسنس یافت نشد."))
+                    Result.failure(IllegalStateException("هیچ کانفیگ معتبری برای این لایسنس یافت نشد."))
                 }
             }
         }
@@ -550,17 +719,29 @@ object SmartConnectCoordinator {
         val selected = explicitGuid ?: MmkvManager.getSelectServer()
         val allGuids = MmkvManager.decodeAllServerList()
         val pairs: List<Pair<String, ProfileItem?>> = allGuids.map { it to MmkvManager.decodeServerConfig(it) }
+        if (honorExplicitSelection && !selected.isNullOrBlank()) {
+            val selectedProfile = pairs.firstOrNull { it.first == selected }?.second
+            if (ConfigPipelineClassifier.isSupportedImport(selectedProfile)) {
+                return selected
+            }
+        }
         val frontCidrs = ProviderRangeStore.getEntries(context, CdnType.CLOUDFRONT)
             .map { it.cidr }
             .ifEmpty { ProviderRangeStore.loadBundledCloudFrontCidrs(context) }
         val cachedCdns = CdnPingClassifier.CdnDetectionStore.getAllSaved(allGuids)
-        return AutoConfigFilter.pickBestConnectGuid(
+        val cdnPick = AutoConfigFilter.pickBestConnectGuid(
             selectedGuid = selected,
             profilesInOrder = pairs,
             honorExplicitSelection = honorExplicitSelection,
             cloudFrontCidrs = frontCidrs,
             cachedCdns = cachedCdns,
         )
+        if (!cdnPick.isNullOrBlank()) return cdnPick
+        val standardPairs = pairs.mapNotNull { (g, p) -> if (p != null) g to p else null }
+        val cachedDelays = standardPairs.associate { (g, _) ->
+            g to (MmkvManager.decodeServerAffiliationInfo(g)?.testDelayMillis ?: 0L)
+        }
+        return ConfigPipelineClassifier.selectBestStandardGuid(standardPairs, cachedDelays)
     }
 
     private suspend fun awaitCloudflareScan(

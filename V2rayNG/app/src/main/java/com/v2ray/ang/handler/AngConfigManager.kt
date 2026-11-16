@@ -253,7 +253,7 @@ object AngConfigManager {
                 .distinct()
                 .forEach {
                     val config = parseConfig(it, subid, subItem)
-                    if (config != null && com.v2ray.ang.senpai.AutoConfigFilter.isCdnScanEligible(config)) {
+                    if (config != null && com.v2ray.ang.senpai.ConfigPipelineClassifier.isSupportedImport(config)) {
                         configs.add(config)
                     }
                 }

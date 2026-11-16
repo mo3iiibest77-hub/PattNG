@@ -810,4 +810,26 @@
     <string name="novapulse_notice_security_title">Security &amp; License Notice</string>
     <string name="novapulse_notice_official_support_title">Quick Support &amp; Official Channel</string>
 
+    <string name="novapulse_configs_tab_all">All (%1$d)</string>
+    <string name="novapulse_configs_tab_cdn">CDN (%1$d)</string>
+    <string name="novapulse_configs_tab_standard">Standard (%1$d)</string>
+    <string name="novapulse_configs_section_cdn">CDN Optimized Nodes</string>
+    <string name="novapulse_configs_section_standard">Standard Protocols (REALITY / Hysteria2 / v2rayNG)</string>
+    <string name="novapulse_add_config_btn">+ Add Config</string>
+    <string name="novapulse_add_config_title">Add Standard / Custom Config</string>
+    <string name="novapulse_add_config_hint">Paste vless://, hysteria2://, hy2://, vmess://, trojan://, ss:// links or base64…</string>
+    <string name="novapulse_add_config_paste_btn">Paste</string>
+    <string name="novapulse_add_config_scan_qr_btn">Scan QR</string>
+    <string name="novapulse_add_config_save_btn">Import</string>
+    <string name="novapulse_add_config_cancel_btn">Cancel</string>
+    <string name="novapulse_add_config_success_fmt">%1$d config(s) added cleanly.</string>
+    <string name="novapulse_add_config_invalid">No valid proxy config found. Subscription URLs cannot be imported here.</string>
+    <string name="novapulse_manual_badge">Custom</string>
+    <string name="novapulse_mode_smart_auto">Smart Auto • CDN ⇄ Standard</string>
+    <string name="novapulse_mode_manual_pinned_fmt">Manual: %1$s</string>
+    <string name="novapulse_switch_smart_auto_btn">Use Smart Auto</string>
+    <string name="novapulse_failover_switched_fmt">Auto-switched on CDN issue → %1$s (%2$d ms)</string>
+    <string name="novapulse_auto_failover_label">Smart Auto-Failover (CDN → Standard)</string>
+    <string name="novapulse_auto_failover_desc">Automatically switch to REALITY / Hysteria2 / Standard if CDN fails or slows down.</string>
+
 </resources>

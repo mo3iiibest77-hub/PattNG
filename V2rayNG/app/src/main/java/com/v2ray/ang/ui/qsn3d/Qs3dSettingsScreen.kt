@@ -66,6 +66,7 @@ fun Qs3dSettingsScreen(
     onSearchApps: (String) -> Unit,
     onAutoDiscoveryChange: (Boolean) -> Unit,
     onAuto2hOptimizeChange: (Boolean) -> Unit,
+    onAutoSmartFailoverChange: (Boolean) -> Unit,
     onSpeedDisplayChange: (Boolean) -> Unit,
     onLanguageSelected: (String) -> Unit,
     onRedeemNewLicense: (String) -> Unit,
@@ -367,6 +368,15 @@ fun Qs3dSettingsScreen(
                     description = stringResource(R.string.qsn3d_auto_2h_optimize_desc),
                     checked = state.auto2hOptimize,
                     onCheckedChange = onAuto2hOptimizeChange
+                )
+
+                HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp), color = Color.White.copy(alpha = 0.08f))
+
+                ToggleSettingRow(
+                    title = stringResource(R.string.novapulse_auto_failover_label),
+                    description = stringResource(R.string.novapulse_auto_failover_desc),
+                    checked = state.autoSmartFailover,
+                    onCheckedChange = onAutoSmartFailoverChange
                 )
 
                 if (state.lastOptimizeAt > 0L) {

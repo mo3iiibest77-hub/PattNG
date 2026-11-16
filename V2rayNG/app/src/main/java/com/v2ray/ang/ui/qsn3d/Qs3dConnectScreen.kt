@@ -38,13 +38,16 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.v2ray.ang.R
 import com.v2ray.ang.senpai.CdnType
+import com.v2ray.ang.senpai.ConfigPipeline
 import com.v2ray.ang.senpai.SmartStep
+import com.v2ray.ang.senpai.SmartSwitchReason
 
 @Composable
 fun Qs3dConnectScreen(
     state: Qs3dUiState,
     onConnectOrDisconnect: () -> Unit,
     onRescanIpAndConnect: () -> Unit,
+    onSwitchToSmartAuto: () -> Unit,
     onCancelFlow: () -> Unit,
     onOpenSubscriptionDetails: () -> Unit,
     onRefreshSubs: () -> Unit,
@@ -147,6 +150,7 @@ fun Qs3dConnectScreen(
                     }
                 }
             ) {
+                val activePipeline = activeConfig?.pipeline ?: flow.activePipeline
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -162,7 +166,66 @@ fun Qs3dConnectScreen(
                             fontWeight = FontWeight.SemiBold
                         )
                     }
-                    CdnProviderBadge(cdnType = activeCdn)
+                    if (activePipeline == ConfigPipeline.STANDARD) {
+                        StandardPipelineBadge(
+                            label = activeConfig?.transportBadge?.ifBlank { "Standard" }
+                                ?: flow.activeTransportBadge
+                                ?: "Standard",
+                            accent = QsColors.PlasmaViolet,
+                        )
+                    } else {
+                        CdnProviderBadge(cdnType = activeCdn)
+                    }
+                }
+
+                Spacer(Modifier.height(6.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    val modeText = if (state.isExplicitSelection) {
+                        stringResource(
+                            R.string.novapulse_mode_manual_pinned_fmt,
+                            activeConfig?.let { it.transportBadge.ifBlank { it.remarks } } ?: "—",
+                        )
+                    } else {
+                        stringResource(R.string.novapulse_mode_smart_auto)
+                    }
+                    Text(
+                        text = modeText,
+                        color = if (state.isExplicitSelection) QsColors.SolarGold else QsColors.AuroraMint,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Medium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                    )
+                    if (state.isExplicitSelection) {
+                        TextButton(onClick = onSwitchToSmartAuto) {
+                            Text(
+                                text = stringResource(R.string.novapulse_switch_smart_auto_btn),
+                                color = QsColors.ElectricCyan,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                }
+
+                val banner = state.failoverBanner
+                if (banner != null && banner.reason != SmartSwitchReason.NONE) {
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = stringResource(
+                            R.string.novapulse_failover_switched_fmt,
+                            banner.transportBadge.ifBlank { "Standard" },
+                            banner.delayMs,
+                        ),
+                        color = QsColors.AuroraMint,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold,
+                    )
                 }
 
                 Spacer(Modifier.height(6.dp))
@@ -245,19 +308,36 @@ fun Qs3dConnectScreen(
                             overflow = TextOverflow.Ellipsis
                         )
                     }
-                    OutlinedButton(
-                        onClick = onRescanIpAndConnect,
-                        enabled = !flow.busy,
-                        modifier = Modifier.weight(1f),
-                        shape = RoundedCornerShape(14.dp),
-                        colors = ButtonDefaults.outlinedButtonColors(contentColor = QsColors.ElectricCyan)
-                    ) {
-                        Text(
-                            text = stringResource(R.string.novapulse_find_faster_ip_btn),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
+                        val isStdActive = (activeConfig?.pipeline ?: flow.activePipeline) == ConfigPipeline.STANDARD
+                        if (isStdActive && state.isExplicitSelection) {
+                            OutlinedButton(
+                                onClick = onSwitchToSmartAuto,
+                                enabled = !flow.busy,
+                                modifier = Modifier.weight(1f),
+                                shape = RoundedCornerShape(14.dp),
+                                colors = ButtonDefaults.outlinedButtonColors(contentColor = QsColors.ElectricCyan)
+                            ) {
+                                Text(
+                                    text = stringResource(R.string.novapulse_switch_smart_auto_btn),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        } else {
+                            OutlinedButton(
+                                onClick = onRescanIpAndConnect,
+                                enabled = !flow.busy,
+                                modifier = Modifier.weight(1f),
+                                shape = RoundedCornerShape(14.dp),
+                                colors = ButtonDefaults.outlinedButtonColors(contentColor = QsColors.ElectricCyan)
+                            ) {
+                                Text(
+                                    text = stringResource(R.string.novapulse_find_faster_ip_btn),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
                 }
             }
         }
@@ -303,10 +383,14 @@ fun Qs3dConnectScreen(
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
-                        if (countryLabel.isNotBlank()) {
+                        if (countryLabel.isNotBlank() || !activeConfig?.transportBadge.isNullOrBlank()) {
                             Spacer(Modifier.height(2.dp))
+                            val subText = listOfNotNull(
+                                activeConfig?.transportBadge?.takeIf { it.isNotBlank() },
+                                countryLabel.takeIf { it.isNotBlank() }?.let { "${stringResource(R.string.novapulse_location_label)}: $it" },
+                            ).joinToString(" • ")
                             Text(
-                                text = "${stringResource(R.string.novapulse_location_label)}: $countryLabel",
+                                text = subText,
                                 color = QsColors.TextSecondary,
                                 fontSize = 12.sp,
                                 maxLines = 1,

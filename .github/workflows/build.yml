@@ -144,14 +144,14 @@ jobs:
           exit 1
         fi
         BUILD_TOOLS=$(ls -d "${ANDROID_HOME}"/build-tools/* | sort -V | tail -n 1)
-        APK="app/build/outputs/apk/playstore/release/NovaPulse_2.4.6_arm64-v8a.apk"
+        APK="app/build/outputs/apk/playstore/release/NovaPulse_2.5.0_arm64-v8a.apk"
         test -f "${APK}"
         test -f "app/build/outputs/mapping/playstoreRelease/mapping.txt"
         badging=$("${BUILD_TOOLS}/aapt2" dump badging "${APK}")
         line=$(printf '%s\n' "${badging}" | awk 'NR==1')
         echo "${line}"
         echo "${line}" | grep -q "name='com.quietstorm.ng'"
-        echo "${line}" | grep -q "versionCode='4000754'"
+        echo "${line}" | grep -q "versionCode='4000755'"
         certs=$("${BUILD_TOOLS}/apksigner" verify --print-certs "${APK}" 2>&1)
         printf '%s\n' "${certs}"
         cert_sha256=$(printf '%s\n' "${certs}" | sed -n 's/.*SHA-256 digest: *//p' | tr -d ' \r' | awk 'NR==1')

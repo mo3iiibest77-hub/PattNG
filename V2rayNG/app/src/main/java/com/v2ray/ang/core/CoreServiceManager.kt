@@ -25,11 +25,17 @@ import com.v2ray.ang.handler.SettingsManager
 import com.v2ray.ang.handler.SpeedtestManager
 import com.v2ray.ang.helper.MessageHelper
 import com.v2ray.ang.senpai.AppSecurityGuard
+import com.v2ray.ang.senpai.ConfigPipelineClassifier
 import com.v2ray.ang.senpai.DeviceIdentityManager
+import com.v2ray.ang.senpai.FailoverDecision
 import com.v2ray.ang.senpai.LicenseBackendClient
 import com.v2ray.ang.senpai.LicenseResolutionResult
 import com.v2ray.ang.senpai.LicenseSessionCleaner
 import com.v2ray.ang.senpai.LicenseSessionStore
+import com.v2ray.ang.senpai.PhysicalNetworkGuard
+import com.v2ray.ang.senpai.SmartFailoverPolicy
+import com.v2ray.ang.senpai.SmartFailoverStore
+import com.v2ray.ang.senpai.StandardConfigProber
 import com.v2ray.ang.service.DialerNativeService
 import com.v2ray.ang.service.DialerWebviewService
 import com.v2ray.ang.service.NetworkMonitor
@@ -52,6 +58,8 @@ object CoreServiceManager {
 
     private const val LICENSE_WATCHDOG_INTERVAL_MS = 20_000L
     private const val LICENSE_WATCHDOG_FRESH_SKIP_SEC = 15L
+    private const val CDN_FAILOVER_INITIAL_DELAY_MS = 15_000L
+    private const val CDN_FAILOVER_PROBE_INTERVAL_MS = 22_000L
 
     private val coreController: CoreController = CoreNativeManager.newCoreController(CoreCallback())
     private val mMsgReceive = ReceiveMessageHandler()
@@ -60,6 +68,7 @@ object CoreServiceManager {
     private var browserDialer: IDialerService? = null
     private var networkMonitor: NetworkMonitor? = null
     private var licenseWatchdogJob: Job? = null
+    private var cdnFailoverWatchdogJob: Job? = null
     private val daemonWatchdogInFlight = AtomicBoolean(false)
     private val daemonDisconnecting = AtomicBoolean(false)
 
@@ -140,6 +149,7 @@ object CoreServiceManager {
         launchCore(service, vpnInterface)
         startNetworkMonitor(service)
         startDaemonLicenseWatchdog(service)
+        startCdnFailoverWatchdog(service)
     }
 
     @Throws(Exception::class)
@@ -211,6 +221,7 @@ object CoreServiceManager {
      */
     fun stopCoreLoop(): Boolean {
         stopDaemonLicenseWatchdog()
+        stopCdnFailoverWatchdog()
         val service = getService() ?: return false
 
         networkMonitor?.unregister()
@@ -278,6 +289,86 @@ object CoreServiceManager {
     fun stopDaemonLicenseWatchdog() {
         licenseWatchdogJob?.cancel()
         licenseWatchdogJob = null
+    }
+
+    private fun startCdnFailoverWatchdog(service: Service) {
+        stopCdnFailoverWatchdog()
+        cdnFailoverWatchdogJob = CoroutineScope(Dispatchers.IO).launch {
+            delay(CDN_FAILOVER_INITIAL_DELAY_MS)
+            var trackerState = SmartFailoverPolicy.TrackerState()
+            while (isActive && isRunning()) {
+                val cfg = currentConfig
+                val selectedGuid = MmkvManager.getSelectServer().orEmpty()
+                if (cfg == null ||
+                    !ConfigPipelineClassifier.isCdn(cfg) ||
+                    !SmartFailoverStore.isSmartFailoverArmed()
+                ) {
+                    trackerState = trackerState.copy(highLatencyStrikes = 0, failureStrikes = 0)
+                    delay(CDN_FAILOVER_PROBE_INTERVAL_MS)
+                    continue
+                }
+
+                if (!PhysicalNetworkGuard.hasPhysicalInternet(service)) {
+                    trackerState = trackerState.copy(highLatencyStrikes = 0, failureStrikes = 0)
+                    delay(CDN_FAILOVER_PROBE_INTERVAL_MS)
+                    continue
+                }
+
+                val hasStd = StandardConfigProber.hasStandardCandidates(excludeGuid = selectedGuid)
+                if (!hasStd) {
+                    delay(CDN_FAILOVER_PROBE_INTERVAL_MS)
+                    continue
+                }
+
+                val primaryUrl = SettingsManager.getDelayTestUrl()
+                var cdnDelay = runCatching { coreController.measureDelay(primaryUrl) }.getOrDefault(-1L)
+                if (cdnDelay <= 0L) {
+                    val secondaryUrl = SettingsManager.getDelayTestUrl(true)
+                    if (secondaryUrl != primaryUrl) {
+                        cdnDelay = runCatching { coreController.measureDelay(secondaryUrl) }.getOrDefault(-1L)
+                    }
+                }
+
+                val (decision, nextState) = SmartFailoverPolicy.evaluateDegradation(
+                    state = trackerState,
+                    cdnDelayMs = cdnDelay,
+                    nowMs = System.currentTimeMillis(),
+                    hasStandardCandidate = hasStd,
+                    smartFailoverArmed = true,
+                )
+                trackerState = nextState
+
+                if (decision is FailoverDecision.SwitchToStandard) {
+                    val bestStd = StandardConfigProber.probeBestStandard(service, excludeGuid = selectedGuid)
+                    if (bestStd != null &&
+                        SmartFailoverPolicy.shouldCommitSwitch(decision.reason, cdnDelay, bestStd.delayMs)
+                    ) {
+                        LogUtil.w(
+                            AppConfig.TAG,
+                            "SmartFailover: switching from degraded CDN (delay=$cdnDelay) to ${bestStd.transportBadge} (${bestStd.delayMs}ms)"
+                        )
+                        SmartFailoverStore.recordSwitchEvent(
+                            reason = decision.reason,
+                            transportBadge = bestStd.transportBadge,
+                            delayMs = bestStd.delayMs,
+                        )
+                        MmkvManager.setSelectServer(bestStd.guid)
+                        SmartFailoverStore.setSmartFailoverArmed(false)
+                        if (reloadCore()) {
+                            MessageHelper.sendMsg2UI(service, AppConfig.MSG_STATE_RUNNING, "")
+                        }
+                        break
+                    }
+                }
+
+                delay(CDN_FAILOVER_PROBE_INTERVAL_MS)
+            }
+        }
+    }
+
+    private fun stopCdnFailoverWatchdog() {
+        cdnFailoverWatchdogJob?.cancel()
+        cdnFailoverWatchdogJob = null
     }
 
     private fun enforceDaemonLicenseOnce(service: Service) {

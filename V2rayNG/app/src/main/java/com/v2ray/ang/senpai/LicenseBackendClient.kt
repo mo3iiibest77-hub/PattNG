@@ -187,6 +187,7 @@ object LicenseBackendClient {
             "Authorization" to "Bearer ${snap.sessionToken}",
             "X-Device-Id" to devId,
             "Cache-Control" to "no-store",
+            "X-NovaPulse-Protocols" to "all",
         )
     }
 

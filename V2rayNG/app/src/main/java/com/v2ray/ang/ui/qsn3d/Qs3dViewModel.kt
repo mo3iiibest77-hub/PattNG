@@ -34,7 +34,11 @@ import com.v2ray.ang.senpai.CdnDetectionResult
 import com.v2ray.ang.senpai.CdnPingClassifier
 import com.v2ray.ang.senpai.CdnType
 import com.v2ray.ang.senpai.CloudFrontScanner
+import com.v2ray.ang.senpai.CloudflareConfigEnricher
 import com.v2ray.ang.senpai.CloudflareScanner
+import com.v2ray.ang.senpai.ConfigListBucket
+import com.v2ray.ang.senpai.ConfigPipeline
+import com.v2ray.ang.senpai.ConfigPipelineClassifier
 import com.v2ray.ang.senpai.DeviceIdentityManager
 import com.v2ray.ang.senpai.LicenseBackendClient
 import com.v2ray.ang.senpai.LicenseResolutionResult
@@ -48,10 +52,12 @@ import com.v2ray.ang.senpai.PostConnectDiscoveryState
 import com.v2ray.ang.senpai.ProviderRangeEntry
 import com.v2ray.ang.senpai.ProviderRangeStore
 import com.v2ray.ang.senpai.SmartConnectCoordinator
+import com.v2ray.ang.senpai.SmartFailoverStore
 import com.v2ray.ang.senpai.SmartFlowState
 import com.v2ray.ang.senpai.SmartOptimizeWorker
 import com.v2ray.ang.senpai.SubscriptionQuotaInfo
 import com.v2ray.ang.senpai.SubscriptionQuotaStore
+import com.v2ray.ang.senpai.SwitchBannerInfo
 import com.v2ray.ang.service.CoreProxyOnlyService
 import com.v2ray.ang.service.CoreRootService
 import com.v2ray.ang.service.CoreVpnService
@@ -95,6 +101,9 @@ data class ConfigUiRow(
     val delayMillis: Long,
     val cdnHint: CdnType,
     val eligibleForScan: Boolean,
+    val pipeline: ConfigPipeline = ConfigPipeline.CDN,
+    val transportBadge: String = "",
+    val isManual: Boolean = false,
 )
 
 data class Qs3dUiState(
@@ -125,10 +134,13 @@ data class Qs3dUiState(
     // Configs & Subscriptions
     val subscriptions: List<SubscriptionUiRow> = emptyList(),
     val configs: List<ConfigUiRow> = emptyList(),
+    val configBucket: ConfigListBucket = ConfigListBucket.ALL,
     val configSearchQuery: String = "",
     val bulkSelectedGuids: Set<String> = emptySet(),
     val isDelayTestingAll: Boolean = false,
     val delayTestProgress: String = "",
+    val isExplicitSelection: Boolean = false,
+    val failoverBanner: SwitchBannerInfo? = null,
     // Ranges
     val activeRangeProvider: CdnType = CdnType.CLOUDFLARE,
     val rangeEntries: List<ProviderRangeEntry> = emptyList(),
@@ -142,6 +154,7 @@ data class Qs3dUiState(
     // Settings / Automation
     val autoPostConnectDiscovery: Boolean = true,
     val auto2hOptimize: Boolean = true,
+    val autoSmartFailover: Boolean = true,
     val lastOptimizeAt: Long = 0L,
     val lastOptimizeIp: String = "",
     val lastOptimizeUploadKBps: Long = 0L,
@@ -205,8 +218,14 @@ class Qs3dViewModel(
             dataSource.mainServiceEvent.collect { event ->
                 when (event) {
                     MainServiceEvent.StateRunning -> {
-                        _uiState.update { it.copy(coreRunning = true) }
+                        _uiState.update {
+                            it.copy(
+                                coreRunning = true,
+                                failoverBanner = SmartFailoverStore.readLastSwitchBanner(),
+                            )
+                        }
                         SmartConnectCoordinator.notifyVpnConnected(getApplication(), MmkvManager.getSelectServer())
+                        loadConfigsAndSubs()
                         scheduleAutoCountryPing()
                         startLicenseWatchdog()
                     }
@@ -245,17 +264,50 @@ class Qs3dViewModel(
                     }
 
                     is MainServiceEvent.StateStartFailure -> {
-                        SmartConnectCoordinator.notifyVpnStartFailed(event.errorMessage)
-                        val baseFail = getApplication<Application>().getString(R.string.novapulse_vpn_start_failed)
-                        val detail = event.errorMessage?.trim().orEmpty()
-                        val fullMsg = if (detail.isNotEmpty() && detail != baseFail) "$baseFail: $detail" else baseFail
-                        _uiState.update {
-                            it.copy(
-                                coreRunning = false,
-                                liveDownloadBps = 0L,
-                                liveUploadBps = 0L,
-                                toastMessage = fullMsg
+                        val failedGuid = MmkvManager.getSelectServer()
+                        val appCtx = getApplication<Application>()
+                        if (SmartFailoverStore.isSmartFailoverArmed()) {
+                            SmartConnectCoordinator.tryFailoverOnStartFailure(
+                                context = appCtx,
+                                failedGuid = failedGuid,
+                                onFallbackReady = { fallbackGuid, _ ->
+                                    _uiState.update {
+                                        it.copy(
+                                            selectedGuid = fallbackGuid,
+                                            failoverBanner = SmartFailoverStore.readLastSwitchBanner(),
+                                        )
+                                    }
+                                    loadConfigsAndSubs()
+                                    LauncherManager.startService(appCtx, fallbackGuid)
+                                },
+                                onNoFallback = {
+                                    SmartConnectCoordinator.notifyVpnStartFailed(event.errorMessage)
+                                    val baseFail = appCtx.getString(R.string.novapulse_vpn_start_failed)
+                                    val detail = event.errorMessage?.trim().orEmpty()
+                                    val fullMsg = if (detail.isNotEmpty() && detail != baseFail) "$baseFail: $detail" else baseFail
+                                    _uiState.update {
+                                        it.copy(
+                                            coreRunning = false,
+                                            liveDownloadBps = 0L,
+                                            liveUploadBps = 0L,
+                                            toastMessage = fullMsg
+                                        )
+                                    }
+                                }
                             )
+                        } else {
+                            SmartConnectCoordinator.notifyVpnStartFailed(event.errorMessage)
+                            val baseFail = appCtx.getString(R.string.novapulse_vpn_start_failed)
+                            val detail = event.errorMessage?.trim().orEmpty()
+                            val fullMsg = if (detail.isNotEmpty() && detail != baseFail) "$baseFail: $detail" else baseFail
+                            _uiState.update {
+                                it.copy(
+                                    coreRunning = false,
+                                    liveDownloadBps = 0L,
+                                    liveUploadBps = 0L,
+                                    toastMessage = fullMsg
+                                )
+                            }
                         }
                     }
 
@@ -428,19 +480,27 @@ class Qs3dViewModel(
             val pairs = mutableListOf<Pair<String, ProfileItem?>>()
             val rawConfigs = allGuids.mapNotNull { guid ->
                 val profile = MmkvManager.decodeServerConfig(guid) ?: return@mapNotNull null
-                if (!AutoConfigFilter.isCdnScanEligible(profile)) return@mapNotNull null
+                if (!ConfigPipelineClassifier.isSupportedImport(profile)) return@mapNotNull null
+                val pipeline = ConfigPipelineClassifier.classify(profile)
+                val isCdn = pipeline == ConfigPipeline.CDN
                 pairs.add(guid to profile)
-                OriginDomainStore.rememberIfDomain(guid, profile)
+                if (isCdn) {
+                    OriginDomainStore.rememberIfDomain(guid, profile)
+                }
                 subCounts[profile.subscriptionId] = (subCounts[profile.subscriptionId] ?: 0) + 1
                 val aff = MmkvManager.decodeServerAffiliationInfo(guid)
-                val originDomain = OriginDomainStore.getOriginDomain(guid, profile) ?: profile.server.orEmpty()
-                val cachedCdn = CdnPingClassifier.CdnDetectionStore.getSavedCdnType(guid)
-                val cdnHint = cachedCdn ?: if (
-                    com.v2ray.ang.senpai.CloudflareConfigEnricher.isAmazonOrCloudFront(profile, originDomain, frontCidrs, cachedCdn)
-                ) {
-                    CdnType.CLOUDFRONT
+                val cdnHint = if (isCdn) {
+                    val originDomain = OriginDomainStore.getOriginDomain(guid, profile) ?: profile.server.orEmpty()
+                    val cachedCdn = CdnPingClassifier.CdnDetectionStore.getSavedCdnType(guid)
+                    cachedCdn ?: if (
+                        CloudflareConfigEnricher.isAmazonOrCloudFront(profile, originDomain, frontCidrs, cachedCdn)
+                    ) {
+                        CdnType.CLOUDFRONT
+                    } else {
+                        CdnPingClassifier.inferQuickCdnType(profile, originDomain, frontCidrs, cfCidrs, cachedCdn)
+                    }
                 } else {
-                    CdnPingClassifier.inferQuickCdnType(profile, originDomain, frontCidrs, cfCidrs, cachedCdn)
+                    CdnType.UNKNOWN
                 }
                 ConfigUiRow(
                     guid = guid,
@@ -448,24 +508,36 @@ class Qs3dViewModel(
                     remarks = profile.remarks.ifBlank { ctx.getString(R.string.novapulse_default_server_name) },
                     delayMillis = aff?.testDelayMillis ?: -1L,
                     cdnHint = cdnHint,
-                    eligibleForScan = true,
+                    eligibleForScan = isCdn,
+                    pipeline = pipeline,
+                    transportBadge = ConfigPipelineClassifier.safeTransportBadge(profile),
+                    isManual = ConfigPipelineClassifier.isManualConfig(profile),
                 )
             }
 
             val sessionActive = LicenseBackendClient.isLicenseSessionActive()
             val licensed = sessionActive && (rawConfigs.isNotEmpty() || subs.isNotEmpty() || LicenseBackendClient.getSavedLicenseKey().isNotEmpty())
             val cachedCdnMap = CdnPingClassifier.CdnDetectionStore.getAllSaved(allGuids)
+            val isExplicit = SmartConnectCoordinator.isExplicitServerSelected()
 
-            val effectiveSelected = AutoConfigFilter.pickBestConnectGuid(
-                selectedGuid = selected,
-                profilesInOrder = pairs,
-                honorExplicitSelection = SmartConnectCoordinator.isExplicitServerSelected(),
-                cloudFrontCidrs = frontCidrs,
-                cachedCdns = cachedCdnMap,
-            )?.also { chosen ->
-                if (chosen != selected) {
+            val effectiveSelected = if (isExplicit && !selected.isNullOrBlank() && pairs.any { it.first == selected }) {
+                selected
+            } else {
+                val cdnPick = AutoConfigFilter.pickBestConnectGuid(
+                    selectedGuid = selected,
+                    profilesInOrder = pairs,
+                    honorExplicitSelection = isExplicit,
+                    cloudFrontCidrs = frontCidrs,
+                    cachedCdns = cachedCdnMap,
+                )
+                val chosen = cdnPick ?: ConfigPipelineClassifier.selectBestStandardGuid(
+                    profilesInOrder = pairs.mapNotNull { (g, p) -> p?.let { g to it } },
+                    delaysByGuid = rawConfigs.associate { it.guid to it.delayMillis },
+                )
+                if (!chosen.isNullOrBlank() && chosen != selected) {
                     MmkvManager.setSelectServer(chosen)
                 }
+                chosen
             }
 
             // Pin active selected server cleanly at the top while preserving original order
@@ -488,14 +560,16 @@ class Qs3dViewModel(
                     selectedGuid = effectiveSelected,
                     subscriptions = subRows,
                     configs = sortedPinned,
+                    isExplicitSelection = isExplicit,
+                    failoverBanner = SmartFailoverStore.readLastSwitchBanner(),
                 )
             }
 
-            if (rawConfigs.any { it.cdnHint == CdnType.UNKNOWN } && !backgroundClassifyLaunched) {
+            if (rawConfigs.any { it.pipeline == ConfigPipeline.CDN && it.cdnHint == CdnType.UNKNOWN } && !backgroundClassifyLaunched) {
                 backgroundClassifyLaunched = true
                 val updated = CdnPingClassifier.classifyAllProfilesIfNeeded(ctx, forceRefresh = false)
                 if (updated > 0) {
-                    com.v2ray.ang.senpai.CloudflareConfigEnricher.enrichAllStoredCloudflareProfiles(ctx)
+                    CloudflareConfigEnricher.enrichAllStoredCloudflareProfiles(ctx)
                     loadConfigsAndSubs()
                 }
             }
@@ -796,13 +870,102 @@ class Qs3dViewModel(
     // ---------- Config Management (Privacy-Hardened) ----------
 
     fun selectConfig(guid: String) {
+        val profile = MmkvManager.decodeServerConfig(guid)
         SmartConnectCoordinator.markExplicitServerSelected(true)
+        SmartFailoverStore.setSmartFailoverArmed(false)
+        SmartFailoverStore.clearSwitchEvent()
         MmkvManager.setSelectServer(guid)
         _uiState.update { st ->
             val repinned = st.configs.sortedByDescending { it.guid == guid }
-            st.copy(selectedGuid = guid, configs = repinned)
+            st.copy(
+                selectedGuid = guid,
+                configs = repinned,
+                isExplicitSelection = true,
+                failoverBanner = null,
+            )
         }
-        detectCdnForSelected()
+        if (ConfigPipelineClassifier.isCdn(profile)) {
+            detectCdnForSelected()
+        } else {
+            _uiState.update { it.copy(detectingCdn = false, lastCdnDetection = null) }
+        }
+    }
+
+    fun switchToSmartAutoMode(reconnectIfRunning: Boolean = false) {
+        val ctx = getApplication<Application>()
+        viewModelScope.launch(Dispatchers.IO) {
+            SmartConnectCoordinator.markExplicitServerSelected(false)
+            SmartFailoverStore.clearSwitchEvent()
+            SmartFailoverStore.setSmartFailoverArmed(SmartFailoverStore.isAutoFailoverEnabled())
+            val allGuids = MmkvManager.decodeAllServerList()
+            val frontCidrs = ProviderRangeStore.getEntries(ctx, CdnType.CLOUDFRONT)
+                .map { it.cidr }
+                .ifEmpty { ProviderRangeStore.loadBundledCloudFrontCidrs(ctx) }
+            val pairs = allGuids.map { it to MmkvManager.decodeServerConfig(it) }
+            val cachedCdns = CdnPingClassifier.CdnDetectionStore.getAllSaved(allGuids)
+            val chosen = AutoConfigFilter.pickBestConnectGuid(
+                selectedGuid = MmkvManager.getSelectServer(),
+                profilesInOrder = pairs,
+                honorExplicitSelection = false,
+                cloudFrontCidrs = frontCidrs,
+                cachedCdns = cachedCdns,
+            ) ?: ConfigPipelineClassifier.selectBestStandardGuid(
+                pairs.mapNotNull { (g, p) -> p?.let { g to it } }
+            )
+            if (!chosen.isNullOrBlank()) {
+                val chosenProfile = MmkvManager.decodeServerConfig(chosen)
+                if (chosenProfile != null &&
+                    ConfigPipelineClassifier.isCdn(chosenProfile) &&
+                    !SmartConnectCoordinator.hasSavedEdgeIp(chosen, chosenProfile)
+                ) {
+                    CloudflareConfigEnricher.prepareFirstConnectWithTlsSni(
+                        guid = chosen,
+                        profile = chosenProfile,
+                        cloudFrontCidrs = frontCidrs,
+                    )
+                }
+                MmkvManager.setSelectServer(chosen)
+            }
+            _uiState.update { it.copy(isExplicitSelection = false, failoverBanner = null) }
+            loadConfigsAndSubs()
+            if (reconnectIfRunning && !chosen.isNullOrBlank()) {
+                kotlinx.coroutines.withContext(Dispatchers.Main) {
+                    LauncherManager.restartService(ctx)
+                }
+            }
+        }
+    }
+
+    fun setConfigBucket(bucket: ConfigListBucket) {
+        _uiState.update { it.copy(configBucket = bucket) }
+    }
+
+    fun importManualConfigs(rawText: String, onSuccess: () -> Unit = {}) {
+        val ctx = getApplication<Application>()
+        if (!LicenseBackendClient.isLicenseSessionActive()) {
+            _uiState.update { it.copy(toastMessage = ctx.getString(R.string.novapulse_license_enter_prompt)) }
+            return
+        }
+        val payload = ConfigPipelineClassifier.extractManualImportPayload(rawText)
+        if (payload == null) {
+            _uiState.update { it.copy(toastMessage = ctx.getString(R.string.novapulse_add_config_invalid)) }
+            return
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            val (count, _) = AngConfigManager.importBatchConfig(payload, AppConfig.DEFAULT_SUBSCRIPTION_ID, true)
+            CloudflareConfigEnricher.enrichAllStoredCloudflareProfiles(ctx)
+            if (count > 0) {
+                loadConfigsAndSubs()
+                _uiState.update {
+                    it.copy(toastMessage = ctx.getString(R.string.novapulse_add_config_success_fmt, count))
+                }
+                kotlinx.coroutines.withContext(Dispatchers.Main) {
+                    onSuccess()
+                }
+            } else {
+                _uiState.update { it.copy(toastMessage = ctx.getString(R.string.novapulse_add_config_invalid)) }
+            }
+        }
     }
 
     fun setConfigSearch(query: String) {
@@ -872,7 +1035,15 @@ class Qs3dViewModel(
         val activeGuid = st.selectedGuid
         val q = st.configSearchQuery.trim().lowercase()
         val filtered = st.configs.filter { row ->
-            q.isEmpty() || row.remarks.lowercase().contains(q)
+            val matchesBucket = when (st.configBucket) {
+                ConfigListBucket.ALL -> true
+                ConfigListBucket.CDN -> row.pipeline == ConfigPipeline.CDN
+                ConfigListBucket.STANDARD -> row.pipeline == ConfigPipeline.STANDARD
+            }
+            val matchesQuery = q.isEmpty() ||
+                row.remarks.lowercase().contains(q) ||
+                row.transportBadge.lowercase().contains(q)
+            matchesBucket && matchesQuery
         }
         // Always pin connected/active server at TOP regardless of sort
         return filtered.sortedByDescending { it.guid == activeGuid }
@@ -976,6 +1147,7 @@ class Qs3dViewModel(
             it.copy(
                 autoPostConnectDiscovery = PostConnectDiscoveryRunner.isAutoDiscoveryEnabled(),
                 auto2hOptimize = SmartOptimizeWorker.isEnabled(),
+                autoSmartFailover = SmartFailoverStore.isAutoFailoverEnabled(),
                 speedDisplayEnabled = MmkvManager.decodeSettingsBool(AppConfig.PREF_SPEED_ENABLED, true),
                 lastOptimizeAt = MmkvManager.decodeSettingsLong(SmartOptimizeWorker.PREF_LAST_OPTIMIZE_AT, 0L),
                 lastOptimizeIp = MmkvManager.decodeSettingsString(SmartOptimizeWorker.PREF_LAST_OPTIMIZE_IP, "").orEmpty(),
@@ -994,6 +1166,14 @@ class Qs3dViewModel(
         MmkvManager.encodeSettings(PREF_OPTIMIZE_CONSENT_ASKED, true)
         SmartOptimizeWorker.setEnabled(getApplication(), enabled)
         _uiState.update { it.copy(auto2hOptimize = enabled) }
+    }
+
+    fun setAutoSmartFailover(enabled: Boolean) {
+        SmartFailoverStore.setAutoFailoverEnabled(enabled)
+        if (!enabled) {
+            SmartFailoverStore.setSmartFailoverArmed(false)
+        }
+        _uiState.update { it.copy(autoSmartFailover = enabled) }
     }
 
     fun setSpeedDisplayEnabled(enabled: Boolean) {

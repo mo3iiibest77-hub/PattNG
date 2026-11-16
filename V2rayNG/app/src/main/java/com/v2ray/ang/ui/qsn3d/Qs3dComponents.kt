@@ -1230,6 +1230,23 @@ fun CdnProviderBadge(cdnType: CdnType, modifier: Modifier = Modifier) {
 }
 
 @Composable
+fun StandardPipelineBadge(
+    label: String,
+    accent: Color = QsColors.PlasmaViolet,
+    modifier: Modifier = Modifier,
+) {
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(10.dp))
+            .background(accent.copy(alpha = 0.20f))
+            .border(0.8.dp, accent.copy(alpha = 0.48f), RoundedCornerShape(10.dp))
+            .padding(horizontal = 9.dp, vertical = 4.dp)
+    ) {
+        Text(text = label, color = accent, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+    }
+}
+
+@Composable
 fun MetricPill(
     label: String,
     value: String,
