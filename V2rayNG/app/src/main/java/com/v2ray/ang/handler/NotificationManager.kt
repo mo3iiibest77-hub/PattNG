@@ -33,9 +33,12 @@ import kotlin.math.min
 
 object NotificationManager {
     private const val NOTIFICATION_ID = 1
+    private const val LICENSE_ALERT_NOTIFICATION_ID = 1002
+    private const val LICENSE_ALERT_CHANNEL_ID = "NOVAPULSE_LICENSE_ALERTS"
     private const val NOTIFICATION_PENDING_INTENT_CONTENT = 0
     private const val NOTIFICATION_PENDING_INTENT_STOP_V2RAY = 1
     private const val NOTIFICATION_PENDING_INTENT_RESTART_V2RAY = 2
+    private const val NOTIFICATION_PENDING_INTENT_LICENSE_ALERT = 3
     private const val NOTIFICATION_ICON_THRESHOLD = 3000
     private const val QUERY_INTERVAL_MS = 3000L
 
@@ -358,5 +361,58 @@ object NotificationManager {
      */
     private fun getService(): Service? {
         return CoreServiceManager.serviceControl?.get()?.getService()
+    }
+
+    /**
+     * Posts a high-visibility standalone notification when the background VPN daemon disconnects
+     * due to license revocation, expiration, or session invalidation while UI may be closed.
+     */
+    fun showLicenseRevokedNotification(context: Context, message: String) {
+        runCatching {
+            val appCtx = context.applicationContext
+            val nm = appCtx.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+                ?: return
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val chan = NotificationChannel(
+                    LICENSE_ALERT_CHANNEL_ID,
+                    "وضعیت اشتراک و نشست",
+                    NotificationManager.IMPORTANCE_HIGH,
+                ).apply {
+                    description = "اطلاع‌رسانی قطع اتصال به دلیل پایان اعتبار یا لغو نشست"
+                    enableLights(true)
+                    lightColor = Color.parseColor("#FF5252")
+                    lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+                }
+                nm.createNotificationChannel(chan)
+            }
+
+            val flags = PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+            val openIntent = Intent(appCtx, QuietStormActivity::class.java).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+            }
+            val openPendingIntent = PendingIntent.getActivity(
+                appCtx,
+                NOTIFICATION_PENDING_INTENT_LICENSE_ALERT,
+                openIntent,
+                flags,
+            )
+
+            val body = message.trim().ifBlank {
+                "اتصال به دلیل تغییر وضعیت اشتراک یا نشست قطع شد. لطفاً وارد برنامه شوید."
+            }
+            val notification = NotificationCompat.Builder(appCtx, LICENSE_ALERT_CHANNEL_ID)
+                .setSmallIcon(R.drawable.ic_stat_name)
+                .setLargeIcon(getBrandLargeIcon(appCtx))
+                .setColor(Color.parseColor("#FF5252"))
+                .setContentTitle(appCtx.getString(R.string.app_name))
+                .setContentText(body)
+                .setStyle(NotificationCompat.BigTextStyle().bigText(body))
+                .setAutoCancel(true)
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setContentIntent(openPendingIntent)
+                .build()
+
+            nm.notify(LICENSE_ALERT_NOTIFICATION_ID, notification)
+        }
     }
 }

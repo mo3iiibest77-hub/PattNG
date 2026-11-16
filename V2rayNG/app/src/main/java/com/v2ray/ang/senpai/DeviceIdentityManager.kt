@@ -5,8 +5,11 @@ import android.content.Context
 import android.os.Build
 import android.provider.Settings
 import android.util.Base64
+import com.tencent.mmkv.MMKV
 import com.v2ray.ang.AngApplication
 import com.v2ray.ang.BuildConfig
+import java.io.File
+import java.io.RandomAccessFile
 import java.security.MessageDigest
 import java.security.SecureRandom
 import java.util.Locale
@@ -27,9 +30,20 @@ data class DeviceMetadata(
  */
 object DeviceIdentityManager {
     private const val PREFS_NAME = "np_dev_id_prefs_v2"
+    private const val MMKV_ID = "np_dev_id_secure_v2"
+    private const val LOCK_FILE_NAME = "np_dev_id_v2.lock"
     private const val KEY_INSTALL_ID_ENC = "install_id_enc"
     private const val KEY_DEVICE_ID_ENC = "device_id_enc"
     private const val INVALID_EMULATOR_ANDROID_ID = "9774d56d682e549c"
+    private val LOW_ENTROPY_ANDROID_IDS = setOf(
+        INVALID_EMULATOR_ANDROID_ID,
+        "0000000000000000",
+        "ffffffffffffffff",
+        "0123456789abcdef",
+        "fedcba9876543210",
+        "1234567890abcdef",
+        "android_id",
+    )
     const val LEGACY_SHARED_ANDROID_ID = "YW5kcm9pZF9pZAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
 
     interface KeyValueStorage {
@@ -38,14 +52,48 @@ object DeviceIdentityManager {
         fun clear()
     }
 
-    private class PrefsKeyValueStorage(context: Context) : KeyValueStorage {
-        private val prefs = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        override fun getString(key: String): String? = prefs.getString(key, null)
-        override fun putString(key: String, value: String) {
-            prefs.edit().putString(key, value).apply()
+    /**
+     * Multi-process identity storage backed by MMKV_MULTI_PROCESS_MODE so main UI,
+     * `:RunSoLibV2RayDaemon`, and `:bg` always observe the exact same cryptographic device_id,
+     * while transparently migrating legacy single-process SharedPreferences values once.
+     */
+    private class MmkvDeviceIdentityStorage(context: Context) : KeyValueStorage {
+        private val appCtx = context.applicationContext
+        private val legacyPrefs by lazy {
+            appCtx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         }
+
+        private fun mmkvOrNull(): MMKV? = runCatching {
+            if (MMKV.getRootDir().isNullOrBlank()) {
+                com.v2ray.ang.handler.MmkvManager.initialize(appCtx)
+            }
+            MMKV.mmkvWithID(MMKV_ID, MMKV.MULTI_PROCESS_MODE)
+        }.getOrNull()
+
+        override fun getString(key: String): String? {
+            val mmkv = mmkvOrNull()
+            val fromMmkv = mmkv?.decodeString(key, null)?.takeIf { it.isNotBlank() }
+            if (fromMmkv != null) return fromMmkv
+
+            val fromLegacy = legacyPrefs.getString(key, null)?.takeIf { it.isNotBlank() }
+            if (fromLegacy != null) {
+                mmkv?.encode(key, fromLegacy)
+            }
+            return fromLegacy
+        }
+
+        override fun putString(key: String, value: String) {
+            val mmkv = mmkvOrNull()
+            if (mmkv != null) {
+                mmkv.encode(key, value)
+            } else {
+                legacyPrefs.edit().putString(key, value).apply()
+            }
+        }
+
         override fun clear() {
-            prefs.edit().clear().apply()
+            mmkvOrNull()?.clearAll()
+            legacyPrefs.edit().clear().apply()
         }
     }
 
@@ -97,7 +145,25 @@ object DeviceIdentityManager {
     private fun storage(context: Context?): KeyValueStorage {
         overrideStorage?.let { return it }
         val appCtx = (context ?: AngApplication.application).applicationContext
-        return PrefsKeyValueStorage(appCtx)
+        return MmkvDeviceIdentityStorage(appCtx)
+    }
+
+    private inline fun <T> withCrossProcessLock(context: Context?, block: () -> T): T {
+        if (overrideStorage != null) return block()
+        val dir = runCatching {
+            val appCtx = (context ?: AngApplication.application).applicationContext
+            appCtx.noBackupFilesDir ?: appCtx.filesDir
+        }.getOrNull() ?: return block()
+
+        return runCatching {
+            if (!dir.exists()) dir.mkdirs()
+            val lockFile = File(dir, LOCK_FILE_NAME)
+            RandomAccessFile(lockFile, "rw").use { raf ->
+                raf.channel.lock().use {
+                    block()
+                }
+            }
+        }.getOrElse { block() }
     }
 
     @SuppressLint("HardwareIds")
@@ -129,32 +195,56 @@ object DeviceIdentityManager {
         cachedDeviceId?.let { if (it.isNotBlank() && it != LEGACY_SHARED_ANDROID_ID) return it }
         synchronized(lock) {
             cachedDeviceId?.let { if (it.isNotBlank() && it != LEGACY_SHARED_ANDROID_ID) return it }
-            val store = storage(context)
-            val crypto = cryptoProvider()
+            return withCrossProcessLock(context) {
+                val store = storage(context)
+                val crypto = cryptoProvider()
 
-            val existingEnc = store.getString(KEY_DEVICE_ID_ENC)
-            if (!existingEnc.isNullOrBlank()) {
-                val decrypted = crypto.decryptString(existingEnc)
-                if (!decrypted.isNullOrBlank() && decrypted != LEGACY_SHARED_ANDROID_ID) {
-                    cachedDeviceId = decrypted
-                    return decrypted
+                val existingEnc = store.getString(KEY_DEVICE_ID_ENC)
+                if (!existingEnc.isNullOrBlank()) {
+                    val decrypted = crypto.decryptString(existingEnc)
+                    if (!decrypted.isNullOrBlank() && decrypted != LEGACY_SHARED_ANDROID_ID) {
+                        cachedDeviceId = decrypted
+                        return@withCrossProcessLock decrypted
+                    }
                 }
+
+                val installId = store.getString(KEY_INSTALL_ID_ENC)
+                    ?.let { crypto.decryptString(it) }
+                    ?.takeIf { it.length >= 32 }
+                    ?: randomHex256().also { generated ->
+                        store.putString(KEY_INSTALL_ID_ENC, crypto.encryptString(generated))
+                    }
+
+                val androidIdAux = readAndroidIdAuxiliary(context)
+                val pkg = runCatching { (context ?: AngApplication.application).packageName }.getOrDefault(BuildConfig.APPLICATION_ID)
+                val deviceId = sha256Hex("np_dev_v2|$installId|$androidIdAux|$pkg")
+                store.putString(KEY_DEVICE_ID_ENC, crypto.encryptString(deviceId))
+                cachedDeviceId = deviceId
+                deviceId
             }
-
-            val installId = store.getString(KEY_INSTALL_ID_ENC)
-                ?.let { crypto.decryptString(it) }
-                ?.takeIf { it.length >= 32 }
-                ?: randomHex256().also { generated ->
-                    store.putString(KEY_INSTALL_ID_ENC, crypto.encryptString(generated))
-                }
-
-            val androidIdAux = readAndroidIdAuxiliary(context)
-            val pkg = runCatching { (context ?: AngApplication.application).packageName }.getOrDefault(BuildConfig.APPLICATION_ID)
-            val deviceId = sha256Hex("np_dev_v2|$installId|$androidIdAux|$pkg")
-            store.putString(KEY_DEVICE_ID_ENC, crypto.encryptString(deviceId))
-            cachedDeviceId = deviceId
-            return deviceId
         }
+    }
+
+    /**
+     * Produces an opaque SHA-256 device-slot continuity fingerprint when the OS reports a high-entropy
+     * hardware Settings.Secure.ANDROID_ID. Returns "" for emulators or bogus/low-entropy OEM IDs so
+     * different devices never share a continuity slot.
+     */
+    fun getDeviceSlotFingerprint(context: Context? = null): String {
+        val androidIdAux = readAndroidIdAuxiliary(context)
+        if (!isHighConfidenceAndroidId(androidIdAux)) return ""
+        val meta = getDeviceInfo()
+        val brand = meta.brand.trim().lowercase(Locale.US)
+        val model = meta.model.trim().lowercase(Locale.US)
+        return sha256Hex("np_slot_v1|$androidIdAux|$brand|$model")
+    }
+
+    private fun isHighConfidenceAndroidId(raw: String): Boolean {
+        val clean = raw.trim().lowercase(Locale.US)
+        if (clean.length < 12) return false
+        if (clean in LOW_ENTROPY_ANDROID_IDS) return false
+        if (clean.toSet().size < 4) return false
+        return true
     }
 
     fun getPublicKeySpkiB64(): String = cryptoProvider().getOrCreateSigningPublicKeySpkiB64()

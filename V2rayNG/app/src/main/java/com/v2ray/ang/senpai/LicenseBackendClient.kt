@@ -6,6 +6,7 @@ import com.v2ray.ang.AppConfig
 import com.v2ray.ang.BuildConfig
 import com.v2ray.ang.handler.MmkvManager
 import com.v2ray.ang.util.LogUtil
+import kotlinx.coroutines.delay
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -111,6 +112,7 @@ object LicenseBackendClient {
     private val RAW_KEY_REDACT_REGEX = Regex("(\\b[A-Z0-9]{2,6}(?:-[A-Z0-9]{3,8}){2,5}\\b|\\bnps_[A-Za-z0-9_=-]{8,})")
     private val JSON_MEDIA = "application/json; charset=utf-8".toMediaType()
     private val gson = Gson()
+    private val refreshMutex = Any()
 
     private data class ChallengeResponsePayload(
         @SerializedName("nonce") val nonce: String? = null,
@@ -259,15 +261,29 @@ object LicenseBackendClient {
         backendBaseUrlOverride: String? = null,
         client: OkHttpClient? = null,
     ) {
-        val pending = LicenseSessionStore.getPendingLogout() ?: return
+        flushPendingLogoutAndReport(backendBaseUrlOverride, client)
+    }
+
+    /**
+     * Attempts to send any queued offline logout to the backend.
+     * Returns true if there was no pending logout or it was cleanly cleared/invalidated on server.
+     */
+    fun flushPendingLogoutAndReport(
+        backendBaseUrlOverride: String? = null,
+        client: OkHttpClient? = null,
+    ): Boolean {
+        val pending = LicenseSessionStore.getPendingLogout() ?: return true
         val outcome = performLogoutCall(
             sessionToken = pending.sessionToken,
             deviceId = pending.deviceId,
             backendBaseUrlOverride = backendBaseUrlOverride,
             client = client,
         )
-        if (outcome is LogoutOutcome.Success || outcome is LogoutOutcome.AlreadyInvalid) {
+        return if (outcome is LogoutOutcome.Success || outcome is LogoutOutcome.AlreadyInvalid) {
             LicenseSessionStore.clearPendingLogout()
+            true
+        } else {
+            false
         }
     }
 
@@ -330,15 +346,17 @@ object LicenseBackendClient {
 
                     val signatureB64 = DeviceIdentityManager.signChallenge(nonce, "redeem")
                     val meta = DeviceIdentityManager.getDeviceInfo()
-                    val deviceInfoMap = mapOf(
-                        "device_name" to meta.deviceName,
-                        "manufacturer" to meta.manufacturer,
-                        "model" to meta.model,
-                        "brand" to meta.brand,
-                        "os_version" to meta.osVersion,
-                        "api_level" to meta.apiLevel,
-                        "app_version" to meta.appVersion,
-                    )
+                    val slotFp = runCatching { DeviceIdentityManager.getDeviceSlotFingerprint() }.getOrDefault("")
+                    val deviceInfoMap = buildMap<String, Any> {
+                        put("device_name", meta.deviceName)
+                        put("manufacturer", meta.manufacturer)
+                        put("model", meta.model)
+                        put("brand", meta.brand)
+                        put("os_version", meta.osVersion)
+                        put("api_level", meta.apiLevel)
+                        put("app_version", meta.appVersion)
+                        if (slotFp.isNotBlank()) put("device_slot_fp", slotFp)
+                    }
 
                     val reqJsonStr = gson.toJson(
                         mapOf(
@@ -456,6 +474,67 @@ object LicenseBackendClient {
         }
 
         val http = client ?: defaultClient
+        val initialResult = executeStatusRequest(
+            baseUrl = baseUrl,
+            http = http,
+            cleanKey = cleanKey,
+            devId = devId,
+            sessionToken = sessionToken,
+            remarksHint = remarksHint,
+            snapActive = snap.active,
+        )
+
+        if (sessionTokenOverride == null &&
+            initialResult is LicenseResolutionResult.Failure &&
+            initialResult.httpCode == 401 &&
+            initialResult.statusCode == "session_invalid"
+        ) {
+            // Another process (UI vs :RunSoLibV2RayDaemon) may have rotated the token in MMKV mid-flight.
+            val latestSnap = LicenseSessionStore.getSnapshot()
+            if (latestSnap.active &&
+                latestSnap.sessionToken.isNotBlank() &&
+                latestSnap.sessionToken != sessionToken
+            ) {
+                return executeStatusRequest(
+                    baseUrl = baseUrl,
+                    http = http,
+                    cleanKey = cleanKey,
+                    devId = devId,
+                    sessionToken = latestSnap.sessionToken,
+                    remarksHint = remarksHint,
+                    snapActive = latestSnap.active,
+                )
+            }
+
+            // If /refresh previously hit a network drop after server commit, recover once via ECDSA redeem.
+            if (LicenseSessionStore.hasRecentRefreshTransportFailure() && cleanKey.isNotBlank()) {
+                LicenseSessionStore.clearRefreshTransportFailure()
+                val recovered = redeem(
+                    rawInput = cleanKey,
+                    remarksHint = remarksHint,
+                    deviceId = devId,
+                    backendBaseUrlOverride = baseUrl,
+                    client = http,
+                )
+                if (recovered is LicenseResolutionResult.ReadySubscription ||
+                    (recovered is LicenseResolutionResult.Failure && recovered.isDefinitiveRejection)
+                ) {
+                    return recovered
+                }
+            }
+        }
+        return initialResult
+    }
+
+    private fun executeStatusRequest(
+        baseUrl: String,
+        http: OkHttpClient,
+        cleanKey: String,
+        devId: String,
+        sessionToken: String,
+        remarksHint: String,
+        snapActive: Boolean,
+    ): LicenseResolutionResult {
         val reqBodyMap = buildMap<String, Any> {
             if (cleanKey.isNotBlank()) put("license_key", cleanKey)
             if (devId.isNotBlank()) put("device_id", devId)
@@ -478,12 +557,12 @@ object LicenseBackendClient {
                 val resolvedUrl = sanitizeSubscriptionUrlForStorage(
                     parsed.resolvedSubscriptionUrl().ifBlank { "$baseUrl/api/v1/license/sub" },
                 )
-                if (snap.active) {
+                if (snapActive) {
                     LicenseSessionStore.touchVerified(
                         expiresAtSec = parsed.sessionExpiresAt,
                         subscriptionUrl = resolvedUrl,
                     )
-                    maybeRefreshSessionTokenInBackground(snap, devId, baseUrl, http)
+                    maybeRefreshSessionTokenInBackground(devId, baseUrl, http)
                 }
                 LicenseResolutionResult.ReadySubscription(
                     subscriptionUrl = resolvedUrl,
@@ -516,17 +595,33 @@ object LicenseBackendClient {
     }
 
     private fun maybeRefreshSessionTokenInBackground(
-        snap: LicenseSessionStore.SessionSnapshot,
         devId: String,
         baseUrl: String,
         http: OkHttpClient,
     ) {
         val nowSec = System.currentTimeMillis() / 1000L
-        if (snap.lastRefreshedAtSec <= 0L || (nowSec - snap.lastRefreshedAtSec) < SESSION_REFRESH_INTERVAL_SEC) {
+        val preSnap = LicenseSessionStore.getSnapshot()
+        if (preSnap.lastRefreshedAtSec <= 0L || (nowSec - preSnap.lastRefreshedAtSec) < SESSION_REFRESH_INTERVAL_SEC) {
             return
         }
-        runCatching { refreshSessionToken(devId, baseUrl, http) }
-            .onFailure { LogUtil.w(AppConfig.TAG, "Non-fatal session refresh failure: ${it.message}") }
+        synchronized(refreshMutex) {
+            val leaseOwner = LicenseSessionStore.tryAcquireRefreshLease() ?: return
+            try {
+                val latestSnap = LicenseSessionStore.getSnapshot()
+                val curSec = System.currentTimeMillis() / 1000L
+                if (!latestSnap.active ||
+                    latestSnap.sessionToken.isBlank() ||
+                    latestSnap.lastRefreshedAtSec <= 0L ||
+                    (curSec - latestSnap.lastRefreshedAtSec) < SESSION_REFRESH_INTERVAL_SEC
+                ) {
+                    return
+                }
+                runCatching { executeRefreshTokenLocked(devId, baseUrl, http, latestSnap) }
+                    .onFailure { LogUtil.w(AppConfig.TAG, "Non-fatal session refresh failure: ${it.message}") }
+            } finally {
+                LicenseSessionStore.releaseRefreshLease(leaseOwner)
+            }
+        }
     }
 
     fun refreshSessionToken(
@@ -535,42 +630,67 @@ object LicenseBackendClient {
         client: OkHttpClient? = null,
     ): Boolean {
         val baseUrl = resolveBaseUrl(backendBaseUrlOverride)
-        val snap = LicenseSessionStore.getSnapshot()
-        if (baseUrl.isBlank() || !snap.active || snap.sessionToken.isBlank()) return false
+        if (baseUrl.isBlank()) return false
         val devId = deviceId?.takeIf { it.isNotBlank() } ?: DeviceIdentityManager.getDeviceId()
         val http = client ?: defaultClient
+        synchronized(refreshMutex) {
+            val leaseOwner = LicenseSessionStore.tryAcquireRefreshLease() ?: return false
+            try {
+                val snap = LicenseSessionStore.getSnapshot()
+                if (!snap.active || snap.sessionToken.isBlank()) return false
+                return executeRefreshTokenLocked(devId, baseUrl, http, snap)
+            } finally {
+                LicenseSessionStore.releaseRefreshLease(leaseOwner)
+            }
+        }
+    }
 
+    private fun executeRefreshTokenLocked(
+        devId: String,
+        baseUrl: String,
+        http: OkHttpClient,
+        snap: LicenseSessionStore.SessionSnapshot,
+    ): Boolean {
         val chReqJson = gson.toJson(mapOf("device_id" to devId, "purpose" to "refresh"))
-        val (chCode, chBody) = executeHttpJson(
-            client = http,
-            url = "$baseUrl/api/v1/license/challenge",
-            jsonBody = chReqJson,
-            headers = mapOf("X-Device-Id" to devId),
-        )
+        val (chCode, chBody) = try {
+            executeHttpJson(
+                client = http,
+                url = "$baseUrl/api/v1/license/challenge",
+                jsonBody = chReqJson,
+                headers = mapOf("X-Device-Id" to devId),
+            )
+        } catch (_: Exception) {
+            return false
+        }
         val nonce = if (chCode in 200..299) {
             runCatching { gson.fromJson(chBody, ChallengeResponsePayload::class.java)?.nonce.orEmpty() }.getOrDefault("")
         } else {
             ""
         }
-        val sig = if (nonce.isNotBlank()) DeviceIdentityManager.signChallenge(nonce, "refresh") else ""
+        if (nonce.isBlank()) return false
+        val sig = runCatching { DeviceIdentityManager.signChallenge(nonce, "refresh") }.getOrDefault("")
+        if (sig.isBlank()) return false
 
-        val reqBodyMap = buildMap<String, Any> {
-            put("device_id", devId)
-            put("app_version", BuildConfig.VERSION_NAME)
-            if (nonce.isNotBlank() && sig.isNotBlank()) {
-                put("challenge_nonce", nonce)
-                put("device_signature", sig)
-            }
-        }
-        val (code, bodyStr) = executeHttpJson(
-            client = http,
-            url = "$baseUrl/api/v1/license/refresh",
-            jsonBody = gson.toJson(reqBodyMap),
-            headers = mapOf(
-                "Authorization" to "Bearer ${snap.sessionToken}",
-                "X-Device-Id" to devId,
-            ),
+        val reqBodyMap = mapOf(
+            "device_id" to devId,
+            "app_version" to BuildConfig.VERSION_NAME,
+            "challenge_nonce" to nonce,
+            "device_signature" to sig,
         )
+        val (code, bodyStr) = try {
+            executeHttpJson(
+                client = http,
+                url = "$baseUrl/api/v1/license/refresh",
+                jsonBody = gson.toJson(reqBodyMap),
+                headers = mapOf(
+                    "Authorization" to "Bearer ${snap.sessionToken}",
+                    "X-Device-Id" to devId,
+                ),
+            )
+        } catch (_: IOException) {
+            LicenseSessionStore.markRefreshTransportFailure()
+            return false
+        }
         if (code in 200..299) {
             val parsed = parseRedeemJson(bodyStr)
             val nextTok = parsed?.sessionToken?.trim().orEmpty()
@@ -599,6 +719,35 @@ object LicenseBackendClient {
             return LogoutOutcome.NetworkFailure("شناسه دستگاه در دسترس نیست.")
         }
         return performLogoutCall(snap.sessionToken, devId, backendBaseUrlOverride, client)
+    }
+
+    suspend fun logoutFromServerWithRetry(
+        backendBaseUrlOverride: String? = null,
+        client: OkHttpClient? = null,
+        maxAttempts: Int = 3,
+        retryDelayBaseMs: Long = 450L,
+    ): LogoutOutcome {
+        val snap = LicenseSessionStore.getSnapshot()
+        if (!snap.active || snap.sessionToken.isBlank()) {
+            return LogoutOutcome.AlreadyInvalid("no_local_session")
+        }
+        val devId = runCatching { DeviceIdentityManager.getDeviceId() }.getOrDefault("")
+        if (devId.isBlank()) {
+            return LogoutOutcome.NetworkFailure("شناسه دستگاه در دسترس نیست.")
+        }
+        val attempts = maxAttempts.coerceAtLeast(1)
+        var lastOutcome: LogoutOutcome = LogoutOutcome.NetworkFailure("خطا در اتصال به سرور")
+        for (attempt in 1..attempts) {
+            val outcome = performLogoutCall(snap.sessionToken, devId, backendBaseUrlOverride, client)
+            if (outcome is LogoutOutcome.Success || outcome is LogoutOutcome.AlreadyInvalid) {
+                return outcome
+            }
+            lastOutcome = outcome
+            if (attempt < attempts && retryDelayBaseMs > 0L) {
+                delay(retryDelayBaseMs * attempt)
+            }
+        }
+        return lastOutcome
     }
 
     private fun performLogoutCall(

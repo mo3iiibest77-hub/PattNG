@@ -1,6 +1,7 @@
 package com.v2ray.ang.senpai
 
 import com.google.gson.JsonParser
+import kotlinx.coroutines.runBlocking
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Protocol
@@ -278,5 +279,259 @@ class DeviceIdentityAndSessionSecurityTest {
             client = mockHttp,
         )
         assertTrue(logoutOut is LogoutOutcome.Success)
+    }
+
+    @Test
+    fun deviceSlotFingerprint_requiresHighEntropyAndroidId_andIgnoresLowEntropyOemIds() {
+        val fpA = DeviceIdentityManager.getDeviceSlotFingerprint()
+        assertEquals(64, fpA.length)
+
+        // Separate install with new storage & keypair on the exact same phone retains slot fp
+        DeviceIdentityManager.configureForTest(
+            crypto = JvmCryptoProvider(),
+            storage = InMemoryPrefsStorage(),
+            androidIdAux = "deadbeef12345678",
+            metadata = DeviceMetadata("Google Pixel 8", "Google", "Pixel 8", "google", "15", 35, "2.4.5"),
+        )
+        val fpB = DeviceIdentityManager.getDeviceSlotFingerprint()
+        assertEquals(fpA, fpB)
+
+        for (weakId in listOf("9774d56d682e549c", "0000000000000000", "1111111111111111", "short12", "")) {
+            DeviceIdentityManager.configureForTest(
+                crypto = cryptoA,
+                storage = storageA,
+                androidIdAux = weakId,
+                metadata = DeviceMetadata("Generic", "Brand", "ModelX", "brand", "14", 34, "2.4.5"),
+            )
+            assertEquals("Weak android_id '$weakId' must not produce slot fp", "", DeviceIdentityManager.getDeviceSlotFingerprint())
+        }
+    }
+
+    @Test
+    fun refreshSessionToken_enforcesSingleFlightLease_abortsBadChallenge_andMarksTransportFailure() {
+        LicenseSessionStore.saveSession(
+            licenseKey = "NP-TEST-LEAS-0001",
+            sessionId = "sess_lease_1",
+            sessionToken = "tok_lease_1",
+            subscriptionUrl = "https://nova.dontbedumb.ir/api/v1/license/sub",
+            expiresAtSec = 1999999999L,
+        )
+
+        val owner = LicenseSessionStore.tryAcquireRefreshLease()
+        assertNotNull(owner)
+        assertNull("Concurrent acquire must fail while lease is active", LicenseSessionStore.tryAcquireRefreshLease())
+        LicenseSessionStore.releaseRefreshLease(owner)
+        val owner2 = LicenseSessionStore.tryAcquireRefreshLease()
+        assertNotNull(owner2)
+        LicenseSessionStore.releaseRefreshLease(owner2)
+
+        // Failed /challenge must abort before hitting /refresh
+        var refreshCalledOnBadChallenge = false
+        val badChallengeHttp = OkHttpClient.Builder().addInterceptor { chain ->
+            val path = chain.request().url.encodedPath
+            if (path.endsWith("/refresh")) refreshCalledOnBadChallenge = true
+            Response.Builder()
+                .request(chain.request())
+                .protocol(Protocol.HTTP_1_1)
+                .code(500)
+                .message("Err")
+                .body("""{"status":"server_error"}""".toResponseBody("application/json".toMediaType()))
+                .build()
+        }.build()
+        assertFalse(
+            LicenseBackendClient.refreshSessionToken(
+                backendBaseUrlOverride = "https://nova.dontbedumb.ir",
+                client = badChallengeHttp,
+            )
+        )
+        assertFalse(refreshCalledOnBadChallenge)
+
+        // IOException during /refresh must mark transport failure
+        val dropRefreshHttp = OkHttpClient.Builder().addInterceptor { chain ->
+            val path = chain.request().url.encodedPath
+            if (path.endsWith("/challenge")) {
+                Response.Builder()
+                    .request(chain.request())
+                    .protocol(Protocol.HTTP_1_1)
+                    .code(200)
+                    .message("OK")
+                    .body("""{"nonce":"n_drop_1","expires_in":120}""".toResponseBody("application/json".toMediaType()))
+                    .build()
+            } else {
+                throw IOException("Connection reset during /refresh")
+            }
+        }.build()
+        assertFalse(
+            LicenseBackendClient.refreshSessionToken(
+                backendBaseUrlOverride = "https://nova.dontbedumb.ir",
+                client = dropRefreshHttp,
+            )
+        )
+        assertTrue(LicenseSessionStore.hasRecentRefreshTransportFailure())
+    }
+
+    @Test
+    fun refreshStatus_recoversConcurrentRotationAndRefreshDrop_butRejectsRevokedSession() {
+        // 1. Concurrent rotation in another process (tok_old -> tok_new)
+        LicenseSessionStore.saveSession(
+            licenseKey = "NP-TEST-RECV-0001",
+            sessionId = "sess_rot_1",
+            sessionToken = "tok_old",
+            subscriptionUrl = "https://nova.dontbedumb.ir/api/v1/license/sub",
+            expiresAtSec = 1999999999L,
+        )
+        val rotHttp = OkHttpClient.Builder().addInterceptor { chain ->
+            val req = chain.request()
+            val auth = req.header("Authorization").orEmpty()
+            if (auth == "Bearer tok_old") {
+                LicenseSessionStore.updateRotatedToken("tok_new", 1999999999L)
+                Response.Builder()
+                    .request(req)
+                    .protocol(Protocol.HTTP_1_1)
+                    .code(401)
+                    .message("Unauthorized")
+                    .body("""{"status":"session_invalid","message":"Invalid token"}""".toResponseBody("application/json".toMediaType()))
+                    .build()
+            } else {
+                assertEquals("Bearer tok_new", auth)
+                Response.Builder()
+                    .request(req)
+                    .protocol(Protocol.HTTP_1_1)
+                    .code(200)
+                    .message("OK")
+                    .body("""{"status":"ok","subscription_url":"https://nova.dontbedumb.ir/api/v1/license/sub","session_expires_at":1999999999}""".toResponseBody("application/json".toMediaType()))
+                    .build()
+            }
+        }.build()
+        val rotRes = LicenseBackendClient.refreshStatus(
+            licenseKey = "NP-TEST-RECV-0001",
+            backendBaseUrlOverride = "https://nova.dontbedumb.ir",
+            client = rotHttp,
+        )
+        assertTrue("Expected recovery via newer MMKV token, got $rotRes", rotRes is LicenseResolutionResult.ReadySubscription)
+
+        // 2. Dropped /refresh response -> recover once via ECDSA redeem
+        LicenseSessionStore.saveSession(
+            licenseKey = "NP-TEST-RECV-0001",
+            sessionId = "sess_drop_1",
+            sessionToken = "tok_stale",
+            subscriptionUrl = "https://nova.dontbedumb.ir/api/v1/license/sub",
+            expiresAtSec = 1999999999L,
+        )
+        LicenseSessionStore.markRefreshTransportFailure()
+        var redeemCalls = 0
+        val dropRecoverHttp = OkHttpClient.Builder().addInterceptor { chain ->
+            val req = chain.request()
+            val path = req.url.encodedPath
+            when {
+                path.endsWith("/status") -> Response.Builder()
+                    .request(req)
+                    .protocol(Protocol.HTTP_1_1)
+                    .code(401)
+                    .message("Unauthorized")
+                    .body("""{"status":"session_invalid","message":"Invalid token"}""".toResponseBody("application/json".toMediaType()))
+                    .build()
+                path.endsWith("/challenge") -> Response.Builder()
+                    .request(req)
+                    .protocol(Protocol.HTTP_1_1)
+                    .code(200)
+                    .message("OK")
+                    .body("""{"nonce":"n_rec_1","expires_in":120}""".toResponseBody("application/json".toMediaType()))
+                    .build()
+                path.endsWith("/redeem") -> {
+                    redeemCalls += 1
+                    Response.Builder()
+                        .request(req)
+                        .protocol(Protocol.HTTP_1_1)
+                        .code(200)
+                        .message("OK")
+                        .body("""{"status":"ok","license_key":"NP-TEST-RECV-0001","session_id":"sess_drop_2","session_token":"tok_recovered","session_expires_at":1999999999,"subscription_url":"https://nova.dontbedumb.ir/api/v1/license/sub"}""".toResponseBody("application/json".toMediaType()))
+                        .build()
+                }
+                else -> throw IOException("Unexpected $path")
+            }
+        }.build()
+        val dropRes = LicenseBackendClient.refreshStatus(
+            licenseKey = "NP-TEST-RECV-0001",
+            backendBaseUrlOverride = "https://nova.dontbedumb.ir",
+            client = dropRecoverHttp,
+        )
+        assertTrue("Expected silent ECDSA redeem recovery, got $dropRes", dropRes is LicenseResolutionResult.ReadySubscription)
+        assertEquals(1, redeemCalls)
+        assertFalse(LicenseSessionStore.hasRecentRefreshTransportFailure())
+        assertEquals("tok_recovered", LicenseSessionStore.getSnapshot().sessionToken)
+
+        // 3. Explicit session_revoked MUST NEVER auto-redeem even if transport flag exists
+        LicenseSessionStore.markRefreshTransportFailure()
+        var redeemOnRevokeCalls = 0
+        val revokedHttp = OkHttpClient.Builder().addInterceptor { chain ->
+            val req = chain.request()
+            if (req.url.encodedPath.endsWith("/redeem")) redeemOnRevokeCalls += 1
+            Response.Builder()
+                .request(req)
+                .protocol(Protocol.HTTP_1_1)
+                .code(401)
+                .message("Unauthorized")
+                .body("""{"status":"session_revoked","message":"Revoked by admin"}""".toResponseBody("application/json".toMediaType()))
+                .build()
+        }.build()
+        val revRes = LicenseBackendClient.refreshStatus(
+            licenseKey = "NP-TEST-RECV-0001",
+            backendBaseUrlOverride = "https://nova.dontbedumb.ir",
+            client = revokedHttp,
+        )
+        assertTrue(revRes is LicenseResolutionResult.Failure && revRes.isDefinitiveRejection)
+        assertEquals(0, redeemOnRevokeCalls)
+    }
+
+    @Test
+    fun logoutFromServerWithRetry_retriesTransientFailures_andStopsOnAlreadyInvalid() = runBlocking {
+        LicenseSessionStore.saveSession(
+            licenseKey = "NP-TEST-LOUT-0001",
+            sessionId = "sess_lout_1",
+            sessionToken = "tok_lout_1",
+            subscriptionUrl = "https://nova.dontbedumb.ir/api/v1/license/sub",
+            expiresAtSec = 1999999999L,
+        )
+        var attempts = 0
+        val flakyHttp = OkHttpClient.Builder().addInterceptor { chain ->
+            attempts += 1
+            if (attempts < 3) throw IOException("Transient handover loss")
+            Response.Builder()
+                .request(chain.request())
+                .protocol(Protocol.HTTP_1_1)
+                .code(200)
+                .message("OK")
+                .body("""{"ok":true,"status":"logged_out","used_devices":0}""".toResponseBody("application/json".toMediaType()))
+                .build()
+        }.build()
+        val out = LicenseBackendClient.logoutFromServerWithRetry(
+            backendBaseUrlOverride = "https://nova.dontbedumb.ir",
+            client = flakyHttp,
+            maxAttempts = 3,
+            retryDelayBaseMs = 1L,
+        )
+        assertTrue(out is LogoutOutcome.Success)
+        assertEquals(3, attempts)
+
+        var invalidAttempts = 0
+        val invalidHttp = OkHttpClient.Builder().addInterceptor { chain ->
+            invalidAttempts += 1
+            Response.Builder()
+                .request(chain.request())
+                .protocol(Protocol.HTTP_1_1)
+                .code(401)
+                .message("Unauthorized")
+                .body("""{"status":"session_logged_out"}""".toResponseBody("application/json".toMediaType()))
+                .build()
+        }.build()
+        val invalidOut = LicenseBackendClient.logoutFromServerWithRetry(
+            backendBaseUrlOverride = "https://nova.dontbedumb.ir",
+            client = invalidHttp,
+            maxAttempts = 3,
+            retryDelayBaseMs = 1L,
+        )
+        assertTrue(invalidOut is LogoutOutcome.AlreadyInvalid)
+        assertEquals(1, invalidAttempts)
     }
 }

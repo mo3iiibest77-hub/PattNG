@@ -1,6 +1,9 @@
 package com.v2ray.ang.senpai
 
 import com.tencent.mmkv.MMKV
+import java.io.File
+import java.io.RandomAccessFile
+import java.util.UUID
 
 /**
  * Multi-process, Keystore-encrypted local session store for license activation,
@@ -21,6 +24,10 @@ object LicenseSessionStore {
     private const val K_LAST_REFRESHED = "sess_last_refreshed"
     private const val K_PENDING_LOGOUT_TOK_ENC = "pending_logout_tok_enc"
     private const val K_PENDING_LOGOUT_DEV = "pending_logout_dev"
+    private const val K_REFRESH_LEASE_UNTIL_MS = "sess_refresh_lease_until_ms"
+    private const val K_REFRESH_LEASE_OWNER = "sess_refresh_lease_owner"
+    private const val K_REFRESH_FAIL_UNTIL_MS = "sess_refresh_fail_until_ms"
+    private const val K_PENDING_NOTICE_MSG = "pending_notice_msg"
 
     interface BackingStore {
         fun getString(key: String, default: String = ""): String
@@ -109,6 +116,7 @@ object LicenseSessionStore {
             s.putLong(K_EXPIRES_AT, expiresAtSec)
             s.putLong(K_LAST_VERIFIED, nowSec)
             s.putLong(K_LAST_REFRESHED, nowSec)
+            s.putLong(K_REFRESH_FAIL_UNTIL_MS, 0L)
             s.putBool(K_ACTIVE, licenseKey.isNotBlank() && sessionToken.isNotBlank())
         }
     }
@@ -127,6 +135,7 @@ object LicenseSessionStore {
             if (!subscriptionUrl.isNullOrBlank()) s.putString(K_SUB_URL, subscriptionUrl.trim())
             s.putLong(K_LAST_VERIFIED, nowSec)
             s.putLong(K_LAST_REFRESHED, nowSec)
+            s.putLong(K_REFRESH_FAIL_UNTIL_MS, 0L)
             s.putBool(K_ACTIVE, true)
         }
     }
@@ -190,6 +199,97 @@ object LicenseSessionStore {
             s.putLong(K_EXPIRES_AT, 0L)
             s.putLong(K_LAST_VERIFIED, 0L)
             s.putLong(K_LAST_REFRESHED, 0L)
+            s.putLong(K_REFRESH_FAIL_UNTIL_MS, 0L)
+            s.putLong(K_REFRESH_LEASE_UNTIL_MS, 0L)
+            s.putString(K_REFRESH_LEASE_OWNER, "")
+        }
+    }
+
+    private inline fun <T> withRefreshLockFile(block: () -> T): T {
+        if (overrideStore != null) return block()
+        val rootDir = runCatching { MMKV.getRootDir() }.getOrNull()?.takeIf { it.isNotBlank() }
+            ?: return block()
+        return runCatching {
+            val dir = File(rootDir)
+            if (!dir.exists()) dir.mkdirs()
+            RandomAccessFile(File(dir, "np_lic_refresh.lock"), "rw").use { raf ->
+                raf.channel.lock().use {
+                    block()
+                }
+            }
+        }.getOrElse { block() }
+    }
+
+    fun tryAcquireRefreshLease(
+        leaseMs: Long = 30_000L,
+        nowMs: Long = System.currentTimeMillis(),
+    ): String? {
+        synchronized(lock) {
+            return withRefreshLockFile {
+                val s = store()
+                val until = s.getLong(K_REFRESH_LEASE_UNTIL_MS, 0L)
+                val curOwner = s.getString(K_REFRESH_LEASE_OWNER, "")
+                if (until > nowMs && curOwner.isNotBlank()) {
+                    return@withRefreshLockFile null
+                }
+                val owner = UUID.randomUUID().toString()
+                s.putLong(K_REFRESH_LEASE_UNTIL_MS, nowMs + leaseMs.coerceAtLeast(1_000L))
+                s.putString(K_REFRESH_LEASE_OWNER, owner)
+                owner
+            }
+        }
+    }
+
+    fun releaseRefreshLease(owner: String?) {
+        if (owner.isNullOrBlank()) return
+        synchronized(lock) {
+            withRefreshLockFile {
+                val s = store()
+                if (s.getString(K_REFRESH_LEASE_OWNER, "") == owner) {
+                    s.putLong(K_REFRESH_LEASE_UNTIL_MS, 0L)
+                    s.putString(K_REFRESH_LEASE_OWNER, "")
+                }
+            }
+        }
+    }
+
+    fun markRefreshTransportFailure(
+        ttlMs: Long = 600_000L,
+        nowMs: Long = System.currentTimeMillis(),
+    ) {
+        synchronized(lock) {
+            store().putLong(K_REFRESH_FAIL_UNTIL_MS, nowMs + ttlMs.coerceAtLeast(10_000L))
+        }
+    }
+
+    fun hasRecentRefreshTransportFailure(nowMs: Long = System.currentTimeMillis()): Boolean {
+        synchronized(lock) {
+            return store().getLong(K_REFRESH_FAIL_UNTIL_MS, 0L) > nowMs
+        }
+    }
+
+    fun clearRefreshTransportFailure() {
+        synchronized(lock) {
+            store().putLong(K_REFRESH_FAIL_UNTIL_MS, 0L)
+        }
+    }
+
+    fun setPendingNoticeMessage(message: String) {
+        val clean = message.trim().take(240)
+        if (clean.isBlank()) return
+        synchronized(lock) {
+            store().putString(K_PENDING_NOTICE_MSG, clean)
+        }
+    }
+
+    fun consumePendingNoticeMessage(): String {
+        synchronized(lock) {
+            val s = store()
+            val msg = s.getString(K_PENDING_NOTICE_MSG, "").trim()
+            if (msg.isNotBlank()) {
+                s.putString(K_PENDING_NOTICE_MSG, "")
+            }
+            return msg
         }
     }
 

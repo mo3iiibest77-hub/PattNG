@@ -4,6 +4,7 @@ import android.app.Application
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.os.Build
@@ -37,9 +38,11 @@ import com.v2ray.ang.senpai.CloudflareScanner
 import com.v2ray.ang.senpai.DeviceIdentityManager
 import com.v2ray.ang.senpai.LicenseBackendClient
 import com.v2ray.ang.senpai.LicenseResolutionResult
+import com.v2ray.ang.senpai.LicenseSessionCleaner
 import com.v2ray.ang.senpai.LicenseSessionStore
 import com.v2ray.ang.senpai.LogoutOutcome
 import com.v2ray.ang.senpai.OriginDomainStore
+import com.v2ray.ang.senpai.PendingLogoutWorker
 import com.v2ray.ang.senpai.PostConnectDiscoveryRunner
 import com.v2ray.ang.senpai.PostConnectDiscoveryState
 import com.v2ray.ang.senpai.ProviderRangeEntry
@@ -49,6 +52,9 @@ import com.v2ray.ang.senpai.SmartFlowState
 import com.v2ray.ang.senpai.SmartOptimizeWorker
 import com.v2ray.ang.senpai.SubscriptionQuotaInfo
 import com.v2ray.ang.senpai.SubscriptionQuotaStore
+import com.v2ray.ang.service.CoreProxyOnlyService
+import com.v2ray.ang.service.CoreRootService
+import com.v2ray.ang.service.CoreVpnService
 import com.v2ray.ang.ui.main.MainDataSource
 import com.v2ray.ang.ui.main.MainRepository
 import com.v2ray.ang.ui.main.MainServiceEvent
@@ -64,6 +70,8 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 
 enum class Qs3dTab { Connect, Configs, Ranges, Apps }
 
@@ -174,6 +182,7 @@ class Qs3dViewModel(
     private var lastUpdateDialogDismissMs = 0L
     @Volatile
     private var forceRevokingLicense = false
+    private val verifyInFlight = AtomicBoolean(false)
     private var licenseWatchdogJob: Job? = null
 
     init {
@@ -183,6 +192,7 @@ class Qs3dViewModel(
         collectServiceEvents()
         collectCoordinatorFlows()
         refreshAllData(fetchRemoteQuota = true)
+        applyPendingDaemonNoticeIfAny()
         verifyLicenseSessionNow(force = true)
         viewModelScope.launch(Dispatchers.IO) {
             delay(1500L)
@@ -222,6 +232,7 @@ class Qs3dViewModel(
                         licenseWatchdogJob = null
                         _uiState.update {
                             it.copy(
+                                hasActiveLicense = LicenseBackendClient.isLicenseSessionActive(),
                                 coreRunning = false,
                                 connectedLatencyMs = null,
                                 connectedCountry = "",
@@ -230,6 +241,7 @@ class Qs3dViewModel(
                                 liveUploadBps = 0L,
                             )
                         }
+                        applyPendingDaemonNoticeIfAny()
                     }
 
                     is MainServiceEvent.StateStartFailure -> {
@@ -551,45 +563,81 @@ class Qs3dViewModel(
         }
     }
 
+    private fun applyPendingDaemonNoticeIfAny() {
+        val pending = LicenseSessionStore.consumePendingNoticeMessage()
+        if (pending.isBlank()) return
+        val showModal = NovaPulseNoticeParser.shouldShowAsRichDialog(pending)
+        val active = LicenseBackendClient.isLicenseSessionActive()
+        _uiState.update {
+            it.copy(
+                hasActiveLicense = active,
+                toastMessage = if (showModal) it.toastMessage else pending,
+                activeNoticeDialog = if (showModal) pending else it.activeNoticeDialog,
+            )
+        }
+        if (!active) {
+            loadConfigsAndSubs()
+        }
+    }
+
     fun verifyLicenseSessionNow(force: Boolean = false) {
+        applyPendingDaemonNoticeIfAny()
         val now = System.currentTimeMillis()
         if (!force && (now - lastLicenseVerifyMs) < 5_000L) return
+        if (!verifyInFlight.compareAndSet(false, true)) return
+
         val ctx = getApplication<Application>()
         val snap = LicenseSessionStore.getSnapshot()
         val savedKey = LicenseBackendClient.getSavedLicenseKey()
         if (!snap.active && savedKey.isBlank()) {
             viewModelScope.launch(Dispatchers.IO) {
-                LicenseBackendClient.flushPendingLogoutIfNeeded()
+                try {
+                    if (!LicenseBackendClient.flushPendingLogoutAndReport() &&
+                        LicenseSessionStore.getPendingLogout() != null
+                    ) {
+                        PendingLogoutWorker.schedule(ctx)
+                    }
+                } finally {
+                    verifyInFlight.set(false)
+                }
             }
             return
         }
         lastLicenseVerifyMs = now
         viewModelScope.launch(Dispatchers.IO) {
-            LicenseBackendClient.flushPendingLogoutIfNeeded()
-            val deviceId = runCatching { DeviceIdentityManager.getDeviceId(ctx) }.getOrDefault("")
-            if (deviceId.isBlank()) return@launch
-            val res = LicenseBackendClient.refreshStatus(
-                licenseKey = savedKey,
-                deviceId = deviceId,
-            )
-            when (res) {
-                is LicenseResolutionResult.Failure -> {
-                    if (res.isDefinitiveRejection) {
-                        val msg = res.reason.ifBlank {
-                            ctx.getString(R.string.novapulse_license_force_revoked)
-                        }
-                        forceDisconnectRevokedLicense(msg)
-                    }
+            try {
+                if (!LicenseBackendClient.flushPendingLogoutAndReport() &&
+                    LicenseSessionStore.getPendingLogout() != null
+                ) {
+                    PendingLogoutWorker.schedule(ctx)
                 }
-                is LicenseResolutionResult.ReadySubscription -> {
-                    res.quota?.let { q ->
-                        val activeSubId = LicenseBackendClient.getActiveLicenseSubId()
-                        if (activeSubId.isNotBlank()) {
-                            SubscriptionQuotaStore.save(activeSubId, q)
+                val deviceId = runCatching { DeviceIdentityManager.getDeviceId(ctx) }.getOrDefault("")
+                if (deviceId.isBlank()) return@launch
+                val res = LicenseBackendClient.refreshStatus(
+                    licenseKey = savedKey,
+                    deviceId = deviceId,
+                )
+                when (res) {
+                    is LicenseResolutionResult.Failure -> {
+                        if (res.isDefinitiveRejection) {
+                            val msg = res.reason.ifBlank {
+                                ctx.getString(R.string.novapulse_license_force_revoked)
+                            }
+                            forceDisconnectRevokedLicense(msg)
                         }
                     }
+                    is LicenseResolutionResult.ReadySubscription -> {
+                        res.quota?.let { q ->
+                            val activeSubId = LicenseBackendClient.getActiveLicenseSubId()
+                            if (activeSubId.isNotBlank()) {
+                                SubscriptionQuotaStore.save(activeSubId, q)
+                            }
+                        }
+                    }
+                    else -> Unit
                 }
-                else -> Unit
+            } finally {
+                verifyInFlight.set(false)
             }
         }
     }
@@ -597,8 +645,9 @@ class Qs3dViewModel(
     private fun startLicenseWatchdog() {
         if (licenseWatchdogJob?.isActive == true) return
         licenseWatchdogJob = viewModelScope.launch(Dispatchers.IO) {
+            delay(5_000L)
             while (isActive) {
-                verifyLicenseSessionNow(force = true)
+                verifyLicenseSessionNow(force = false)
                 delay(20_000L)
             }
         }
@@ -642,6 +691,7 @@ class Qs3dViewModel(
         abortIfStopFails: Boolean,
         syncServerLogout: Boolean = false,
     ): Boolean {
+        val stopAttempt = AtomicInteger(0)
         val stopSucceeded = LicenseLogoutOrchestrator.stopRuntimeAndConfirm(
             isCoreRunning = { _uiState.value.coreRunning || isSystemVpnInterfaceActive(ctx) },
             cancelBackgroundWork = {
@@ -652,7 +702,15 @@ class Qs3dViewModel(
                 SmartOptimizeWorker.cancel(ctx)
                 dataSource.cancelAllPing()
             },
-            requestStopVpn = { LauncherManager.stopService(ctx) },
+            requestStopVpn = {
+                val attempt = stopAttempt.incrementAndGet()
+                LauncherManager.stopService(ctx)
+                if (attempt > 1) {
+                    runCatching { ctx.stopService(Intent(ctx, CoreVpnService::class.java)) }
+                    runCatching { ctx.stopService(Intent(ctx, CoreProxyOnlyService::class.java)) }
+                    runCatching { ctx.stopService(Intent(ctx, CoreRootService::class.java)) }
+                }
+            },
             awaitStopEvent = { timeoutMs ->
                 withTimeoutOrNull(timeoutMs) {
                     dataSource.mainServiceEvent.first {
@@ -674,51 +732,30 @@ class Qs3dViewModel(
 
         if (!stopSucceeded) {
             runCatching { LauncherManager.stopService(ctx) }
+            runCatching { ctx.stopService(Intent(ctx, CoreVpnService::class.java)) }
+            runCatching { ctx.stopService(Intent(ctx, CoreProxyOnlyService::class.java)) }
+            runCatching { ctx.stopService(Intent(ctx, CoreRootService::class.java)) }
         }
 
         var finalMessage = resultMessage
         if (syncServerLogout) {
             val snap = LicenseSessionStore.getSnapshot()
             val devId = runCatching { DeviceIdentityManager.getDeviceId(ctx) }.getOrDefault("")
-            when (val outcome = LicenseBackendClient.logoutFromServer()) {
+            when (val outcome = LicenseBackendClient.logoutFromServerWithRetry()) {
                 is LogoutOutcome.Success, is LogoutOutcome.AlreadyInvalid -> {
                     LicenseSessionStore.clearPendingLogout()
                 }
                 is LogoutOutcome.NetworkFailure -> {
                     if (snap.active && snap.sessionToken.isNotBlank() && devId.isNotBlank()) {
                         LicenseSessionStore.enqueuePendingLogout(snap.sessionToken, devId)
+                        PendingLogoutWorker.schedule(ctx)
                     }
                     finalMessage = "خروج محلی انجام شد؛ اما به دلیل نبود ارتباط با سرور (${outcome.message})، آزادسازی ظرفیت به محض اتصال اینترنت ارسال خواهد شد."
                 }
             }
         }
 
-        LicenseLogoutOrchestrator.wipeBoundLicenseData(
-            object : LicenseLogoutStorage {
-                override fun getActiveLicenseSubId(): String = LicenseBackendClient.getActiveLicenseSubId()
-                override fun getAllSubscriptionIds(): List<String> =
-                    MmkvManager.decodeSubscriptions().map { it.guid }
-                override fun removeSubscription(subId: String) {
-                    MmkvManager.removeSubscription(subId)
-                }
-                override fun removeServersWithoutSubIfNeeded(boundSubIds: Set<String>) {
-                    val selected = MmkvManager.getSelectServer()
-                    for (guid in MmkvManager.decodeAllServerList()) {
-                        val item = MmkvManager.decodeServerConfig(guid) ?: continue
-                        if (item.subscriptionId in boundSubIds || boundSubIds.isEmpty()) {
-                            MmkvManager.removeServer(guid)
-                            if (guid == selected) {
-                                MmkvManager.setSelectServer("")
-                            }
-                        }
-                    }
-                }
-                override fun clearQuota(subId: String) = SubscriptionQuotaStore.clear(subId)
-                override fun clearSelectedServer() = MmkvManager.setSelectServer("")
-                override fun clearExplicitSelection() = SmartConnectCoordinator.markExplicitServerSelected(false)
-                override fun clearActiveLicenseSession() = LicenseBackendClient.clearActiveLicenseSession()
-            }
-        )
+        LicenseSessionCleaner.wipeBoundLicenseData(ctx)
 
         autoCountryProbeDoneForSession = false
         val showModal = NovaPulseNoticeParser.shouldShowAsRichDialog(finalMessage)

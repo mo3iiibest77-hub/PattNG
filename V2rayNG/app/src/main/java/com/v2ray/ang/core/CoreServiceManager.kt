@@ -24,6 +24,12 @@ import com.v2ray.ang.handler.NotificationManager
 import com.v2ray.ang.handler.SettingsManager
 import com.v2ray.ang.handler.SpeedtestManager
 import com.v2ray.ang.helper.MessageHelper
+import com.v2ray.ang.senpai.AppSecurityGuard
+import com.v2ray.ang.senpai.DeviceIdentityManager
+import com.v2ray.ang.senpai.LicenseBackendClient
+import com.v2ray.ang.senpai.LicenseResolutionResult
+import com.v2ray.ang.senpai.LicenseSessionCleaner
+import com.v2ray.ang.senpai.LicenseSessionStore
 import com.v2ray.ang.service.DialerNativeService
 import com.v2ray.ang.service.DialerWebviewService
 import com.v2ray.ang.service.NetworkMonitor
@@ -32,14 +38,20 @@ import com.v2ray.ang.util.Utils
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import com.v2ray.ang.extension.delay
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import libv2ray.CoreCallbackHandler
 import libv2ray.CoreController
 import libv2ray.ProcessFinder
 import java.lang.ref.SoftReference
 import java.net.InetSocketAddress
+import java.util.concurrent.atomic.AtomicBoolean
 
 object CoreServiceManager {
+
+    private const val LICENSE_WATCHDOG_INTERVAL_MS = 20_000L
+    private const val LICENSE_WATCHDOG_FRESH_SKIP_SEC = 15L
 
     private val coreController: CoreController = CoreNativeManager.newCoreController(CoreCallback())
     private val mMsgReceive = ReceiveMessageHandler()
@@ -47,6 +59,9 @@ object CoreServiceManager {
     private var processFinder: XrayProcessFinder? = null
     private var browserDialer: IDialerService? = null
     private var networkMonitor: NetworkMonitor? = null
+    private var licenseWatchdogJob: Job? = null
+    private val daemonWatchdogInFlight = AtomicBoolean(false)
+    private val daemonDisconnecting = AtomicBoolean(false)
 
     @Volatile
     private var isReloading = false
@@ -124,6 +139,7 @@ object CoreServiceManager {
         CoreNativeManager.initCoreEnv(service)
         launchCore(service, vpnInterface)
         startNetworkMonitor(service)
+        startDaemonLicenseWatchdog(service)
     }
 
     @Throws(Exception::class)
@@ -194,6 +210,7 @@ object CoreServiceManager {
      * @return True if the core was stopped successfully, false otherwise.
      */
     fun stopCoreLoop(): Boolean {
+        stopDaemonLicenseWatchdog()
         val service = getService() ?: return false
 
         networkMonitor?.unregister()
@@ -244,6 +261,94 @@ object CoreServiceManager {
             onUnderlyingNetworksChanged = { networks -> serviceControl?.get()?.setUnderlyingNetworks(networks) },
             onHandover = { reloadCore() },
         ).also { it.register() }
+    }
+
+    private fun startDaemonLicenseWatchdog(service: Service) {
+        stopDaemonLicenseWatchdog()
+        daemonDisconnecting.set(false)
+        licenseWatchdogJob = CoroutineScope(Dispatchers.IO).launch {
+            delay(1_500L)
+            while (isActive && isRunning()) {
+                enforceDaemonLicenseOnce(service)
+                delay(LICENSE_WATCHDOG_INTERVAL_MS)
+            }
+        }
+    }
+
+    fun stopDaemonLicenseWatchdog() {
+        licenseWatchdogJob?.cancel()
+        licenseWatchdogJob = null
+    }
+
+    private fun enforceDaemonLicenseOnce(service: Service) {
+        if (!daemonWatchdogInFlight.compareAndSet(false, true)) return
+        try {
+            val appCtx = service.applicationContext
+            if (AppSecurityGuard.isRuntimeTampered()) {
+                triggerDaemonLicenseDisconnect(
+                    service,
+                    appCtx.getString(com.v2ray.ang.R.string.novapulse_license_force_revoked),
+                )
+                return
+            }
+            if (!LicenseBackendClient.isLicenseSessionActive()) {
+                triggerDaemonLicenseDisconnect(
+                    service,
+                    appCtx.getString(com.v2ray.ang.R.string.novapulse_license_force_revoked),
+                )
+                return
+            }
+
+            val snap = LicenseSessionStore.getSnapshot()
+            if (!snap.active || snap.sessionToken.isBlank() || snap.licenseKey.isBlank()) {
+                triggerDaemonLicenseDisconnect(
+                    service,
+                    appCtx.getString(com.v2ray.ang.R.string.novapulse_license_force_revoked),
+                )
+                return
+            }
+
+            val nowSec = System.currentTimeMillis() / 1000L
+            if (snap.lastVerifiedAtSec > 0L && (nowSec - snap.lastVerifiedAtSec) < LICENSE_WATCHDOG_FRESH_SKIP_SEC) {
+                return
+            }
+
+            val devId = runCatching { DeviceIdentityManager.getDeviceId(appCtx) }.getOrDefault("")
+            if (devId.isBlank()) return
+
+            val res = LicenseBackendClient.refreshStatus(
+                licenseKey = snap.licenseKey,
+                deviceId = devId,
+            )
+            if (res is LicenseResolutionResult.Failure && res.isDefinitiveRejection) {
+                val latest = LicenseSessionStore.getSnapshot()
+                if (!latest.active || latest.sessionId.isBlank() || latest.sessionId == snap.sessionId) {
+                    val reason = res.reason.ifBlank {
+                        appCtx.getString(com.v2ray.ang.R.string.novapulse_license_force_revoked)
+                    }
+                    triggerDaemonLicenseDisconnect(service, reason)
+                }
+            }
+        } finally {
+            daemonWatchdogInFlight.set(false)
+        }
+    }
+
+    private fun triggerDaemonLicenseDisconnect(service: Service, reason: String) {
+        if (!daemonDisconnecting.compareAndSet(false, true)) return
+        val appCtx = service.applicationContext
+        LogUtil.w(AppConfig.TAG, "CoreServiceManager: Stopping core due to license rejection")
+        LicenseSessionStore.setPendingNoticeMessage(reason)
+        LicenseSessionCleaner.wipeBoundLicenseData(appCtx)
+        stopDaemonLicenseWatchdog()
+        val ctrl = serviceControl?.get()
+        if (ctrl != null) {
+            ctrl.stopService()
+        } else {
+            stopCoreLoop()
+            service.stopSelf()
+        }
+        NotificationManager.showLicenseRevokedNotification(appCtx, reason)
     }
 
     /**
