@@ -9,7 +9,6 @@ import com.v2ray.ang.fmt.Hysteria2Fmt
 import com.v2ray.ang.fmt.TrojanFmt
 import com.v2ray.ang.fmt.VlessFmt
 import com.v2ray.ang.fmt.VmessFmt
-import com.v2ray.ang.handler.MmkvManager
 import com.v2ray.ang.senpai.CloudflareScanner
 import com.v2ray.ang.util.JsonUtil
 import org.junit.After
@@ -23,7 +22,6 @@ import org.junit.Test
 import org.mockito.MockedStatic
 import org.mockito.Mockito
 import org.mockito.Mockito.mockStatic
-import org.mockito.stubbing.Answer
 import java.net.URLEncoder
 import java.util.Base64 as JavaBase64
 
@@ -31,7 +29,6 @@ class CoreOutboundBuilderDualPipelineTest {
 
     private lateinit var mockLog: MockedStatic<Log>
     private lateinit var mockBase64: MockedStatic<Base64>
-    private lateinit var mockMmkv: MockedStatic<MmkvManager>
     private var fragmentPrefEnabled: Boolean = false
 
     @Before
@@ -57,27 +54,18 @@ class CoreOutboundBuilderDualPipelineTest {
             enc.encodeToString(input)
         }
 
-        mockMmkv = mockStatic(
-            MmkvManager::class.java,
-            Answer { inv ->
-                when (inv.method.name) {
-                    "decodeSettingsBool" -> {
-                        val key = inv.arguments.getOrNull(0) as? String
-                        val def = (inv.arguments.getOrNull(1) as? Boolean) ?: false
-                        if (key == AppConfig.PREF_FRAGMENT_ENABLED) fragmentPrefEnabled else def
-                    }
-                    "decodeSettingsString" -> inv.arguments.getOrNull(1) as? String
-                    "decodeSettingsInt" -> (inv.arguments.getOrNull(1) as? Int) ?: 0
-                    "decodeSettingsLong" -> (inv.arguments.getOrNull(1) as? Long) ?: 0L
-                    else -> null
-                }
+        CoreOutboundBuilder.settingsProvider = object : OutboundSettingsProvider {
+            override fun getBool(key: String, default: Boolean): Boolean {
+                return if (key == AppConfig.PREF_FRAGMENT_ENABLED) fragmentPrefEnabled else default
             }
-        )
+
+            override fun getString(key: String, default: String?): String? = default
+        }
     }
 
     @After
     fun tearDown() {
-        mockMmkv.close()
+        CoreOutboundBuilder.settingsProvider = MmkvOutboundSettingsProvider
         mockBase64.close()
         mockLog.close()
     }

@@ -15,11 +15,27 @@ import com.v2ray.ang.util.JsonUtil
 import com.v2ray.ang.util.LogUtil
 import com.v2ray.ang.util.Utils
 
+internal interface OutboundSettingsProvider {
+    fun getBool(key: String, default: Boolean = false): Boolean
+    fun getString(key: String, default: String? = null): String?
+}
+
+internal object MmkvOutboundSettingsProvider : OutboundSettingsProvider {
+    override fun getBool(key: String, default: Boolean): Boolean =
+        MmkvManager.decodeSettingsBool(key, default)
+
+    override fun getString(key: String, default: String?): String? =
+        MmkvManager.decodeSettingsString(key, default)
+}
+
 /**
  * Centralizes ProfileItem -> OutboundBean conversion.
  * Most protocol builders mirror the previous *Fmt.toOutbound behavior.
  */
 object CoreOutboundBuilder {
+
+    @Volatile
+    internal var settingsProvider: OutboundSettingsProvider = MmkvOutboundSettingsProvider
 
     /** Dispatches a profile to protocol-specific outbound builder. */
     fun convert(profileItem: ProfileItem): OutboundBean? {
@@ -44,7 +60,7 @@ object CoreOutboundBuilder {
     /** Applies global outbound options (mux, protocol-specific tweaks, etc.). */
     private fun updateOutboundWithGlobalSettings(outbound: OutboundBean): Boolean {
         try {
-            var muxEnabled = MmkvManager.decodeSettingsBool(AppConfig.PREF_MUX_ENABLED, false)
+            var muxEnabled = settingsProvider.getBool(AppConfig.PREF_MUX_ENABLED, false)
             val protocol = outbound.protocol
             if (protocol.equals(EConfigType.SHADOWSOCKS.name, true)
                 || protocol.equals(EConfigType.SOCKS.name, true)
@@ -61,9 +77,9 @@ object CoreOutboundBuilder {
 
             if (muxEnabled) {
                 outbound.mux?.enabled = true
-                outbound.mux?.concurrency = MmkvManager.decodeSettingsString(AppConfig.PREF_MUX_CONCURRENCY, "8").orEmpty().toInt()
-                outbound.mux?.xudpConcurrency = MmkvManager.decodeSettingsString(AppConfig.PREF_MUX_XUDP_CONCURRENCY, "16").orEmpty().toInt()
-                outbound.mux?.xudpProxyUDP443 = MmkvManager.decodeSettingsString(AppConfig.PREF_MUX_XUDP_QUIC, "reject")
+                outbound.mux?.concurrency = settingsProvider.getString(AppConfig.PREF_MUX_CONCURRENCY, "8").orEmpty().toInt()
+                outbound.mux?.xudpConcurrency = settingsProvider.getString(AppConfig.PREF_MUX_XUDP_CONCURRENCY, "16").orEmpty().toInt()
+                outbound.mux?.xudpProxyUDP443 = settingsProvider.getString(AppConfig.PREF_MUX_XUDP_QUIC, "reject")
                 if (protocol.equals(EConfigType.VLESS.name, true) && outbound.settings?.flow?.isNotEmpty() == true) {
                     outbound.mux?.concurrency = -1
                 }
@@ -245,7 +261,7 @@ object CoreOutboundBuilder {
             ?.ifEmpty { null }
             ?: listOf(AppConfig.WIREGUARD_LOCAL_ADDRESS_V4)
 
-        val addresses = if (MmkvManager.decodeSettingsBool(AppConfig.PREF_IPV6_ENABLED) == true) {
+        val addresses = if (settingsProvider.getBool(AppConfig.PREF_IPV6_ENABLED)) {
             rawAddresses
         } else {
             val ipv4Addresses = rawAddresses.filter { !it.contains(":") }
@@ -622,7 +638,7 @@ object CoreOutboundBuilder {
      */
     private fun updateOutboundFragment(streamSettings: OutboundBean.StreamSettingsBean): Boolean {
         try {
-            if (MmkvManager.decodeSettingsBool(AppConfig.PREF_FRAGMENT_ENABLED, false) == false) {
+            if (!settingsProvider.getBool(AppConfig.PREF_FRAGMENT_ENABLED, false)) {
                 return true
             }
             if (streamSettings.security != AppConfig.TLS
@@ -635,7 +651,7 @@ object CoreOutboundBuilder {
             }
 
             var packets =
-                MmkvManager.decodeSettingsString(AppConfig.PREF_FRAGMENT_PACKETS) ?: "tlshello"
+                settingsProvider.getString(AppConfig.PREF_FRAGMENT_PACKETS) ?: "tlshello"
             if (streamSettings.security == AppConfig.REALITY
                 && packets == "tlshello"
             ) {
@@ -646,11 +662,11 @@ object CoreOutboundBuilder {
                 type = "fragment",
                 settings = OutboundBean.StreamSettingsBean.FinalMaskBean.MaskBean.MaskSettingsBean(
                     packets = packets,
-                    length = MmkvManager.decodeSettingsString(AppConfig.PREF_FRAGMENT_LENGTH)
+                    length = settingsProvider.getString(AppConfig.PREF_FRAGMENT_LENGTH)
                         ?: "50-100",
-                    delay = MmkvManager.decodeSettingsString(AppConfig.PREF_FRAGMENT_INTERVAL)
+                    delay = settingsProvider.getString(AppConfig.PREF_FRAGMENT_INTERVAL)
                         ?: "10-20",
-                    maxSplit = MmkvManager.decodeSettingsString(AppConfig.PREF_FRAGMENT_MAXSPLIT)
+                    maxSplit = settingsProvider.getString(AppConfig.PREF_FRAGMENT_MAXSPLIT)
                         ?: "10"
                 )
             )
@@ -701,11 +717,11 @@ object CoreOutboundBuilder {
         }
 
         val domain = HttpUtil.toIdnDomain(profileItem.server.orEmpty())
-        if (MmkvManager.decodeSettingsString(AppConfig.PREF_OUTBOUND_DOMAIN_RESOLVE_METHOD, "1") != "2") {
+        if (settingsProvider.getString(AppConfig.PREF_OUTBOUND_DOMAIN_RESOLVE_METHOD, "1") != "2") {
             return domain
         }
         //Resolve and replace domain
-        val resolvedIps = HttpUtil.resolveHostToIP(domain, MmkvManager.decodeSettingsBool(AppConfig.PREF_PREFER_IPV6))
+        val resolvedIps = HttpUtil.resolveHostToIP(domain, settingsProvider.getBool(AppConfig.PREF_PREFER_IPV6))
         if (resolvedIps.isNullOrEmpty()) {
             return domain
         }
