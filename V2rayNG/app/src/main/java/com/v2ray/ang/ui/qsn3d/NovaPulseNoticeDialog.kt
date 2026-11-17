@@ -1,10 +1,13 @@
 package com.v2ray.ang.ui.qsn3d
 
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.BorderStroke
@@ -13,6 +16,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -57,7 +62,10 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.rotate
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.res.stringResource
 import com.v2ray.ang.util.Utils
@@ -648,10 +656,16 @@ private fun NovaPulseNoticeShell(
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val motionActive = rememberMotionActive()
-    val beaconPulse: Float = if (motionActive) {
-        val t = rememberInfiniteTransition(label = "notice_beacon")
-        t.animateFloat(
-            initialValue = 0.65f,
+    val densityPx = LocalDensity.current.density
+    val beaconPulse: Float
+    val tiltXDeg: Float
+    val tiltYDeg: Float
+    val sheenProgress: Float
+    val orbitDeg: Float
+    if (motionActive) {
+        val t = rememberInfiniteTransition(label = "notice_3d_motion")
+        beaconPulse = t.animateFloat(
+            initialValue = 0.68f,
             targetValue = 1.0f,
             animationSpec = infiniteRepeatable(
                 animation = tween(durationMillis = 1800, easing = FastOutSlowInEasing),
@@ -659,8 +673,48 @@ private fun NovaPulseNoticeShell(
             ),
             label = "beacon_alpha",
         ).value
+        tiltXDeg = t.animateFloat(
+            initialValue = -1.8f,
+            targetValue = 1.8f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(durationMillis = 4200, easing = FastOutSlowInEasing),
+                repeatMode = RepeatMode.Reverse,
+            ),
+            label = "card_tilt_x",
+        ).value
+        tiltYDeg = t.animateFloat(
+            initialValue = -2.6f,
+            targetValue = 2.6f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(durationMillis = 5600, easing = FastOutSlowInEasing),
+                repeatMode = RepeatMode.Reverse,
+            ),
+            label = "card_tilt_y",
+        ).value
+        sheenProgress = t.animateFloat(
+            initialValue = -0.35f,
+            targetValue = 1.35f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(durationMillis = 4800, easing = FastOutSlowInEasing),
+                repeatMode = RepeatMode.Restart,
+            ),
+            label = "card_sheen",
+        ).value
+        orbitDeg = t.animateFloat(
+            initialValue = 0f,
+            targetValue = 360f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(durationMillis = 6400, easing = LinearEasing),
+                repeatMode = RepeatMode.Restart,
+            ),
+            label = "emblem_orbit",
+        ).value
     } else {
-        0.90f
+        beaconPulse = 0.90f
+        tiltXDeg = 0f
+        tiltYDeg = 0f
+        sheenProgress = 0.35f
+        orbitDeg = 24f
     }
 
     val shape = RoundedCornerShape(26.dp)
@@ -668,6 +722,11 @@ private fun NovaPulseNoticeShell(
         Box(
             modifier = Modifier
                 .fillMaxWidth()
+                .graphicsLayer {
+                    cameraDistance = 22f * densityPx
+                    rotationX = tiltXDeg
+                    rotationY = tiltYDeg
+                }
                 .clip(shape)
                 .background(
                     Brush.verticalGradient(
@@ -683,14 +742,14 @@ private fun NovaPulseNoticeShell(
                     brush = Brush.linearGradient(
                         listOf(
                             palette.cardBorderStart,
-                            QsColors.ElectricCyan.copy(alpha = 0.40f),
+                            QsColors.ElectricCyan.copy(alpha = 0.45f),
                             palette.cardBorderEnd,
                         )
                     ),
                     shape = shape,
                 )
         ) {
-            // Subtle architectural corner ambient sheen
+            // 3D depth ambient glow + diagonal specular sheen sweep
             Canvas(
                 modifier = Modifier
                     .matchParentSize()
@@ -707,11 +766,26 @@ private fun NovaPulseNoticeShell(
                     radius = size.width * 0.72f,
                     center = Offset(size.width * 0.16f, size.height * 0.08f),
                 )
+                val beamX = size.width * sheenProgress
+                drawLine(
+                    brush = Brush.linearGradient(
+                        colors = listOf(
+                            Color.Transparent,
+                            palette.primaryAccent.copy(alpha = 0.08f),
+                            Color.Transparent,
+                        ),
+                        start = Offset(beamX - size.width * 0.28f, 0f),
+                        end = Offset(beamX + size.width * 0.28f, size.height),
+                    ),
+                    start = Offset(beamX - size.width * 0.12f, 0f),
+                    end = Offset(beamX + size.width * 0.12f, size.height),
+                    strokeWidth = size.width * 0.24f,
+                )
                 drawLine(
                     brush = Brush.horizontalGradient(
                         listOf(
                             Color.Transparent,
-                            Color.White.copy(alpha = 0.28f),
+                            Color.White.copy(alpha = 0.30f),
                             Color.Transparent,
                         )
                     ),
@@ -736,6 +810,7 @@ private fun NovaPulseNoticeShell(
                         severity = severity,
                         palette = palette,
                         pulse = beaconPulse,
+                        orbitDeg = orbitDeg,
                     )
 
                     Column(
@@ -868,10 +943,15 @@ private fun NoticeBeaconEmblem(
     severity: NoticeSeverity,
     palette: NoticePalette,
     pulse: Float,
+    orbitDeg: Float = 24f,
 ) {
     Box(
         modifier = Modifier
             .size(48.dp)
+            .graphicsLayer {
+                scaleX = 0.96f + 0.04f * pulse
+                scaleY = 0.96f + 0.04f * pulse
+            }
             .clip(RoundedCornerShape(15.dp))
             .background(
                 Brush.linearGradient(
@@ -884,22 +964,42 @@ private fun NoticeBeaconEmblem(
             .border(1.dp, palette.primaryAccent.copy(alpha = 0.55f), RoundedCornerShape(15.dp)),
         contentAlignment = Alignment.Center,
     ) {
-        Canvas(modifier = Modifier.size(26.dp)) {
+        Canvas(modifier = Modifier.size(34.dp)) {
             val w = size.width
             val h = size.height
+            // 3D orbiting ring around emblem
+            rotate(degrees = orbitDeg, pivot = Offset(w * 0.5f, h * 0.5f)) {
+                drawArc(
+                    brush = Brush.sweepGradient(
+                        listOf(
+                            Color.Transparent,
+                            palette.primaryAccent.copy(alpha = 0.72f),
+                            QsColors.ElectricCyan.copy(alpha = 0.55f),
+                            Color.Transparent,
+                        )
+                    ),
+                    startAngle = 0f,
+                    sweepAngle = 220f,
+                    useCenter = false,
+                    style = Stroke(width = 1.6f, cap = StrokeCap.Round),
+                )
+            }
+            val pad = w * 0.12f
+            val sw = w - pad * 2f
+            val sh = h - pad * 2f
             // Faceted NovaPulse Shield outline
             val shield = Path().apply {
-                moveTo(w * 0.5f, h * 0.06f)
-                lineTo(w * 0.90f, h * 0.22f)
-                lineTo(w * 0.86f, h * 0.60f)
-                quadraticTo(w * 0.72f, h * 0.84f, w * 0.5f, h * 0.95f)
-                quadraticTo(w * 0.28f, h * 0.84f, w * 0.14f, h * 0.60f)
-                lineTo(w * 0.10f, h * 0.22f)
+                moveTo(pad + sw * 0.5f, pad + sh * 0.06f)
+                lineTo(pad + sw * 0.90f, pad + sh * 0.22f)
+                lineTo(pad + sw * 0.86f, pad + sh * 0.60f)
+                quadraticTo(pad + sw * 0.72f, pad + sh * 0.84f, pad + sw * 0.5f, pad + sh * 0.95f)
+                quadraticTo(pad + sw * 0.28f, pad + sh * 0.84f, pad + sw * 0.14f, pad + sh * 0.60f)
+                lineTo(pad + sw * 0.10f, pad + sh * 0.22f)
                 close()
             }
             drawPath(
                 path = shield,
-                color = palette.primaryAccent.copy(alpha = 0.16f),
+                color = palette.primaryAccent.copy(alpha = 0.18f),
             )
             drawPath(
                 path = shield,
@@ -910,27 +1010,25 @@ private fun NoticeBeaconEmblem(
             when (severity) {
                 NoticeSeverity.MANDATORY_SECURITY,
                 NoticeSeverity.SECURITY_NOTICE -> {
-                    // Alert mark inside shield
                     drawLine(
                         color = palette.primaryAccent,
-                        start = Offset(w * 0.5f, h * 0.30f),
-                        end = Offset(w * 0.5f, h * 0.56f),
+                        start = Offset(pad + sw * 0.5f, pad + sh * 0.30f),
+                        end = Offset(pad + sw * 0.5f, pad + sh * 0.56f),
                         strokeWidth = 2.6f,
                         cap = StrokeCap.Round,
                     )
                     drawCircle(
                         color = palette.primaryAccent,
-                        radius = w * 0.055f,
-                        center = Offset(w * 0.5f, h * 0.70f),
+                        radius = sw * 0.055f,
+                        center = Offset(pad + sw * 0.5f, pad + sh * 0.70f),
                     )
                 }
 
                 NoticeSeverity.UPDATE_INFO -> {
-                    // Upward orbital chevron inside shield
                     val arrow = Path().apply {
-                        moveTo(w * 0.34f, h * 0.52f)
-                        lineTo(w * 0.50f, h * 0.33f)
-                        lineTo(w * 0.66f, h * 0.52f)
+                        moveTo(pad + sw * 0.34f, pad + sh * 0.52f)
+                        lineTo(pad + sw * 0.50f, pad + sh * 0.33f)
+                        lineTo(pad + sw * 0.66f, pad + sh * 0.52f)
                     }
                     drawPath(
                         path = arrow,
@@ -939,19 +1037,18 @@ private fun NoticeBeaconEmblem(
                     )
                     drawLine(
                         color = palette.primaryAccent,
-                        start = Offset(w * 0.50f, h * 0.35f),
-                        end = Offset(w * 0.50f, h * 0.69f),
+                        start = Offset(pad + sw * 0.50f, pad + sh * 0.35f),
+                        end = Offset(pad + sw * 0.50f, pad + sh * 0.69f),
                         strokeWidth = 2.4f,
                         cap = StrokeCap.Round,
                     )
                 }
 
                 NoticeSeverity.INFO -> {
-                    // Check pulse inside shield
                     val check = Path().apply {
-                        moveTo(w * 0.33f, h * 0.53f)
-                        lineTo(w * 0.46f, h * 0.65f)
-                        lineTo(w * 0.68f, h * 0.38f)
+                        moveTo(pad + sw * 0.33f, pad + sh * 0.53f)
+                        lineTo(pad + sw * 0.46f, pad + sh * 0.65f)
+                        lineTo(pad + sw * 0.68f, pad + sh * 0.38f)
                     }
                     drawPath(
                         path = check,
@@ -1160,12 +1257,38 @@ private fun NovaPulseQuickActionsBar(
         ) {
             actions.forEach { action ->
                 val accent = if (action.isChannel) QsColors.AuroraMint else QsColors.ElectricCyan
+                val interaction = remember { MutableInteractionSource() }
+                val pressed by interaction.collectIsPressedAsState()
+                val ctaScale by animateFloatAsState(
+                    targetValue = if (pressed) 0.96f else 1f,
+                    animationSpec = spring(stiffness = 650f),
+                    label = "cta_scale",
+                )
+                val ctaTilt by animateFloatAsState(
+                    targetValue = if (pressed) 4.5f else 0f,
+                    animationSpec = spring(stiffness = 650f),
+                    label = "cta_tilt",
+                )
                 Row(
                     modifier = Modifier
-                        .clip(RoundedCornerShape(11.dp))
-                        .background(accent.copy(alpha = 0.14f))
-                        .border(0.9.dp, accent.copy(alpha = 0.45f), RoundedCornerShape(11.dp))
+                        .graphicsLayer {
+                            scaleX = ctaScale
+                            scaleY = ctaScale
+                            rotationX = ctaTilt
+                        }
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(
+                            Brush.horizontalGradient(
+                                listOf(
+                                    accent.copy(alpha = 0.22f),
+                                    accent.copy(alpha = 0.10f),
+                                )
+                            )
+                        )
+                        .border(1.dp, accent.copy(alpha = 0.55f), RoundedCornerShape(12.dp))
                         .combinedClickable(
+                            interactionSource = interaction,
+                            indication = null,
                             onClick = { SupportLinks.openTelegramTarget(context, action.target) },
                             onLongClick = {
                                 Utils.setClipboard(context, action.subLabel)
@@ -1176,21 +1299,21 @@ private fun NovaPulseQuickActionsBar(
                                 ).show()
                             },
                         )
-                        .padding(horizontal = 10.dp, vertical = 7.dp),
+                        .padding(horizontal = 11.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(7.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     TelegramPaperPlaneIcon(tint = accent)
                     Column {
                         Text(
                             text = action.label,
                             color = QsColors.TextPrimary,
-                            fontSize = 10.5.sp,
+                            fontSize = 11.sp,
                             fontWeight = FontWeight.Bold,
                         )
                         CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
                             Text(
-                                text = action.subLabel,
+                                text = "${action.subLabel}  ↗",
                                 color = accent,
                                 fontFamily = FontFamily.Monospace,
                                 fontSize = 11.sp,

@@ -254,7 +254,7 @@ object NovaPulseNoticeParser {
                 val key = "tg:${telegramUser.lowercase()}"
                 if (!actionsMap.containsKey(key)) {
                     val isChannel = telegramUser.equals("NovaPulseVPN", ignoreCase = true)
-                    val label = if (isChannel) "کانال رسمی" else "پشتیبانی تلگرام"
+                    val label = if (isChannel) "عضویت در کانال رسمی" else "پیام مستقیم به پشتیبانی"
                     actionsMap[key] = NoticeContactAction(
                         label = label,
                         subLabel = "@$telegramUser",
