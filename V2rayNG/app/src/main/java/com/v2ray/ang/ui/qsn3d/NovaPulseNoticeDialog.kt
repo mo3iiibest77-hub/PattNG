@@ -6,11 +6,14 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -57,6 +60,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.res.stringResource
+import com.v2ray.ang.util.Utils
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.SpanStyle
@@ -66,6 +70,7 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.style.TextDirection
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withLink
 import androidx.compose.ui.text.withStyle
@@ -257,22 +262,27 @@ fun NovaPulseUpdateDialogCard(
         abiBadgeLabel = result.recommendedAbi,
         layoutDirection = layoutDir,
     ) {
-        Column(
+        SelectionContainer(
             modifier = Modifier
                 .fillMaxWidth()
-                .weight(1f, fill = false)
-                .verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+                .weight(1f, fill = false),
         ) {
-            parsed.sections.forEach { section ->
-                NovaPulseSectionCard(section = section, palette = palette)
-            }
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                parsed.sections.forEach { section ->
+                    NovaPulseSectionCard(section = section, palette = palette)
+                }
 
-            if (parsed.contactActions.isNotEmpty()) {
-                NovaPulseQuickActionsBar(
-                    actions = parsed.contactActions,
-                    title = stringResource(R.string.novapulse_notice_official_support_title),
-                )
+                if (parsed.contactActions.isNotEmpty()) {
+                    NovaPulseQuickActionsBar(
+                        actions = parsed.contactActions,
+                        title = stringResource(R.string.novapulse_notice_official_support_title),
+                    )
+                }
             }
         }
 
@@ -444,22 +454,27 @@ fun NovaPulseSecurityNoticeCard(
         abiBadgeLabel = null,
         layoutDirection = dir,
     ) {
-        Column(
+        SelectionContainer(
             modifier = Modifier
                 .fillMaxWidth()
-                .weight(1f, fill = false)
-                .verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+                .weight(1f, fill = false),
         ) {
-            parsed.sections.forEach { section ->
-                NovaPulseSectionCard(section = section, palette = palette)
-            }
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                parsed.sections.forEach { section ->
+                    NovaPulseSectionCard(section = section, palette = palette)
+                }
 
-            if (parsed.contactActions.isNotEmpty()) {
-                NovaPulseQuickActionsBar(
-                    actions = parsed.contactActions,
-                    title = stringResource(R.string.novapulse_notice_official_support_title),
-                )
+                if (parsed.contactActions.isNotEmpty()) {
+                    NovaPulseQuickActionsBar(
+                        actions = parsed.contactActions,
+                        title = stringResource(R.string.novapulse_notice_official_support_title),
+                    )
+                }
             }
         }
 
@@ -515,12 +530,20 @@ fun NovaPulseConfirmNoticeDialog(
                 abiBadgeLabel = null,
                 layoutDirection = dir,
             ) {
-                Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                SelectionContainer(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f, fill = false),
                 ) {
-                    parsed.sections.forEach { section ->
-                        NovaPulseSectionCard(section = section, palette = palette)
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        parsed.sections.forEach { section ->
+                            NovaPulseSectionCard(section = section, palette = palette)
+                        }
                     }
                 }
 
@@ -701,7 +724,7 @@ private fun NovaPulseNoticeShell(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 18.dp, vertical = 18.dp),
+                    .padding(horizontal = 16.dp, vertical = 14.dp),
             ) {
                 // Header row: emblem + badge & title
                 Row(
@@ -1081,19 +1104,34 @@ private fun NovaPulseRichText(
         }
     }
 
-    Text(
-        text = annotated,
-        modifier = modifier,
-        style = TextStyle(
-            color = QsColors.TextSecondary,
-            fontSize = 12.sp,
-            lineHeight = 19.sp,
-            fontWeight = FontWeight.Normal,
-        ),
-    )
+    val isPureLinkLine = remember(segments) {
+        segments.size == 1 && segments[0] is NoticeTextSegment.Link
+    }
+
+    val textContent: @Composable () -> Unit = {
+        Text(
+            text = annotated,
+            modifier = modifier,
+            style = TextStyle(
+                color = QsColors.TextSecondary,
+                fontSize = 12.sp,
+                lineHeight = 19.sp,
+                fontWeight = FontWeight.Normal,
+                textDirection = if (isPureLinkLine) TextDirection.Ltr else TextDirection.Content,
+            ),
+        )
+    }
+
+    if (isPureLinkLine) {
+        CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+            textContent()
+        }
+    } else {
+        textContent()
+    }
 }
 
-@OptIn(ExperimentalLayoutApi::class)
+@OptIn(ExperimentalLayoutApi::class, ExperimentalFoundationApi::class)
 @Composable
 private fun NovaPulseQuickActionsBar(
     actions: List<NoticeContactAction>,
@@ -1127,7 +1165,17 @@ private fun NovaPulseQuickActionsBar(
                         .clip(RoundedCornerShape(11.dp))
                         .background(accent.copy(alpha = 0.14f))
                         .border(0.9.dp, accent.copy(alpha = 0.45f), RoundedCornerShape(11.dp))
-                        .clickable { SupportLinks.openTelegramTarget(context, action.target) }
+                        .combinedClickable(
+                            onClick = { SupportLinks.openTelegramTarget(context, action.target) },
+                            onLongClick = {
+                                Utils.setClipboard(context, action.subLabel)
+                                android.widget.Toast.makeText(
+                                    context,
+                                    "Copied ${action.subLabel}",
+                                    android.widget.Toast.LENGTH_SHORT,
+                                ).show()
+                            },
+                        )
                         .padding(horizontal = 10.dp, vertical = 7.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(7.dp),
