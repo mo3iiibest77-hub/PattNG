@@ -1,6 +1,5 @@
 package com.v2ray.ang.ui.qsn3d
 
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -221,7 +220,7 @@ fun Qs3dConnectScreen(
             contentPadding = 18.dp,
             beamSeed = 1,
             backdropContent = {
-                AnimatedVisibility(
+                androidx.compose.animation.AnimatedVisibility(
                     visible = showFlagBackdrop,
                     enter = fadeIn(animationSpec = tween(420)),
                     exit = fadeOut(animationSpec = tween(320)),
