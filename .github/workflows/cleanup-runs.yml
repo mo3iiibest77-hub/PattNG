@@ -126,9 +126,7 @@ jobs:
           remaining_bytes = 0
           for art in artifacts:
               wr_id = (art.get("workflow_run") or {}).get("id")
-              if wr_id not in kept_ids:
-                  continue  # already removed with run deletion
-              if wr_id not in keep_artifacts_run_ids:
+              if wr_id is None or wr_id not in keep_artifacts_run_ids:
                   st, err = api("DELETE", f"/repos/{repo}/actions/artifacts/{art['id']}")
                   if st in (200, 204):
                       deleted_artifacts += 1
