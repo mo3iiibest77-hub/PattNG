@@ -39,6 +39,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
@@ -374,15 +375,16 @@ fun Qs3dSubscriptionScreen(
         else -> stringResource(R.string.novapulse_unlimited)
     }
 
+    val context = LocalContext.current
     val remainingTimeText = formatRemainingTimeText(
         expRawSeconds = expRaw,
         nowMs = System.currentTimeMillis(),
-        unlimitedLabel = stringResource(R.string.novapulse_unlimited),
-        startsOnFirstUseLabel = stringResource(R.string.novapulse_starts_on_first_use),
-        expiredLabel = stringResource(R.string.novapulse_expired_label),
-        daysHoursFmt = { d, h -> stringResource(R.string.novapulse_days_hours_left_fmt, d, h) },
-        hoursLeftFmt = { h -> stringResource(R.string.novapulse_hours_left_fmt, h) },
-        durationDaysFmt = { d -> stringResource(R.string.novapulse_days_duration_fmt, d) },
+        unlimitedLabel = context.getString(R.string.novapulse_unlimited),
+        startsOnFirstUseLabel = context.getString(R.string.novapulse_starts_on_first_use),
+        expiredLabel = context.getString(R.string.novapulse_expired_label),
+        daysHoursFmt = { d, h -> context.getString(R.string.novapulse_days_hours_left_fmt, d, h) },
+        hoursLeftFmt = { h -> context.getString(R.string.novapulse_hours_left_fmt, h) },
+        durationDaysFmt = { d -> context.getString(R.string.novapulse_days_duration_fmt, d) },
     )
 
     val maxDev = quota?.maxDevices ?: 1
