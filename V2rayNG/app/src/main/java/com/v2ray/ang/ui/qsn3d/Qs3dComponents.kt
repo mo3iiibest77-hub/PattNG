@@ -208,12 +208,12 @@ fun Cosmic3dBackdrop(
                 modifier = Modifier
                     .fillMaxSize()
                     .graphicsLayer {
-                        val driftScale = 1.03f + 0.015f * sin(phase)
+                        val driftScale = 1.03f + 0.018f * sin(phase)
                         scaleX = driftScale
                         scaleY = driftScale
-                        translationX = cos(phase) * 8f
+                        translationX = cos(phase) * 10f
                     }
-                    .alpha(0.32f)
+                    .alpha(0.42f)
             )
             Box(
                 modifier = Modifier
@@ -221,9 +221,9 @@ fun Cosmic3dBackdrop(
                     .background(
                         Brush.verticalGradient(
                             colors = listOf(
-                                QsColors.DeepVoid.copy(alpha = 0.62f),
-                                QsColors.MidnightNavy.copy(alpha = 0.72f),
-                                QsColors.DeepVoid.copy(alpha = 0.88f),
+                                QsColors.DeepVoid.copy(alpha = 0.42f),
+                                QsColors.MidnightNavy.copy(alpha = 0.56f),
+                                QsColors.DeepVoid.copy(alpha = 0.78f),
                             )
                         )
                     )
@@ -292,22 +292,27 @@ private fun extractWrappedSegment(
 fun Glass3dCard(
     modifier: Modifier = Modifier,
     cornerRadius: Dp = 20.dp,
-    glowColor: Color = QsColors.ElectricCyan.copy(alpha = 0.32f),
+    glowColor: Color = QsColors.ElectricCyan.copy(alpha = 0.36f),
     surfaceColor: Color = QsColors.SurfaceCard,
     elevationDp: Dp = 8.dp,
     contentPadding: Dp = 16.dp,
     beamSeed: Int = 0,
     onClick: (() -> Unit)? = null,
+    backdropContent: (@Composable BoxScope.() -> Unit)? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val density = LocalDensity.current.density
     val motionActive = rememberMotionActive()
-    val seedVal = remember(glowColor, beamSeed) {
-        abs(glowColor.value.toInt() xor (beamSeed * 2654435761L).toInt())
+    val seedHash = remember(beamSeed, glowColor) {
+        val h = (beamSeed * 2654435761L).toInt() xor (beamSeed * 1597334677)
+        if (h == 0) glowColor.value.toInt() else h
     }
-    val initialPhase = remember(seedVal) { (seedVal % 100) / 100f }
-    val clockwise = remember(seedVal) { (seedVal % 2) == 0 }
-    val durationMs = remember(seedVal) { 5400 + (seedVal % 4) * 900 }
+    val absHash = remember(seedHash) { abs(seedHash) }
+    val initialPhase = remember(absHash) { (absHash % 97) / 97f }
+    val clockwise = remember(beamSeed, absHash) {
+        if (beamSeed != 0) (beamSeed and 1) == 0 else (absHash and 1) == 0
+    }
+    val durationMs = remember(absHash) { 3800 + (absHash % 5) * 850 }
 
     val beamPhase = if (motionActive) {
         rememberInfiniteTransition(label = "card_beam_flow").animateFloat(
@@ -339,14 +344,14 @@ fun Glass3dCard(
     val shape = RoundedCornerShape(cornerRadius)
     val baseBorder = Brush.verticalGradient(
         colors = listOf(
-            QsColors.GlassBorderTop.copy(alpha = 0.45f),
-            QsColors.BorderSubtle.copy(alpha = 0.65f),
-            QsColors.GlassBorderBottom.copy(alpha = 0.25f),
+            QsColors.GlassBorderTop.copy(alpha = 0.50f),
+            QsColors.BorderSubtle.copy(alpha = 0.60f),
+            QsColors.GlassBorderBottom.copy(alpha = 0.28f),
         )
     )
 
-    val beamLead = if (glowColor == QsColors.BorderSubtle) QsColors.ElectricCyan else glowColor.copy(alpha = 0.92f)
-    val beamTrail = QsColors.PlasmaViolet.copy(alpha = 0.65f)
+    val beamLead = if (glowColor == QsColors.BorderSubtle) QsColors.ElectricCyan else glowColor.copy(alpha = 0.94f)
+    val beamTrail = if (clockwise) QsColors.PlasmaViolet.copy(alpha = 0.70f) else QsColors.AuroraMint.copy(alpha = 0.70f)
 
     val perimeterPath = remember { Path() }
     val beamSegmentPath = remember { Path() }
@@ -384,10 +389,10 @@ fun Glass3dCard(
                 )
                 pathMeasure.setPath(perimeterPath, forceClosed = true)
                 val totalLen = pathMeasure.length
-                if (totalLen > 4f && glowColor.alpha > 0.05f) {
+                if (totalLen > 4f && glowColor.alpha > 0.04f) {
                     val progress = ((beamPhase + initialPhase) % 1f).let { if (clockwise) it else 1f - it }
-                    val beamFraction = 0.22f
-                    val coreFraction = 0.07f
+                    val beamFraction = 0.24f
+                    val coreFraction = 0.08f
                     val startDist = progress * totalLen
                     val endDist = startDist + totalLen * beamFraction
 
@@ -405,7 +410,7 @@ fun Glass3dCard(
                             Color.Transparent,
                             beamTrail,
                             beamLead,
-                            Color.White.copy(alpha = 0.90f),
+                            Color.White.copy(alpha = 0.92f),
                         ),
                         start = tailOffset,
                         end = tangentOffset
@@ -414,19 +419,19 @@ fun Glass3dCard(
                     drawPath(
                         path = beamSegmentPath,
                         brush = beamBrush,
-                        alpha = 0.26f,
-                        style = Stroke(width = 4.2.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
+                        alpha = 0.28f,
+                        style = Stroke(width = 4.4.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
                     )
                     drawPath(
                         path = beamSegmentPath,
                         brush = beamBrush,
-                        alpha = 0.85f,
-                        style = Stroke(width = 1.7.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
+                        alpha = 0.88f,
+                        style = Stroke(width = 1.8.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
                     )
                     drawPath(
                         path = coreSegmentPath,
-                        color = Color.White.copy(alpha = 0.78f),
-                        style = Stroke(width = 1.2.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
+                        color = Color.White.copy(alpha = 0.82f),
+                        style = Stroke(width = 1.25.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
                     )
                 }
             }
@@ -436,12 +441,17 @@ fun Glass3dCard(
         shadowElevation = elevationDp,
         border = BorderStroke(1.dp, baseBorder)
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(contentPadding),
-            content = content
-        )
+        Box(modifier = Modifier.fillMaxWidth()) {
+            if (backdropContent != null) {
+                backdropContent()
+            }
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(contentPadding),
+                content = content
+            )
+        }
     }
 }
 
@@ -770,7 +780,7 @@ fun ConnectionOrb3d(
 fun OrbCenterGlyph(
     mode: OrbVisualMode,
     modifier: Modifier = Modifier,
-    sizeDp: Dp = 44.dp,
+    sizeDp: Dp = 54.dp,
 ) {
     val tint by animateColorAsState(
         targetValue = when (mode) {
@@ -782,40 +792,98 @@ fun OrbCenterGlyph(
         animationSpec = tween(300),
         label = "glyph_tint",
     )
+    val motionActive = rememberMotionActive()
+    val crestPulse = if (motionActive && mode == OrbVisualMode.CONNECTED) {
+        rememberInfiniteTransition(label = "crest_pulse").animateFloat(
+            initialValue = 0f,
+            targetValue = 360f,
+            animationSpec = infiniteRepeatable(tween(4200, easing = LinearEasing), RepeatMode.Restart),
+            label = "crest_spin",
+        ).value
+    } else 0f
 
     Canvas(modifier = modifier.size(sizeDp)) {
         val w = size.width
         val h = size.height
         val cx = w / 2f
         val cy = h / 2f
-        val strokeW = 2.8.dp.toPx()
+        val strokeW = 2.6.dp.toPx()
 
         when (mode) {
             OrbVisualMode.CONNECTED -> {
+                // Volumetric 3D Faceted Emerald Crystal Shield Emblem + Animated Aura Ring
+                rotate(degrees = crestPulse, pivot = Offset(cx, cy)) {
+                    drawArc(
+                        brush = Brush.sweepGradient(
+                            0.0f to Color.Transparent,
+                            0.45f to QsColors.AuroraMint.copy(alpha = 0.72f),
+                            0.80f to QsColors.ElectricCyan.copy(alpha = 0.85f),
+                            1.0f to Color.Transparent,
+                        ),
+                        startAngle = 0f,
+                        sweepAngle = 220f,
+                        useCenter = false,
+                        topLeft = Offset(w * 0.06f, h * 0.06f),
+                        size = Size(w * 0.88f, h * 0.88f),
+                        style = Stroke(width = 1.8.dp.toPx(), cap = StrokeCap.Round),
+                    )
+                }
+
                 val shield = Path().apply {
                     moveTo(cx, h * 0.14f)
-                    lineTo(w * 0.80f, h * 0.28f)
-                    lineTo(w * 0.80f, h * 0.52f)
-                    cubicTo(w * 0.80f, h * 0.74f, cx, h * 0.88f, cx, h * 0.88f)
-                    cubicTo(cx, h * 0.88f, w * 0.20f, h * 0.74f, w * 0.20f, h * 0.52f)
-                    lineTo(w * 0.20f, h * 0.28f)
+                    lineTo(w * 0.82f, h * 0.28f)
+                    lineTo(w * 0.80f, h * 0.54f)
+                    cubicTo(w * 0.78f, h * 0.74f, cx, h * 0.89f, cx, h * 0.89f)
+                    cubicTo(cx, h * 0.89f, w * 0.22f, h * 0.74f, w * 0.20f, h * 0.54f)
+                    lineTo(w * 0.18f, h * 0.28f)
+                    close()
+                }
+                // 3D Translucent Emerald Crystal Fill
+                drawPath(
+                    path = shield,
+                    brush = Brush.verticalGradient(
+                        colors = listOf(
+                            QsColors.AuroraMint.copy(alpha = 0.52f),
+                            QsColors.ConnectedEmerald.copy(alpha = 0.28f),
+                            Color(0xFF064E3B).copy(alpha = 0.55f),
+                        )
+                    )
+                )
+                // Left facet specular highlight for 3D depth
+                val leftFacet = Path().apply {
+                    moveTo(cx, h * 0.14f)
+                    lineTo(w * 0.18f, h * 0.28f)
+                    lineTo(w * 0.20f, h * 0.54f)
+                    cubicTo(w * 0.22f, h * 0.74f, cx, h * 0.89f, cx, h * 0.89f)
                     close()
                 }
                 drawPath(
-                    path = shield,
-                    color = tint,
-                    style = Stroke(width = strokeW, cap = StrokeCap.Round, join = StrokeJoin.Round),
+                    path = leftFacet,
+                    brush = Brush.linearGradient(
+                        colors = listOf(Color.White.copy(alpha = 0.24f), Color.Transparent),
+                        start = Offset(w * 0.18f, h * 0.15f),
+                        end = Offset(cx, h * 0.75f),
+                    )
                 )
-                val check = Path().apply {
-                    moveTo(w * 0.36f, h * 0.52f)
-                    lineTo(w * 0.46f, h * 0.62f)
-                    lineTo(w * 0.66f, h * 0.40f)
-                }
+                // Crisp luminous bevel border
                 drawPath(
-                    path = check,
-                    color = Color.White,
-                    style = Stroke(width = strokeW, cap = StrokeCap.Round, join = StrokeJoin.Round),
+                    path = shield,
+                    brush = Brush.verticalGradient(
+                        listOf(Color.White.copy(alpha = 0.85f), QsColors.AuroraMint, QsColors.ElectricCyan)
+                    ),
+                    style = Stroke(width = 2.1.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round),
                 )
+                // Inner glowing NovaPulse energy bolt+check
+                val bolt = Path().apply {
+                    moveTo(w * 0.55f, h * 0.30f)
+                    lineTo(w * 0.37f, h * 0.54f)
+                    lineTo(w * 0.51f, h * 0.54f)
+                    lineTo(w * 0.45f, h * 0.74f)
+                    lineTo(w * 0.64f, h * 0.48f)
+                    lineTo(w * 0.50f, h * 0.48f)
+                    close()
+                }
+                drawPath(path = bolt, color = Color.White)
             }
             OrbVisualMode.SCANNING, OrbVisualMode.CONNECTING -> {
                 val bolt = Path().apply {

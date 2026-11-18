@@ -595,10 +595,42 @@ fun Qs3dSnackbarHost(
         val isRtl = remember(msg) { NovaPulseNoticeParser.isMostlyRtl(msg) }
         val isErrorLike = remember(msg) {
             msg.contains("خطا") || msg.contains("ناموفق") || msg.contains("مسدود") ||
-                msg.contains("لغو") || msg.contains("error", ignoreCase = true) ||
-                msg.contains("failed", ignoreCase = true)
+                msg.contains("غیرفعال") || msg.contains("سقف") || msg.contains("منقضی") ||
+                msg.contains("نامعتبر") || msg.contains("یافت نشد") || msg.contains("قطع") ||
+                msg.contains("error", ignoreCase = true) || msg.contains("failed", ignoreCase = true) ||
+                msg.contains("invalid", ignoreCase = true) || msg.contains("revoked", ignoreCase = true) ||
+                msg.contains("limit", ignoreCase = true) || msg.contains("expired", ignoreCase = true)
         }
-        val accent = if (isErrorLike) QsColors.SolarGold else QsColors.ElectricCyan
+        val isWarningLike = remember(msg) {
+            !isErrorLike && (
+                msg.contains("لطفاً") || msg.contains("مجوز") || msg.contains("توقف") ||
+                    msg.contains("هشدار") || msg.contains("لغو") || msg.contains("ابتدا") ||
+                    msg.contains("اول ") || msg.contains("please", ignoreCase = true) ||
+                    msg.contains("warning", ignoreCase = true) || msg.contains("allow", ignoreCase = true)
+                )
+        }
+        val isSuccessLike = remember(msg) {
+            !isErrorLike && !isWarningLike && (
+                msg.contains("فعال شد") || msg.contains("موفق") || msg.contains("کپی شد") ||
+                    msg.contains("به‌روز") || msg.contains("بروزرسانی شد") || msg.contains("اضافه شد") ||
+                    msg.contains("متصل") || msg.contains("آخرین نسخه") || msg.contains("✓") ||
+                    msg.contains("activated", ignoreCase = true) || msg.contains("success", ignoreCase = true) ||
+                    msg.contains("copied", ignoreCase = true) || msg.contains("added", ignoreCase = true) ||
+                    msg.contains("up to date", ignoreCase = true)
+                )
+        }
+        val accent = when {
+            isErrorLike -> QsColors.DangerCrimson
+            isWarningLike -> QsColors.SolarGold
+            isSuccessLike -> QsColors.ConnectedEmerald
+            else -> QsColors.ElectricCyan
+        }
+        val bgTint = when {
+            isErrorLike -> Color(0xF0240E16)
+            isWarningLike -> Color(0xF0221B0D)
+            isSuccessLike -> Color(0xF00D221B)
+            else -> Color(0xF0101A30)
+        }
         val dir = if (isRtl) LayoutDirection.Rtl else LayoutDirection.Ltr
 
         CompositionLocalProvider(LocalLayoutDirection provides dir) {
@@ -609,13 +641,13 @@ fun Qs3dSnackbarHost(
                     .clip(RoundedCornerShape(16.dp))
                     .background(
                         Brush.horizontalGradient(
-                            listOf(Color(0xF0121C38), Color(0xF00A1022))
+                            listOf(bgTint, Color(0xF20A1020))
                         )
                     )
                     .border(
-                        width = 1.dp,
+                        width = 1.1.dp,
                         brush = Brush.horizontalGradient(
-                            listOf(accent.copy(alpha = 0.78f), QsColors.PlasmaViolet.copy(alpha = 0.45f))
+                            listOf(accent.copy(alpha = 0.86f), accent.copy(alpha = 0.35f))
                         ),
                         shape = RoundedCornerShape(16.dp),
                     )

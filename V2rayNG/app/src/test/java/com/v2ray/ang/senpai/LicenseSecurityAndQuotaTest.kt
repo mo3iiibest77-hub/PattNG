@@ -4,6 +4,7 @@ import com.v2ray.ang.ui.qsn3d.LicenseLogoutOrchestrator
 import com.v2ray.ang.ui.qsn3d.LicenseLogoutStorage
 import com.v2ray.ang.ui.qsn3d.Qs3dUiState
 import com.v2ray.ang.ui.qsn3d.SupportLinks
+import com.v2ray.ang.util.Utils
 import kotlinx.coroutines.runBlocking
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -240,5 +241,46 @@ class LicenseSecurityAndQuotaTest {
         )
         assertTrue(r401 is LicenseResolutionResult.Failure)
         assertTrue((r401 as LicenseResolutionResult.Failure).isDefinitiveRejection)
+    }
+
+    @Test
+    fun resolvedLicenseStatus_treatsBackendStatusOkWithActiveAsActive() {
+        val activeWithOkStatus = LicenseRedeemResponse(
+            status = "ok",
+            licenseStatus = "active",
+            planName = "Khodam",
+            totalBytes = 0L,
+        )
+        assertEquals("active", activeWithOkStatus.resolvedLicenseStatus())
+        assertEquals("active", activeWithOkStatus.toQuotaInfo("NovaPulse").licenseStatus)
+
+        val okWithoutExplicitLicenseStatus = LicenseRedeemResponse(
+            status = "ok",
+            licenseStatus = null,
+            planName = "Pejman",
+        )
+        assertEquals("active", okWithoutExplicitLicenseStatus.resolvedLicenseStatus())
+        assertEquals("active", okWithoutExplicitLicenseStatus.toQuotaInfo("NovaPulse").licenseStatus)
+
+        val disabledStatus = LicenseRedeemResponse(
+            status = "ok",
+            licenseStatus = "disabled",
+        )
+        assertEquals("disabled", disabledStatus.resolvedLicenseStatus())
+        assertEquals("disabled", disabledStatus.toQuotaInfo("NovaPulse").licenseStatus)
+
+        val inactiveFallbackStatus = LicenseRedeemResponse(
+            status = "inactive",
+            licenseStatus = null,
+        )
+        assertEquals("inactive", inactiveFallbackStatus.resolvedLicenseStatus())
+    }
+
+    @Test
+    fun isPureIpAddress_blocksDomainAndSniLeakWhileAllowingRealIps() {
+        assertFalse(Utils.isPureIpAddress("cdn.origin-sni.example.com"))
+        assertFalse(Utils.isPureIpAddress("sub.quietstorm.ir"))
+        assertTrue(Utils.isPureIpAddress("104.16.12.34"))
+        assertTrue(Utils.isPureIpAddress("2606:4700::1"))
     }
 }

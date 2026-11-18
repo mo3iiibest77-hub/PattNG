@@ -683,10 +683,10 @@
     <string name="novapulse_gate_need_license_title">هنوز لایسنس نداری یا می‌خوای بیشتر آشنا بشی؟</string>
     <string name="novapulse_gate_need_license_desc">توضیحات کامل اپلیکیشن، راهنمای استفاده و لینک مستقیم خرید لایسنس در تلگرام رو اینجا ببین.</string>
     <string name="novapulse_open_promo_guide_btn">معرفی سرویس، راهنما و خرید لایسنس</string>
-    <string name="novapulse_promo_top_badge">راهنما</string>
-    <string name="novapulse_promo_card_title">معرفی، راهنما و پشتیبانی تلگرام</string>
+    <string name="novapulse_promo_top_badge">راهنما و خرید</string>
+    <string name="novapulse_promo_card_title">راهنما و خرید لایسنس</string>
     <string name="novapulse_promo_card_desc">آشنایی با امکانات نواپالس، پاسخ سوال‌های رایج و ارتباط مستقیم برای خرید یا تمدید لایسنس.</string>
-    <string name="novapulse_promo_screen_title">معرفی و راهنمای NovaPulse</string>
+    <string name="novapulse_promo_screen_title">راهنما و خرید لایسنس</string>
     <string name="novapulse_promo_hero_badge">نسل جدید اتصال هوشمند با کد لایسنس</string>
     <string name="novapulse_promo_hero_title">NovaPulse؛ سریع، تمیز و بی‌دردسر</string>
     <string name="novapulse_promo_intro_body">نواپالس طوری ساخته شده که دیگه درگیر پیدا کردن سرور سالم یا تنظیمات گیج‌کننده نشی. فقط کافیه کد لایسنس خودت رو وارد کنی؛ برنامه خودش نوع شبکه (Cloudflare یا CloudFront) رو تشخیص می‌ده، بهترین IP رو برای اینترنت فعلیت پیدا می‌کنه و تونل امن رو وصل می‌کنه.</string>
@@ -881,5 +881,7 @@
     <string name="novapulse_activate_stage_proof">تایید هویت سخت‌افزاری دستگاه…</string>
     <string name="novapulse_activate_stage_configs">دریافت سرورها و اطلاعات اشتراک…</string>
     <string name="novapulse_activate_stage_ping">تست اولیه سرعت و آماده‌سازی…</string>
+    <string name="novapulse_oss_attribution_title">مبتنی بر هسته متن‌باز v2rayNG</string>
+    <string name="novapulse_oss_attribution_body">ساختار پایه این کلاینت بر اساس پروژه متن‌باز v2rayNG و هسته Xray-core تحت مجوز GPL-3.0 توسعه یافته و حقوق پروژه اصلی کاملاً رعایت شده است.</string>
 
 </resources>

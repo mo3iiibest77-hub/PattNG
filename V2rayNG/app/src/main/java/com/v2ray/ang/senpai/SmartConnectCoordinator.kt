@@ -318,9 +318,9 @@ object SmartConnectCoordinator {
                         activeTransportBadge = ConfigPipelineClassifier.safeTransportBadge(profile),
                         switchReason = SmartSwitchReason.NONE,
                         switchNoticeText = null,
-                        originDomain = originDomain,
+                        originDomain = null,
                         detectedCdn = quickCdn,
-                        bestIp = profile.server,
+                        bestIp = profile.server?.takeIf { Utils.isPureIpAddress(it) },
                     )
                     _state.value = fastState
                     AppLogBuffer.info(
@@ -400,9 +400,9 @@ object SmartConnectCoordinator {
                     activeTransportBadge = ConfigPipelineClassifier.safeTransportBadge(profile),
                     switchReason = SmartSwitchReason.NONE,
                     switchNoticeText = null,
-                    originDomain = originDomain.ifBlank { profile.sni.orEmpty() },
+                    originDomain = null,
                     detectedCdn = quickCdn,
-                    bestIp = profile.server,
+                    bestIp = profile.server?.takeIf { Utils.isPureIpAddress(it) },
                     scanDone = 0,
                     scanTotal = 30,
                 )
@@ -590,7 +590,7 @@ object SmartConnectCoordinator {
                         _state.value = _state.value.copy(
                             step = SmartStep.ScanningBestIp,
                             detectedCdn = resolvedCdn,
-                            domainPingIp = detection.resolvedIp,
+                            domainPingIp = detection.resolvedIp?.takeIf { Utils.isPureIpAddress(it) },
                             domainPingRttMs = detection.pingRttMs,
                             scanDone = 0,
                             scanTotal = 30,

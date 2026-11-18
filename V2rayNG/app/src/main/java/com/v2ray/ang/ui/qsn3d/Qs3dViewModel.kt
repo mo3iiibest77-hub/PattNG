@@ -727,8 +727,12 @@ class Qs3dViewModel(
                         activationProgressPercent = 100,
                         activationStageKey = "ready",
                         hasActiveLicense = true,
+                        activeTab = Qs3dTab.Connect,
                         activationInput = "",
                         showAboutPromo = false,
+                        showSubscriptionDetails = false,
+                        showRangeExplorer = false,
+                        showLogsScreen = false,
                         toastMessage = ctx.getString(R.string.novapulse_license_activated_fmt, count)
                     )
                 }
@@ -951,6 +955,7 @@ class Qs3dViewModel(
         val showModal = NovaPulseNoticeParser.shouldShowAsRichDialog(finalMessage)
         _uiState.update {
             it.copy(
+                activeTab = Qs3dTab.Connect,
                 isLoggingOut = false,
                 hasActiveLicense = false,
                 coreRunning = false,

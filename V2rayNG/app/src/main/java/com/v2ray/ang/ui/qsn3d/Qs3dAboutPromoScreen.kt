@@ -324,6 +324,12 @@ fun Qs3dAboutPromoScreen(
                         contentColor = Color(0xFF04151E),
                     )
                 ) {
+                    Image(
+                        painter = painterResource(R.drawable.ic_telegram_24dp),
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp),
+                    )
+                    Spacer(Modifier.width(8.dp))
                     Text(
                         text = stringResource(R.string.novapulse_promo_telegram_btn),
                         fontWeight = FontWeight.Bold,
@@ -341,6 +347,12 @@ fun Qs3dAboutPromoScreen(
                     shape = RoundedCornerShape(11.dp),
                     border = BorderStroke(1.dp, QsColors.AuroraMint.copy(alpha = 0.45f)),
                 ) {
+                    Image(
+                        painter = painterResource(R.drawable.ic_telegram_24dp),
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp),
+                    )
+                    Spacer(Modifier.width(8.dp))
                     Text(
                         text = stringResource(R.string.novapulse_channel_join_btn),
                         color = QsColors.AuroraMint,
@@ -365,6 +377,29 @@ fun Qs3dAboutPromoScreen(
                         )
                     }
                 }
+            }
+        }
+
+        // Open-Source Attribution Card (v2rayNG & Xray-core GPL-3.0)
+        item {
+            Glass3dCard(
+                surfaceColor = QsColors.SurfaceCard,
+                glowColor = QsColors.ElectricCyan.copy(alpha = 0.28f),
+                beamSeed = 22,
+            ) {
+                Text(
+                    text = stringResource(R.string.novapulse_oss_attribution_title),
+                    color = QsColors.ElectricCyan,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold,
+                )
+                Spacer(Modifier.height(5.dp))
+                Text(
+                    text = stringResource(R.string.novapulse_oss_attribution_body),
+                    color = QsColors.TextSecondary,
+                    fontSize = 13.sp,
+                    lineHeight = 20.sp,
+                )
             }
         }
     }

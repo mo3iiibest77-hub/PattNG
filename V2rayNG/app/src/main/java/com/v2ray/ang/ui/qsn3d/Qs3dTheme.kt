@@ -28,15 +28,15 @@ val VazirFontFamily = FontFamily(
  * Balanced translucent card fills let the per-tab 3D hero artwork breathe while keeping contrast crisp.
  */
 object QsColors {
-    // Structural & Frosted Glass Surfaces
+    // Structural & Translucent Frosted Glass Surfaces (let animated hero backgrounds shine through)
     val DeepVoid = Color(0xFF070B14)
     val MidnightNavy = Color(0xFF0C1322)
-    val NebulaSurface = Color(0xB8111B30)
-    val GlassSurface = Color(0xC2111B2E)
-    val GlassSurfaceElevated = Color(0xD617243D)
-    val SurfaceCard = Color(0xC2111B2E)
-    val SurfaceElevated = Color(0xD617243D)
-    val SurfaceInset = Color(0xCC0A101D)
+    val NebulaSurface = Color(0x9610192D)
+    val GlassSurface = Color(0x9C0E1729)
+    val GlassSurfaceElevated = Color(0xB3142038)
+    val SurfaceCard = Color(0x9C0E1729)
+    val SurfaceElevated = Color(0xB3142038)
+    val SurfaceInset = Color(0xAD09101E)
 
     // Hairline Borders & Glass Specular Highlights
     val BorderSubtle = Color(0xFF263652)

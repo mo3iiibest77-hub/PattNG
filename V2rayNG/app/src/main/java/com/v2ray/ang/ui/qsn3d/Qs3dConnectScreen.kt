@@ -1,8 +1,15 @@
 package com.v2ray.ang.ui.qsn3d
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -11,6 +18,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -25,7 +33,11 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -35,13 +47,15 @@ import com.v2ray.ang.R
 import com.v2ray.ang.senpai.CdnType
 import com.v2ray.ang.senpai.ConfigPipeline
 import com.v2ray.ang.senpai.SmartStep
+import com.v2ray.ang.util.Utils
 
 /**
  * 3D Frosted Glass Home / Connect Screen:
- * - Smart Mode Strip + Failover Notice
- * - Volumetric 3D Gyroscope + Fibonacci Core Connect Trigger
- * - 3D Illuminated Live Speed HUD (Bezier waveform + animated packet conduits + rotating border light)
- * - Active Server Card with official Cloudflare / CloudFront / Direct logo + Subscription summary
+ * - Animated Smart Mode Glass Pill (opposing perimeter beam)
+ * - Volumetric 3D Gyroscope + Fibonacci Core Connect Trigger with 3D Emerald Shield Crest
+ * - Windscribe-style Flowing Country Flag Backdrop when connected (across supported regions)
+ * - Strictly masks origin domains/SNI (only ever displays verified numeric IPv4 addresses)
+ * - Red disconnect callout & green live latency indicator
  */
 @Composable
 fun Qs3dConnectScreen(
@@ -74,6 +88,13 @@ fun Qs3dConnectScreen(
         ?: state.configs.firstOrNull { it.guid == flow.activeGuid }
     val activePipeline = selectedConfig?.pipeline ?: flow.activePipeline
 
+    val countryCode = normalizeCountryCode(
+        rawCountry = state.connectedCountry,
+        remarksFallback = selectedConfig?.remarks ?: flow.activeRemarks.orEmpty()
+    )
+    val isPersian = state.currentLanguageCode.startsWith("fa") || state.currentLanguageCode == "auto"
+    val countryLabel = countryDisplayLabel(countryCode, isPersian)
+
     val statusHeadline = when {
         flow.step == SmartStep.RedeemingAccess -> stringResource(R.string.qsn3d_step_redeeming)
         flow.step == SmartStep.RefreshingSubscription -> stringResource(R.string.qsn3d_step_refresh_sub)
@@ -85,11 +106,19 @@ fun Qs3dConnectScreen(
         else -> stringResource(R.string.novapulse_connect_standby)
     }
 
+    val pureBestIp = flow.bestIp?.takeIf { Utils.isPureIpAddress(it) }
     val tapInstruction = when {
-        isBusy -> flow.bestIp?.let { "IP: $it" } ?: stringResource(R.string.novapulse_connect_scanning)
+        isBusy -> pureBestIp?.let { "IP: $it" } ?: stringResource(R.string.novapulse_connect_scanning)
         state.coreRunning -> stringResource(R.string.novapulse_connect_tap_stop)
         else -> stringResource(R.string.novapulse_connect_tap_start)
     }
+    val tapInstructionColor = when {
+        isBusy -> QsColors.ElectricCyan
+        state.coreRunning -> Color(0xFFF87171) // Clear red disconnect callout
+        else -> QsColors.TextSecondary
+    }
+
+    val motionActive = rememberMotionActive()
 
     Column(
         modifier = Modifier
@@ -99,25 +128,31 @@ fun Qs3dConnectScreen(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        // 1. Smart Mode Strip
+        // 1. Animated Smart Mode Strip (with rotating perimeter beam & real routing emblem)
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Surface(
-                shape = RoundedCornerShape(11.dp),
-                color = QsColors.SurfaceElevated,
-                border = BorderStroke(1.dp, QsColors.BorderSubtle),
-                modifier = Modifier
-                    .weight(1f, fill = false)
-                    .clickable(onClick = onOpenConfigsTab),
+            Glass3dCard(
+                modifier = Modifier.weight(1f, fill = false),
+                cornerRadius = 13.dp,
+                glowColor = if (state.coreRunning) QsColors.ConnectedEmerald.copy(alpha = 0.65f)
+                else QsColors.ElectricCyan.copy(alpha = 0.48f),
+                surfaceColor = QsColors.SurfaceElevated,
+                contentPadding = 10.dp,
+                beamSeed = 102,
+                onClick = onOpenConfigsTab,
             ) {
                 Row(
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(7.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
+                    Image(
+                        painter = painterResource(R.drawable.ic_np_smart_route),
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp),
+                    )
                     StatusDot(active = state.coreRunning)
                     Text(
                         text = if (state.isExplicitSelection && selectedConfig != null) {
@@ -126,7 +161,7 @@ fun Qs3dConnectScreen(
                             stringResource(R.string.novapulse_mode_smart_auto)
                         },
                         color = QsColors.TextPrimary,
-                        fontSize = 12.sp,
+                        fontSize = 13.sp,
                         fontWeight = FontWeight.Bold,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
@@ -157,7 +192,7 @@ fun Qs3dConnectScreen(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(12.dp),
                 color = QsColors.SolarGold.copy(alpha = 0.14f),
-                border = BorderStroke(1.dp, QsColors.SolarGold.copy(alpha = 0.40f)),
+                border = BorderStroke(1.dp, QsColors.SolarGold.copy(alpha = 0.42f)),
             ) {
                 Text(
                     text = stringResource(
@@ -174,16 +209,48 @@ fun Qs3dConnectScreen(
             }
         }
 
-        // 2. Hero 3D Connect Core Card
+        // 2. Hero 3D Connect Core Card + Windscribe-style Flowing Country Flag Backdrop
+        val showFlagBackdrop = state.coreRunning && countryCode.isNotBlank()
         Glass3dCard(
             surfaceColor = QsColors.SurfaceCard,
             glowColor = when {
-                state.coreRunning -> QsColors.ConnectedEmerald.copy(alpha = 0.65f)
-                isBusy -> QsColors.SolarGold.copy(alpha = 0.60f)
-                else -> QsColors.ElectricCyan.copy(alpha = 0.42f)
+                state.coreRunning -> QsColors.ConnectedEmerald.copy(alpha = 0.72f)
+                isBusy -> QsColors.SolarGold.copy(alpha = 0.65f)
+                else -> QsColors.ElectricCyan.copy(alpha = 0.48f)
             },
             contentPadding = 18.dp,
             beamSeed = 1,
+            backdropContent = {
+                AnimatedVisibility(
+                    visible = showFlagBackdrop,
+                    enter = fadeIn(animationSpec = tween(420)),
+                    exit = fadeOut(animationSpec = tween(320)),
+                    modifier = Modifier.matchParentSize(),
+                ) {
+                    Box(modifier = Modifier.fillMaxSize()) {
+                        WindscribeCountryFlagBackdrop(
+                            countryCode = countryCode,
+                            motionActive = motionActive,
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .alpha(0.72f),
+                        )
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(
+                                    Brush.verticalGradient(
+                                        colors = listOf(
+                                            Color(0x5208101E),
+                                            Color(0x3808101E),
+                                            Color(0x9E08101E),
+                                        )
+                                    )
+                                )
+                        )
+                    }
+                }
+            }
         ) {
             Column(
                 modifier = Modifier.fillMaxWidth(),
@@ -195,9 +262,9 @@ fun Qs3dConnectScreen(
                     mode = orbMode,
                     scanProgressFraction = scanProgress,
                     onClick = onConnectOrDisconnect,
-                    sizeDp = 204.dp,
+                    sizeDp = 206.dp,
                 ) {
-                    OrbCenterGlyph(mode = orbMode, sizeDp = 44.dp)
+                    OrbCenterGlyph(mode = orbMode, sizeDp = 56.dp)
                 }
 
                 Spacer(Modifier.height(14.dp))
@@ -205,7 +272,7 @@ fun Qs3dConnectScreen(
                 Text(
                     text = statusHeadline,
                     color = when {
-                        state.coreRunning -> QsColors.ConnectedEmerald
+                        state.coreRunning -> QsColors.AuroraMint
                         isBusy -> QsColors.ElectricCyan
                         else -> QsColors.TextPrimary
                     },
@@ -218,8 +285,9 @@ fun Qs3dConnectScreen(
                 Text(
                     text = tapInstruction,
                     style = QsTextStyles.TabularStat,
-                    color = QsColors.TextSecondary,
+                    color = tapInstructionColor,
                     fontSize = 13.sp,
+                    fontWeight = if (state.coreRunning && !isBusy) FontWeight.Bold else FontWeight.Medium,
                 )
 
                 if (scanProgress != null) {
@@ -278,7 +346,10 @@ fun Qs3dConnectScreen(
                             onClick = onRescanIpAndConnect,
                             shape = RoundedCornerShape(11.dp),
                             border = BorderStroke(1.dp, QsColors.BorderStrong),
-                            colors = ButtonDefaults.outlinedButtonColors(contentColor = QsColors.ElectricCyan),
+                            colors = ButtonDefaults.outlinedButtonColors(
+                                containerColor = QsColors.SurfaceInset.copy(alpha = 0.72f),
+                                contentColor = QsColors.ElectricCyan
+                            ),
                         ) {
                             Text(
                                 text = stringResource(R.string.novapulse_find_faster_ip_btn),
@@ -289,17 +360,25 @@ fun Qs3dConnectScreen(
                     }
 
                     if (state.coreRunning) {
+                        val ms = state.connectedLatencyMs?.takeIf { it > 0L }
+                        val pingLabel = ms?.let { "${it} ms" } ?: stringResource(R.string.qsn3d_test_ping)
+                        val pingColor = if (ms != null) QsColors.AuroraMint else QsColors.TextPrimary
                         OutlinedButton(
                             onClick = onTestConnectedPing,
                             shape = RoundedCornerShape(11.dp),
-                            border = BorderStroke(1.dp, QsColors.BorderStrong),
-                            colors = ButtonDefaults.outlinedButtonColors(contentColor = QsColors.TextPrimary),
+                            border = BorderStroke(
+                                1.dp,
+                                if (ms != null) QsColors.ConnectedEmerald.copy(alpha = 0.65f) else QsColors.BorderStrong
+                            ),
+                            colors = ButtonDefaults.outlinedButtonColors(
+                                containerColor = QsColors.SurfaceInset.copy(alpha = 0.78f),
+                                contentColor = pingColor,
+                            ),
                         ) {
-                            val pingLabel = state.connectedLatencyMs?.takeIf { it > 0L }?.let { "${it} ms" }
-                                ?: stringResource(R.string.qsn3d_test_ping)
                             Text(
                                 text = pingLabel,
                                 style = QsTextStyles.TabularStat,
+                                color = pingColor,
                                 fontSize = 13.sp,
                                 fontWeight = FontWeight.Bold,
                             )
@@ -309,7 +388,7 @@ fun Qs3dConnectScreen(
             }
         }
 
-        // 3. 3D Illuminated Live Speed Telemetry Pair
+        // 3. 3D Illuminated Live Speed Telemetry Pair (beamSeed = 11 & 22 for opposite rotations)
         if (state.speedDisplayEnabled) {
             LiveSpeedHudRow(
                 downloadLabel = stringResource(R.string.novapulse_download_speed),
@@ -322,7 +401,7 @@ fun Qs3dConnectScreen(
             )
         }
 
-        // 4. Active Server + Real Brand Logo + Subscription Strip
+        // 4. Active Server + Country Flag Medallion + Official Provider Logo + Subscription Strip
         val activeSub = state.subscriptions.firstOrNull()
         val quota = activeSub?.quota
         val gbUnit = stringResource(R.string.novapulse_unit_gb)
@@ -330,9 +409,9 @@ fun Qs3dConnectScreen(
 
         Glass3dCard(
             surfaceColor = QsColors.SurfaceElevated,
-            glowColor = QsColors.AuroraMint.copy(alpha = 0.34f),
+            glowColor = QsColors.AuroraMint.copy(alpha = 0.38f),
             contentPadding = 15.dp,
-            beamSeed = 31,
+            beamSeed = 32,
         ) {
             Row(
                 modifier = Modifier
@@ -341,21 +420,40 @@ fun Qs3dConnectScreen(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = stringResource(R.string.novapulse_location_label),
-                        color = QsColors.TextMuted,
-                        fontSize = 12.sp,
-                    )
-                    Spacer(Modifier.height(3.dp))
-                    Text(
-                        text = selectedConfig?.remarks ?: flow.activeRemarks ?: stringResource(R.string.qsn3d_no_config_selected),
-                        color = QsColors.TextPrimary,
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.Bold,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
+                Row(
+                    modifier = Modifier.weight(1f),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    if (countryCode.isNotBlank()) {
+                        CountryFlagMedallion(
+                            countryCode = countryCode,
+                            size = 38.dp,
+                            borderColor = if (state.coreRunning) QsColors.ConnectedEmerald else QsColors.ElectricCyan,
+                        )
+                    }
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = if (countryLabel.isNotBlank() && state.coreRunning) {
+                                "${stringResource(R.string.novapulse_location_label)} • $countryLabel"
+                            } else {
+                                stringResource(R.string.novapulse_location_label)
+                            },
+                            color = QsColors.TextMuted,
+                            fontSize = 12.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Spacer(Modifier.height(2.dp))
+                        Text(
+                            text = selectedConfig?.remarks ?: flow.activeRemarks ?: stringResource(R.string.qsn3d_no_config_selected),
+                            color = QsColors.TextPrimary,
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
                 }
                 Spacer(Modifier.width(8.dp))
                 if (activePipeline == ConfigPipeline.STANDARD) {
@@ -380,22 +478,33 @@ fun Qs3dConnectScreen(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = stringResource(R.string.novapulse_my_subscription_short),
-                            color = QsColors.TextMuted,
-                            fontSize = 12.sp,
+                    Row(
+                        modifier = Modifier.weight(1f),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(9.dp),
+                    ) {
+                        Image(
+                            painter = painterResource(R.drawable.ic_np_sub),
+                            contentDescription = null,
+                            modifier = Modifier.size(20.dp),
                         )
-                        val remStr = quota?.remainingBytes?.let { formatTrafficLocalized(it, gbUnit, mbUnit) }
-                            ?: if (quota != null && quota.totalBytes <= 0L) stringResource(R.string.novapulse_unlimited)
-                            else "—"
-                        Text(
-                            text = stringResource(R.string.novapulse_settings_quota_summary_fmt, remStr),
-                            style = QsTextStyles.TabularStat,
-                            color = QsColors.TextPrimary,
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.Bold,
-                        )
+                        Column {
+                            Text(
+                                text = stringResource(R.string.novapulse_my_subscription_short),
+                                color = QsColors.TextMuted,
+                                fontSize = 12.sp,
+                            )
+                            val remStr = quota?.remainingBytes?.let { formatTrafficLocalized(it, gbUnit, mbUnit) }
+                                ?: if (quota != null && quota.totalBytes <= 0L) stringResource(R.string.novapulse_unlimited)
+                                else "—"
+                            Text(
+                                text = stringResource(R.string.novapulse_settings_quota_summary_fmt, remStr),
+                                style = QsTextStyles.TabularStat,
+                                color = QsColors.TextPrimary,
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Bold,
+                            )
+                        }
                     }
                     TextButton(
                         onClick = onOpenSubscriptionDetails,

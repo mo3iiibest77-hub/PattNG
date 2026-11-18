@@ -64,6 +64,18 @@ data class LicenseRedeemResponse(
             ?.lowercase()
             .orEmpty()
 
+    /**
+     * Resolves subscription activation state cleanly from `license_status` (avoiding `"status": "ok"` false-inactive mismatch).
+     */
+    fun resolvedLicenseStatus(): String {
+        val explicit = licenseStatus?.trim()?.lowercase().orEmpty()
+        if (explicit.isNotBlank()) return explicit
+        return when (status?.trim()?.lowercase().orEmpty()) {
+            "inactive", "disabled", "expired", "revoked", "exhausted" -> status!!.trim().lowercase()
+            else -> "active"
+        }
+    }
+
     fun toQuotaInfo(remarksFallback: String): SubscriptionQuotaInfo {
         val resolvedMax = if (unlimitedDevices || maxDevices < 0) -1 else maxDevices.coerceAtLeast(1)
         return SubscriptionQuotaInfo(
@@ -75,7 +87,7 @@ data class LicenseRedeemResponse(
             planName = resolvedRemarks(remarksFallback),
             maxDevices = resolvedMax,
             usedDevices = usedDevices.coerceAtLeast(0),
-            licenseStatus = resolvedStatusCode().ifBlank { "active" },
+            licenseStatus = resolvedLicenseStatus(),
         )
     }
 }

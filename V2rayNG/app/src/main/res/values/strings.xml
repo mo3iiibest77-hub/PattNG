@@ -683,10 +683,10 @@
     <string name="novapulse_gate_need_license_title">Need a license or quick guide?</string>
     <string name="novapulse_gate_need_license_desc">Learn how NovaPulse works, explore real features, or message Telegram support to get your license.</string>
     <string name="novapulse_open_promo_guide_btn">About NovaPulse, Guide &amp; Buy License</string>
-    <string name="novapulse_promo_top_badge">Guide</string>
-    <string name="novapulse_promo_card_title">About, User Guide &amp; Support</string>
+    <string name="novapulse_promo_top_badge">Guide &amp; Plans</string>
+    <string name="novapulse_promo_card_title">User Guide &amp; Buy License</string>
     <string name="novapulse_promo_card_desc">Read the usage FAQ or contact Telegram support to purchase or renew your license.</string>
-    <string name="novapulse_promo_screen_title">NovaPulse Guide &amp; License</string>
+    <string name="novapulse_promo_screen_title">User Guide &amp; Buy License</string>
     <string name="novapulse_promo_hero_badge">License-Driven Smart CDN Tunneling</string>
     <string name="novapulse_promo_hero_title">NovaPulse: Fast, Clean &amp; Automated</string>
     <string name="novapulse_promo_intro_body">NovaPulse eliminates manual server hunting and confusing setups. Activate with your personal license code and the app detects your server CDN (Cloudflare or CloudFront), scans clean edge IPs for your network, and connects securely.</string>
@@ -881,5 +881,7 @@
     <string name="novapulse_activate_stage_proof">Verifying hardware identity…</string>
     <string name="novapulse_activate_stage_configs">Loading servers &amp; subscription…</string>
     <string name="novapulse_activate_stage_ping">Measuring initial latency…</string>
+    <string name="novapulse_oss_attribution_title">Built on Open-Source v2rayNG</string>
+    <string name="novapulse_oss_attribution_body">Core architecture is built upon open-source v2rayNG and Xray-core under the GNU GPL-3.0 license, with full upstream attribution and rights respected.</string>
 
 </resources>

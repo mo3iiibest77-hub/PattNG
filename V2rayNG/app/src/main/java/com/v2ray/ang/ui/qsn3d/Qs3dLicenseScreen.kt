@@ -308,7 +308,7 @@ fun Qs3dLicenseGateScreen(
                 lineHeight = 20.sp,
             )
             Spacer(Modifier.height(11.dp))
-            OutlinedButton(
+                OutlinedButton(
                 onClick = onOpenAboutPromo,
                 modifier = Modifier
                     .fillMaxWidth()
@@ -317,12 +317,40 @@ fun Qs3dLicenseGateScreen(
                 border = BorderStroke(1.dp, QsColors.AuroraMint.copy(alpha = 0.50f)),
                 colors = ButtonDefaults.outlinedButtonColors(contentColor = QsColors.AuroraMint),
             ) {
+                Image(
+                    painter = painterResource(R.drawable.ic_np_guide),
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp),
+                )
+                Spacer(Modifier.width(8.dp))
                 Text(
                     text = stringResource(R.string.novapulse_open_promo_guide_btn),
                     fontWeight = FontWeight.Bold,
                     fontSize = 13.sp,
                 )
             }
+        }
+
+        // Open-Source Attribution (v2rayNG / Xray-core GPL-3.0)
+        Glass3dCard(
+            surfaceColor = QsColors.SurfaceCard,
+            glowColor = QsColors.ElectricCyan.copy(alpha = 0.22f),
+            contentPadding = 13.dp,
+            beamSeed = 18,
+        ) {
+            Text(
+                text = stringResource(R.string.novapulse_oss_attribution_title),
+                color = QsColors.ElectricCyan,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold,
+            )
+            Spacer(Modifier.height(3.dp))
+            Text(
+                text = stringResource(R.string.novapulse_oss_attribution_body),
+                color = QsColors.TextSecondary,
+                fontSize = 12.sp,
+                lineHeight = 18.sp,
+            )
         }
 
         Spacer(Modifier.height(12.dp))
@@ -484,7 +512,8 @@ fun Qs3dSubscriptionScreen(
     val remPct = quota?.remainingPercent ?: 100
     val usedFrac = quota?.usageFraction ?: 0f
 
-    val isActiveStatus = (quota?.licenseStatus ?: "active").lowercase(Locale.US) == "active"
+    val rawStatus = quota?.licenseStatus?.trim()?.lowercase(Locale.US).orEmpty()
+    val isActiveStatus = rawStatus.isEmpty() || rawStatus == "active" || rawStatus == "ok" || rawStatus == "valid"
 
     val remainingText = when {
         quota == null -> "—"
@@ -544,12 +573,22 @@ fun Qs3dSubscriptionScreen(
                 TextButton(onClick = onBack) {
                     Text(stringResource(R.string.novapulse_back_btn), color = QsColors.ElectricCyan, fontSize = 14.sp, fontWeight = FontWeight.Bold)
                 }
-                Text(
-                    text = stringResource(R.string.novapulse_my_subscription_title),
-                    color = QsColors.TextPrimary,
-                    fontSize = 18.sp,
-                    fontWeight = FontWeight.ExtraBold
-                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Image(
+                        painter = painterResource(R.drawable.ic_np_sub),
+                        contentDescription = null,
+                        modifier = Modifier.size(22.dp),
+                    )
+                    Text(
+                        text = stringResource(R.string.novapulse_my_subscription_title),
+                        color = QsColors.TextPrimary,
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.ExtraBold
+                    )
+                }
                 OutlinedButton(
                     onClick = onRefreshQuota,
                     shape = RoundedCornerShape(10.dp),

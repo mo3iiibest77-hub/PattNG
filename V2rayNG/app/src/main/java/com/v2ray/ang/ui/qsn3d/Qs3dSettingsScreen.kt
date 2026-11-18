@@ -2,9 +2,11 @@ package com.v2ray.ang.ui.qsn3d
 
 import android.os.Build
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.ui.res.painterResource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -42,6 +44,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -108,11 +111,9 @@ fun Qs3dSettingsScreen(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        text = stringResource(R.string.novapulse_license_section_title),
-                        color = QsColors.TextPrimary,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 15.sp
+                    SettingsCardHeader(
+                        iconRes = R.drawable.ic_np_sub,
+                        title = stringResource(R.string.novapulse_license_section_title),
                     )
                     Surface(
                         shape = RoundedCornerShape(8.dp),
@@ -251,13 +252,11 @@ fun Qs3dSettingsScreen(
         item {
             Glass3dCard(
                 glowColor = QsColors.ElectricCyan.copy(alpha = 0.38f),
-                beamSeed = 6,
+                beamSeed = 3,
             ) {
-                Text(
-                    text = stringResource(R.string.qsn3d_smart_automation_title),
-                    color = QsColors.TextPrimary,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 15.sp
+                SettingsCardHeader(
+                    iconRes = R.drawable.ic_np_smart_route,
+                    title = stringResource(R.string.qsn3d_smart_automation_title),
                 )
                 Spacer(Modifier.height(10.dp))
 
@@ -307,13 +306,12 @@ fun Qs3dSettingsScreen(
         item {
             Glass3dCard(
                 glowColor = QsColors.CloudFrontSky.copy(alpha = 0.35f),
-                beamSeed = 10,
+                beamSeed = 6,
             ) {
-                Text(
-                    text = stringResource(R.string.title_pref_per_app_proxy),
-                    color = QsColors.TextPrimary,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 15.sp
+                SettingsCardHeader(
+                    iconRes = R.drawable.ic_per_apps_24dp,
+                    title = stringResource(R.string.title_pref_per_app_proxy),
+                    tint = QsColors.CloudFrontSky,
                 )
                 Spacer(Modifier.height(8.dp))
                 ToggleSettingRow(
@@ -421,13 +419,11 @@ fun Qs3dSettingsScreen(
         item {
             Glass3dCard(
                 glowColor = QsColors.PlasmaViolet.copy(alpha = 0.34f),
-                beamSeed = 15,
+                beamSeed = 7,
             ) {
-                Text(
-                    text = stringResource(R.string.novapulse_logs_section_title),
-                    color = QsColors.TextPrimary,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 15.sp
+                SettingsCardHeader(
+                    iconRes = R.drawable.ic_np_logs,
+                    title = stringResource(R.string.novapulse_logs_section_title),
                 )
                 Spacer(Modifier.height(4.dp))
                 Text(
@@ -455,7 +451,7 @@ fun Qs3dSettingsScreen(
 
         // 5. Language Selector
         item {
-            Glass3dCard {
+            Glass3dCard(beamSeed = 10) {
                 Text(
                     text = stringResource(R.string.qsn3d_language_title),
                     color = QsColors.TextPrimary,
@@ -496,7 +492,8 @@ fun Qs3dSettingsScreen(
             val abiLabel = Build.SUPPORTED_ABIS.firstOrNull().orEmpty().ifBlank { "arm64-v8a" }
 
             Glass3dCard(
-                glowColor = if (hasUpd) QsColors.AuroraMint.copy(alpha = 0.42f) else QsColors.BorderSubtle
+                glowColor = if (hasUpd) QsColors.AuroraMint.copy(alpha = 0.42f) else QsColors.BorderSubtle,
+                beamSeed = 11,
             ) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -504,11 +501,9 @@ fun Qs3dSettingsScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = stringResource(R.string.novapulse_update_card_title),
-                            color = QsColors.TextPrimary,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 15.sp
+                        SettingsCardHeader(
+                            iconRes = R.drawable.ic_np_update,
+                            title = stringResource(R.string.novapulse_update_card_title),
                         )
                         Spacer(Modifier.height(3.dp))
                         Text(
@@ -580,12 +575,13 @@ fun Qs3dSettingsScreen(
 
         // 7. Guide, Official Channel & Telegram Support
         item {
-            Glass3dCard {
-                Text(
-                    text = stringResource(R.string.novapulse_promo_card_title),
-                    color = QsColors.TextPrimary,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 15.sp
+            Glass3dCard(
+                glowColor = QsColors.AuroraMint.copy(alpha = 0.34f),
+                beamSeed = 14,
+            ) {
+                SettingsCardHeader(
+                    iconRes = R.drawable.ic_np_guide,
+                    title = stringResource(R.string.novapulse_promo_card_title),
                 )
                 Spacer(Modifier.height(4.dp))
                 Text(
@@ -742,6 +738,31 @@ private fun ToggleSettingRow(
                 uncheckedTrackColor = QsColors.SurfaceInset,
                 uncheckedBorderColor = QsColors.BorderStrong,
             )
+        )
+    }
+}
+
+@Composable
+private fun SettingsCardHeader(
+    iconRes: Int,
+    title: String,
+    tint: Color? = null,
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Image(
+            painter = painterResource(iconRes),
+            contentDescription = null,
+            colorFilter = tint?.let { ColorFilter.tint(it) },
+            modifier = Modifier.size(20.dp),
+        )
+        Text(
+            text = title,
+            color = QsColors.TextPrimary,
+            fontWeight = FontWeight.Bold,
+            fontSize = 15.sp,
         )
     }
 }

@@ -19,7 +19,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
@@ -277,9 +277,10 @@ fun Qs3dConfigsScreen(
                         modifier = Modifier.padding(top = 4.dp, bottom = 2.dp),
                     )
                 }
-                items(cdnRows, key = { it.guid }) { cfg ->
+                itemsIndexed(cdnRows, key = { _, cfg -> cfg.guid }) { idx, cfg ->
                     ServerNodeRow(
                         cfg = cfg,
+                        rowIndex = idx + 1,
                         selected = cfg.guid == state.selectedGuid,
                         running = cfg.guid == state.selectedGuid && state.coreRunning,
                         isDelayTestingAll = state.isDelayTestingAll,
@@ -304,9 +305,10 @@ fun Qs3dConfigsScreen(
                         modifier = Modifier.padding(top = 8.dp, bottom = 2.dp),
                     )
                 }
-                items(stdRows, key = { it.guid }) { cfg ->
+                itemsIndexed(stdRows, key = { _, cfg -> cfg.guid }) { idx, cfg ->
                     ServerNodeRow(
                         cfg = cfg,
+                        rowIndex = cdnRows.size + idx + 2,
                         selected = cfg.guid == state.selectedGuid,
                         running = cfg.guid == state.selectedGuid && state.coreRunning,
                         isDelayTestingAll = state.isDelayTestingAll,
@@ -423,6 +425,7 @@ private fun UtilityActionButton(
 @Composable
 private fun ServerNodeRow(
     cfg: ConfigUiRow,
+    rowIndex: Int,
     selected: Boolean,
     running: Boolean,
     isDelayTestingAll: Boolean,
@@ -432,13 +435,14 @@ private fun ServerNodeRow(
     onLongClick: () -> Unit,
 ) {
     val activeGlow = when {
-        running -> QsColors.ConnectedEmerald.copy(alpha = 0.72f)
-        selected -> QsColors.ElectricCyan.copy(alpha = 0.58f)
-        else -> Color.Transparent
+        running -> QsColors.ConnectedEmerald.copy(alpha = 0.78f)
+        selected -> QsColors.ElectricCyan.copy(alpha = 0.64f)
+        cfg.pipeline == ConfigPipeline.STANDARD -> QsColors.AuroraMint.copy(alpha = 0.28f)
+        else -> QsColors.ElectricCyan.copy(alpha = 0.26f)
     }
 
     val rowSurface = when {
-        running -> Color(0xD80D2722)
+        running -> Color(0xB80D2722)
         selected -> QsColors.SurfaceElevated
         else -> QsColors.SurfaceCard
     }
@@ -457,7 +461,14 @@ private fun ServerNodeRow(
         .clip(RoundedCornerShape(16.dp))
         .combinedClickable(onClick = onClick, onLongClick = onLongClick)
 
-    val rowContent: @Composable () -> Unit = {
+    Glass3dCard(
+        modifier = cardMod,
+        cornerRadius = 16.dp,
+        glowColor = activeGlow,
+        surfaceColor = rowSurface,
+        contentPadding = 13.dp,
+        beamSeed = rowIndex,
+    ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
@@ -552,30 +563,6 @@ private fun ServerNodeRow(
                     fontWeight = FontWeight.Bold,
                     modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp),
                 )
-            }
-        }
-    }
-
-    if (selected || running) {
-        Glass3dCard(
-            modifier = cardMod,
-            cornerRadius = 16.dp,
-            glowColor = activeGlow,
-            surfaceColor = rowSurface,
-            contentPadding = 13.dp,
-            beamSeed = cfg.guid.hashCode(),
-        ) {
-            rowContent()
-        }
-    } else {
-        Surface(
-            modifier = cardMod,
-            shape = RoundedCornerShape(16.dp),
-            color = rowSurface,
-            border = BorderStroke(1.dp, QsColors.BorderSubtle),
-        ) {
-            Box(modifier = Modifier.padding(horizontal = 13.dp, vertical = 12.dp)) {
-                rowContent()
             }
         }
     }

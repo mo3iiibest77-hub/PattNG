@@ -546,11 +546,13 @@ private fun NovaPulseTopBar(
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             TopBadgeButton(
                 label = stringResource(R.string.novapulse_promo_top_badge),
-                accent = QsColors.TextSecondary,
+                iconRes = R.drawable.ic_np_guide,
+                accent = QsColors.TextPrimary,
                 onClick = onOpenPromo
             )
             TopBadgeButton(
                 label = stringResource(R.string.novapulse_my_subscription_short),
+                iconRes = R.drawable.ic_np_sub,
                 accent = QsColors.AuroraMint,
                 onClick = onOpenSubscription
             )
@@ -559,15 +561,27 @@ private fun NovaPulseTopBar(
 }
 
 @Composable
-private fun TopBadgeButton(label: String, accent: Color, onClick: () -> Unit) {
-    Box(
+private fun TopBadgeButton(
+    label: String,
+    iconRes: Int,
+    accent: Color,
+    onClick: () -> Unit,
+) {
+    Row(
         modifier = Modifier
             .clip(RoundedCornerShape(11.dp))
             .background(QsColors.SurfaceElevated)
             .border(1.dp, accent.copy(alpha = 0.35f), RoundedCornerShape(11.dp))
             .clickable(onClick = onClick)
-            .padding(horizontal = 11.dp, vertical = 7.dp)
+            .padding(horizontal = 10.dp, vertical = 7.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(5.dp),
     ) {
+        Image(
+            painter = painterResource(iconRes),
+            contentDescription = null,
+            modifier = Modifier.size(15.dp),
+        )
         Text(text = label, color = accent, fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 1)
     }
 }
