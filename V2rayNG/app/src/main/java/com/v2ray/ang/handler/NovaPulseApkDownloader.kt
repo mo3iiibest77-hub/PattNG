@@ -43,8 +43,16 @@ object NovaPulseApkDownloader {
         val safeName = sanitizeApkFileName(fileName)
         val gatewayBase = serverLatestUrl.trim().removeSuffix("/latest").trimEnd('/')
         val gatewayUrl = if (gatewayBase.isNotEmpty()) "$gatewayBase/files/$safeName" else ""
-        return linkedSetOf(gatewayUrl, downloadUrl.trim())
-            .filter { it.startsWith("https://", ignoreCase = true) }
+        val cleanDownload = downloadUrl.trim()
+        val ordered = if (cleanDownload.startsWith("https://", ignoreCase = true) &&
+            !cleanDownload.contains("github.com", ignoreCase = true) &&
+            !cleanDownload.contains("githubusercontent.com", ignoreCase = true)
+        ) {
+            linkedSetOf(cleanDownload, gatewayUrl)
+        } else {
+            linkedSetOf(gatewayUrl, cleanDownload)
+        }
+        return ordered.filter { it.startsWith("https://", ignoreCase = true) }
     }
 
     suspend fun downloadApk(

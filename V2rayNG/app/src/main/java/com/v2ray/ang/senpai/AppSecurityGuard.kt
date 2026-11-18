@@ -6,6 +6,7 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Debug
 import com.v2ray.ang.BuildConfig
+import java.io.File
 import java.security.MessageDigest
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -57,7 +58,14 @@ object AppSecurityGuard {
 
     internal fun expectedReleaseCertSha256(): String = decodeObf(RELEASE_CERT_OBF)
 
-    fun isRuntimeTampered(): Boolean = tamperedFlag.get()
+    fun isRuntimeTampered(): Boolean {
+        if (tamperedFlag.get()) return true
+        if (!BuildConfig.DEBUG && hasLiveInstrumentationOrDebugger()) {
+            tamperedFlag.set(true)
+            return true
+        }
+        return false
+    }
 
     internal fun verifyCertDigestHex(actualHex: String?): Boolean {
         val normalized = actualHex?.trim()?.lowercase()?.replace(":", "") ?: return false
@@ -70,11 +78,82 @@ object AppSecurityGuard {
             return true
         }
         val appDebuggable = (context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
-        val debuggerAttached = runCatching { Debug.isDebuggerConnected() || Debug.waitingForDebugger() }.getOrDefault(false)
+        val instrumentationTamper = hasLiveInstrumentationOrDebugger()
         val signatureValid = runCatching { checkPackageSigningCert(context) }.getOrDefault(false)
-        val ok = !appDebuggable && !debuggerAttached && signatureValid
+        val ok = !appDebuggable && !instrumentationTamper && signatureValid
         tamperedFlag.set(!ok)
+        if (!ok) {
+            AppLogBuffer.warn(
+                "AppSecurity",
+                "Integrity anomaly detected (dbg=$appDebuggable, hook=$instrumentationTamper, sig=$signatureValid)"
+            )
+        }
         return ok
+    }
+
+    /**
+     * Checks specifically for debugger attach, ptrace attachment (`TracerPid > 0`), and
+     * dynamic instrumentation frameworks (Frida / Xposed / LSPosed) without penalizing normal
+     * rooted devices that legitimately use CoreRootService.
+     */
+    internal fun hasLiveInstrumentationOrDebugger(): Boolean {
+        val debuggerAttached = runCatching {
+            Debug.isDebuggerConnected() || Debug.waitingForDebugger()
+        }.getOrDefault(false)
+        if (debuggerAttached) return true
+
+        val tracerPid = runCatching { readTracerPid() }.getOrDefault(0)
+        if (tracerPid > 0) return true
+
+        val hookMaps = runCatching { hasHookSharedLibraryInMaps() }.getOrDefault(false)
+        if (hookMaps) return true
+
+        val xposedLoaded = runCatching {
+            Class.forName("de.robv.android.xposed.XposedBridge", false, AppSecurityGuard::class.java.classLoader)
+            true
+        }.getOrDefault(false) || runCatching {
+            Class.forName("io.github.libxposed.api.XposedInterface", false, AppSecurityGuard::class.java.classLoader)
+            true
+        }.getOrDefault(false)
+
+        return xposedLoaded
+    }
+
+    internal fun parseTracerPidFromStatus(statusContent: String): Int {
+        for (line in statusContent.lineSequence()) {
+            if (line.startsWith("TracerPid:")) {
+                return line.substringAfter(':').trim().toIntOrNull() ?: 0
+            }
+        }
+        return 0
+    }
+
+    private fun readTracerPid(): Int {
+        val f = File("/proc/self/status")
+        if (!f.canRead()) return 0
+        return parseTracerPidFromStatus(f.readText())
+    }
+
+    internal fun isSuspiciousMapLine(line: String): Boolean {
+        val lower = line.lowercase()
+        return lower.contains("frida-agent") ||
+            lower.contains("frida-gadget") ||
+            lower.contains("libfrida") ||
+            lower.contains("xposedbridge") ||
+            lower.contains("lsposed") ||
+            lower.contains("edxposed") ||
+            lower.contains("libsubstrate")
+    }
+
+    private fun hasHookSharedLibraryInMaps(): Boolean {
+        val f = File("/proc/self/maps")
+        if (!f.canRead()) return false
+        f.bufferedReader().useLines { lines ->
+            for (line in lines.take(4000)) {
+                if (isSuspiciousMapLine(line)) return true
+            }
+        }
+        return false
     }
 
     @Suppress("DEPRECATION")

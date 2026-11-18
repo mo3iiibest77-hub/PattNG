@@ -366,7 +366,7 @@ class NovaPulseNoticeUiScreenshotTest {
         )
 
         val supportNode = composeTestRule.onNode(
-            hasClickAction() and hasText("پشتیبانی تلگرام", substring = true) and hasText("@Mo3i_Best", substring = true),
+            hasClickAction() and hasText("پیام مستقیم به پشتیبانی", substring = true) and hasText("@Mo3i_Best", substring = true),
         )
         supportNode.performScrollTo()
         supportNode.assertIsDisplayed()

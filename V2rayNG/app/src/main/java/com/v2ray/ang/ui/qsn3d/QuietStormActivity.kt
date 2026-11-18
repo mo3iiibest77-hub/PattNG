@@ -122,6 +122,7 @@ class QuietStormActivity : BaseComponentActivity() {
     override fun onResume() {
         super.onResume()
         viewModel.verifyLicenseSessionNow(force = false)
+        viewModel.syncSubscriptionIfStale()
         viewModel.checkForAppUpdatesIfStale()
     }
 
@@ -242,7 +243,7 @@ class QuietStormActivity : BaseComponentActivity() {
                                     isRunning = state.coreRunning,
                                     onOpenSubscription = { viewModel.openSubscriptionDetails(true) },
                                     onOpenPromo = { viewModel.openAboutPromo(true) },
-                                    onRefresh = { viewModel.refreshAllData(fetchRemoteQuota = true) }
+                                    onRefresh = { viewModel.refreshQuotaOnly(showFeedback = true) }
                                 )
                                 val upd = state.availableUpdate
                                 if (upd?.hasUpdate == true && !upd.latestVersion.isNullOrBlank()) {
@@ -278,6 +279,20 @@ class QuietStormActivity : BaseComponentActivity() {
                                         state = state,
                                         onBack = { viewModel.openSubscriptionDetails(false) },
                                         onRefreshQuota = { viewModel.refreshQuotaOnly() }
+                                    )
+                                }
+
+                                state.showLogsScreen -> {
+                                    Qs3dLogsScreen(
+                                        logs = state.diagnosticLogs,
+                                        searchQuery = state.logSearchQuery,
+                                        filterBucket = state.logFilterBucket,
+                                        onSearchChange = viewModel::setLogSearchQuery,
+                                        onFilterBucketChange = viewModel::setLogFilterBucket,
+                                        onRefreshSystemLogs = viewModel::refreshSystemLogs,
+                                        onCopyAllLogs = viewModel::copyLogsToClipboard,
+                                        onClearLogs = viewModel::clearDiagnosticLogs,
+                                        onBack = { viewModel.openLogsScreen(false) },
                                     )
                                 }
 
@@ -375,6 +390,8 @@ class QuietStormActivity : BaseComponentActivity() {
                                             qrScannerLauncher.launch(Intent(this@QuietStormActivity, ScannerActivity::class.java))
                                         },
                                         onOpenMySubscription = { viewModel.openSubscriptionDetails(true) },
+                                        onRefreshSubscription = { viewModel.refreshQuotaOnly(showFeedback = true) },
+                                        onOpenLogs = { viewModel.openLogsScreen(true) },
                                         onOpenAboutPromo = { viewModel.openAboutPromo(true) },
                                         onCheckUpdates = { viewModel.checkForAppUpdates(silent = false) },
                                         onOpenAvailableUpdate = { viewModel.openUpdateDialog(true) },
@@ -439,26 +456,13 @@ private fun UpdateAvailableStrip(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 14.dp, vertical = 3.dp)
-            .clip(RoundedCornerShape(14.dp))
-            .background(
-                Brush.horizontalGradient(
-                    listOf(
-                        QsColors.AuroraMint.copy(alpha = 0.20f),
-                        QsColors.ElectricCyan.copy(alpha = 0.14f),
-                        QsColors.PlasmaViolet.copy(alpha = 0.14f),
-                    )
-                )
-            )
+            .padding(horizontal = 16.dp, vertical = 4.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(QsColors.AuroraMint.copy(alpha = 0.12f))
             .border(
                 width = 1.dp,
-                brush = Brush.horizontalGradient(
-                    listOf(
-                        QsColors.AuroraMint.copy(alpha = glowAlpha),
-                        QsColors.ElectricCyan.copy(alpha = glowAlpha * 0.85f),
-                    )
-                ),
-                shape = RoundedCornerShape(14.dp),
+                color = QsColors.AuroraMint.copy(alpha = glowAlpha.coerceIn(0.28f, 0.72f)),
+                shape = RoundedCornerShape(12.dp),
             )
             .clickable(onClick = onClick)
             .padding(horizontal = 12.dp, vertical = 8.dp),
@@ -488,19 +492,15 @@ private fun UpdateAvailableStrip(
         Spacer(Modifier.width(8.dp))
         Box(
             modifier = Modifier
-                .clip(RoundedCornerShape(999.dp))
-                .background(
-                    Brush.horizontalGradient(
-                        listOf(QsColors.AuroraMint, QsColors.ElectricCyan)
-                    )
-                )
+                .clip(RoundedCornerShape(8.dp))
+                .background(QsColors.AuroraMint)
                 .padding(horizontal = 10.dp, vertical = 4.dp)
         ) {
             Text(
                 text = stringResource(R.string.update_now),
                 color = QsColors.DeepVoid,
                 fontSize = 11.sp,
-                fontWeight = FontWeight.ExtraBold,
+                fontWeight = FontWeight.Bold,
                 maxLines = 1,
             )
         }
@@ -518,7 +518,7 @@ private fun NovaPulseTopBar(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 14.dp, vertical = 10.dp),
+            .padding(horizontal = 16.dp, vertical = 10.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -544,12 +544,12 @@ private fun NovaPulseTopBar(
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             TopBadgeButton(
                 label = stringResource(R.string.novapulse_promo_top_badge),
-                accent = QsColors.AuroraMint,
+                accent = QsColors.TextSecondary,
                 onClick = onOpenPromo
             )
             TopBadgeButton(
                 label = stringResource(R.string.novapulse_my_subscription_short),
-                accent = QsColors.PlasmaViolet,
+                accent = QsColors.AuroraMint,
                 onClick = onOpenSubscription
             )
             TopBadgeButton(
@@ -565,13 +565,13 @@ private fun NovaPulseTopBar(
 private fun TopBadgeButton(label: String, accent: Color, onClick: () -> Unit) {
     Box(
         modifier = Modifier
-            .clip(RoundedCornerShape(12.dp))
-            .background(accent.copy(alpha = 0.16f))
-            .border(0.8.dp, accent.copy(alpha = 0.45f), RoundedCornerShape(12.dp))
+            .clip(RoundedCornerShape(10.dp))
+            .background(QsColors.SurfaceElevated)
+            .border(1.dp, QsColors.BorderSubtle, RoundedCornerShape(10.dp))
             .clickable(onClick = onClick)
             .padding(horizontal = 9.dp, vertical = 6.dp)
     ) {
-        Text(text = label, color = accent, fontSize = 11.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+        Text(text = label, color = accent, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
     }
 }
 
@@ -580,39 +580,47 @@ private fun NovaPulseBottomNavBar(
     activeTab: Qs3dTab,
     onSelectTab: (Qs3dTab) -> Unit,
 ) {
-    NavigationBar(containerColor = Color(0x52060D20)) {
-        val items = listOf(
-            Triple(Qs3dTab.Connect, R.string.qsn3d_tab_connect, R.drawable.ic_flash_on_24dp),
-            Triple(Qs3dTab.Configs, R.string.qsn3d_tab_configs, R.drawable.ic_subscriptions_24dp),
-            Triple(Qs3dTab.Ranges, R.string.qsn3d_tab_ranges, R.drawable.ic_routing_24dp),
-            Triple(Qs3dTab.Apps, R.string.qsn3d_tab_settings, R.drawable.ic_settings_24dp),
+    Column {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(1.dp)
+                .background(QsColors.BorderSubtle)
         )
-        items.forEach { (tab, labelRes, iconRes) ->
-            NavigationBarItem(
-                selected = activeTab == tab,
-                onClick = { onSelectTab(tab) },
-                icon = {
-                    Icon(
-                        painter = painterResource(iconRes),
-                        contentDescription = stringResource(labelRes),
-                        modifier = Modifier.size(20.dp)
-                    )
-                },
-                label = {
-                    Text(
-                        text = stringResource(labelRes),
-                        fontSize = 11.sp,
-                        fontWeight = if (activeTab == tab) FontWeight.Bold else FontWeight.Normal
-                    )
-                },
-                colors = NavigationBarItemDefaults.colors(
-                    selectedIconColor = QsColors.ElectricCyan,
-                    selectedTextColor = QsColors.ElectricCyan,
-                    unselectedIconColor = QsColors.TextSecondary,
-                    unselectedTextColor = QsColors.TextSecondary,
-                    indicatorColor = QsColors.ElectricCyan.copy(alpha = 0.18f)
-                )
+        NavigationBar(containerColor = QsColors.MidnightNavy) {
+            val items = listOf(
+                Triple(Qs3dTab.Connect, R.string.qsn3d_tab_connect, R.drawable.ic_flash_on_24dp),
+                Triple(Qs3dTab.Configs, R.string.qsn3d_tab_configs, R.drawable.ic_subscriptions_24dp),
+                Triple(Qs3dTab.Ranges, R.string.qsn3d_tab_ranges, R.drawable.ic_routing_24dp),
+                Triple(Qs3dTab.Apps, R.string.qsn3d_tab_settings, R.drawable.ic_settings_24dp),
             )
+            items.forEach { (tab, labelRes, iconRes) ->
+                NavigationBarItem(
+                    selected = activeTab == tab,
+                    onClick = { onSelectTab(tab) },
+                    icon = {
+                        Icon(
+                            painter = painterResource(iconRes),
+                            contentDescription = stringResource(labelRes),
+                            modifier = Modifier.size(20.dp)
+                        )
+                    },
+                    label = {
+                        Text(
+                            text = stringResource(labelRes),
+                            fontSize = 11.sp,
+                            fontWeight = if (activeTab == tab) FontWeight.Bold else FontWeight.Normal
+                        )
+                    },
+                    colors = NavigationBarItemDefaults.colors(
+                        selectedIconColor = QsColors.ElectricCyan,
+                        selectedTextColor = QsColors.ElectricCyan,
+                        unselectedIconColor = QsColors.TextSecondary,
+                        unselectedTextColor = QsColors.TextSecondary,
+                        indicatorColor = QsColors.ElectricCyan.copy(alpha = 0.14f)
+                    )
+                )
+            }
         }
     }
 }

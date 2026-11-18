@@ -103,6 +103,71 @@ object SmartConnectCoordinator {
         MmkvManager.encodeSettings(PREF_SCANNED_GUID_PREFIX + guid, ready)
     }
 
+    private data class ScannedEdgeSnapshot(
+        val remarks: String,
+        val serverPort: String,
+        val password: String,
+        val sni: String,
+        val host: String,
+        val originDomain: String,
+        val scannedIp: String,
+        val delayMs: Long,
+    )
+
+    private fun snapshotScannedEdgeProfiles(subId: String): List<ScannedEdgeSnapshot> {
+        val guids = if (subId.isNotBlank()) MmkvManager.decodeServerList(subId) else MmkvManager.decodeAllServerList()
+        val snapshots = mutableListOf<ScannedEdgeSnapshot>()
+        for (guid in guids) {
+            val profile = MmkvManager.decodeServerConfig(guid) ?: continue
+            if (!hasSavedEdgeIp(guid, profile)) continue
+            val scannedIp = profile.server?.trim().orEmpty()
+            val origin = OriginDomainStore.getSavedOriginDomain(guid).orEmpty()
+            val delay = MmkvManager.decodeServerAffiliationInfo(guid)?.testDelayMillis ?: 0L
+            snapshots.add(
+                ScannedEdgeSnapshot(
+                    remarks = profile.remarks.trim(),
+                    serverPort = profile.serverPort.orEmpty().trim(),
+                    password = profile.password.orEmpty().trim(),
+                    sni = profile.sni.orEmpty().trim(),
+                    host = profile.host.orEmpty().trim(),
+                    originDomain = origin,
+                    scannedIp = scannedIp,
+                    delayMs = delay,
+                )
+            )
+        }
+        return snapshots
+    }
+
+    private fun restoreScannedEdgeProfiles(subId: String, snapshots: List<ScannedEdgeSnapshot>) {
+        if (snapshots.isEmpty()) return
+        val newGuids = if (subId.isNotBlank()) MmkvManager.decodeServerList(subId) else MmkvManager.decodeAllServerList()
+        var restored = 0
+        for (guid in newGuids) {
+            val profile = MmkvManager.decodeServerConfig(guid) ?: continue
+            if (ConfigPipelineClassifier.classify(profile) != ConfigPipeline.CDN) continue
+            val newOrigin = OriginDomainStore.resolveDomainFromProfile(profile).orEmpty()
+            val match = snapshots.firstOrNull { snap ->
+                snap.remarks.equals(profile.remarks.trim(), ignoreCase = true) &&
+                    snap.serverPort == profile.serverPort.orEmpty().trim() &&
+                    snap.password == profile.password.orEmpty().trim() &&
+                    (snap.originDomain.isEmpty() || newOrigin.isEmpty() || snap.originDomain.equals(newOrigin, ignoreCase = true))
+            } ?: continue
+            OriginDomainStore.rememberIfDomain(guid, profile)
+            profile.server = match.scannedIp
+            profile.description = AngConfigManager.generateDescription(profile)
+            MmkvManager.encodeServerConfig(guid, profile)
+            markEdgeIpScanned(guid, true)
+            if (match.delayMs > 0L) {
+                MmkvManager.encodeServerTestDelayMillis(guid, match.delayMs)
+            }
+            restored++
+        }
+        if (restored > 0) {
+            AppLogBuffer.info(TAG, "Preserved $restored scanned CDN edge IP(s) across subscription sync")
+        }
+    }
+
     fun markExplicitServerSelected(explicit: Boolean) {
         MmkvManager.encodeSettings(PREF_USER_EXPLICIT_SERVER, explicit)
     }
@@ -201,6 +266,10 @@ object SmartConnectCoordinator {
                         scanTotal = 0,
                     )
                     _state.value = stdState
+                    AppLogBuffer.info(
+                        TAG,
+                        "Connecting STANDARD pipeline (${stdState.activeTransportBadge}): ${profile.remarks}"
+                    )
                     kotlinx.coroutines.withContext(Dispatchers.Main) {
                         onReadyToStartVpn(targetGuid, stdState)
                     }
@@ -247,6 +316,10 @@ object SmartConnectCoordinator {
                         bestIp = profile.server,
                     )
                     _state.value = fastState
+                    AppLogBuffer.info(
+                        TAG,
+                        "Fast-connecting CDN (${quickCdn.name}) via saved edge IP ${profile.server}"
+                    )
                     kotlinx.coroutines.withContext(Dispatchers.Main) {
                         onReadyToStartVpn(targetGuid, fastState)
                     }
@@ -290,6 +363,10 @@ object SmartConnectCoordinator {
                                 scanTotal = 0,
                             )
                             _state.value = fbState
+                            AppLogBuffer.warn(
+                                TAG,
+                                "CDN pre-connect failed -> auto-switched to ${stdFallback.transportBadge} (${stdFallback.delayMs}ms)"
+                            )
                             kotlinx.coroutines.withContext(Dispatchers.Main) {
                                 onReadyToStartVpn(stdFallback.guid, fbState)
                             }
@@ -323,6 +400,10 @@ object SmartConnectCoordinator {
                     scanTotal = 30,
                 )
                 _state.value = instantFirstState
+                AppLogBuffer.info(
+                    TAG,
+                    "Instant first-connect CDN (${quickCdn.name}); post-connect 30-IP optimization queued"
+                )
                 kotlinx.coroutines.withContext(Dispatchers.Main) {
                     onReadyToStartVpn(targetGuid, instantFirstState)
                 }
@@ -545,6 +626,11 @@ object SmartConnectCoordinator {
                                 }
                                 markEdgeIpScanned(targetGuid, false)
                                 LauncherManager.restartService(appCtx)
+                            } else {
+                                AppLogBuffer.info(
+                                    TAG,
+                                    "Applied clean edge IP ${best.ip} (${best.latencyMs}ms, ↑${best.uploadKBps} KB/s)"
+                                )
                             }
                         } else if (SmartFailoverStore.isSmartFailoverArmed() &&
                             StandardConfigProber.hasStandardCandidates(excludeGuid = targetGuid)
@@ -628,8 +714,10 @@ object SmartConnectCoordinator {
     fun refreshAllSubscriptionsWithQuota(context: Context): Int {
         val subs = MmkvManager.decodeSubscriptions()
         var totalConfigs = 0
+        val snapshotsBySub = mutableMapOf<String, List<ScannedEdgeSnapshot>>()
         for (subCache in subs) {
             if (!subCache.subscription.enabled) continue
+            snapshotsBySub[subCache.guid] = snapshotScannedEdgeProfiles(subCache.guid)
             val res = AngConfigManager.updateConfigViaSub(subCache)
             totalConfigs += res.configCount
             SubscriptionQuotaStore.fetchAndSaveHeader(
@@ -640,6 +728,7 @@ object SmartConnectCoordinator {
         }
         CdnPingClassifier.classifyAllProfilesIfNeeded(context.applicationContext, forceRefresh = false)
         CloudflareConfigEnricher.enrichAllStoredCloudflareProfiles(context.applicationContext)
+        snapshotsBySub.forEach { (subId, snaps) -> restoreScannedEdgeProfiles(subId, snaps) }
         ensureCloudflarePrioritySelection(context.applicationContext)
         return totalConfigs
     }
@@ -689,14 +778,20 @@ object SmartConnectCoordinator {
                 MmkvManager.encodeSubscription(subId, item)
                 LicenseBackendClient.setActiveLicenseSubId(subId)
                 val cache = SubscriptionCache(subId, item)
+                val edgeSnapshots = snapshotScannedEdgeProfiles(subId)
                 val updateRes = AngConfigManager.updateConfigViaSub(cache)
                 val appCtx = context.applicationContext
                 CdnPingClassifier.classifyAllProfilesIfNeeded(appCtx, forceRefresh = !isStatusRefresh)
                 CloudflareConfigEnricher.enrichAllStoredCloudflareProfiles(appCtx)
+                restoreScannedEdgeProfiles(subId, edgeSnapshots)
                 if (!isStatusRefresh) {
                     markExplicitServerSelected(false)
                 }
                 ensureCloudflarePrioritySelection(appCtx)
+                AppLogBuffer.info(
+                    TAG,
+                    "Subscription synced (${updateRes.configCount} configs, statusRefresh=$isStatusRefresh)"
+                )
                 if (redeemed.quota != null) {
                     SubscriptionQuotaStore.save(subId, redeemed.quota)
                 } else {

@@ -39,7 +39,12 @@ object LicenseSessionStore {
     }
 
     private object MmkvBackingStore : BackingStore {
-        private fun mmkvOrNull(): MMKV? = runCatching { MMKV.mmkvWithID(MMKV_ID, MMKV.MULTI_PROCESS_MODE) }.getOrNull()
+        private fun mmkvOrNull(): MMKV? = runCatching {
+            if (MMKV.getRootDir().isNullOrBlank()) {
+                runCatching { com.v2ray.ang.handler.MmkvManager.initialize(com.v2ray.ang.AngApplication.application) }
+            }
+            MMKV.mmkvWithID(MMKV_ID, MMKV.MULTI_PROCESS_MODE)
+        }.getOrNull()
         override fun getString(key: String, default: String): String =
             runCatching { mmkvOrNull()?.decodeString(key, default) }.getOrNull() ?: default
         override fun putString(key: String, value: String) {
@@ -81,10 +86,14 @@ object LicenseSessionStore {
     @Volatile
     private var overrideCrypto: DeviceCryptoProvider? = null
 
+    @Volatile
+    private var lastKnownSnapshot: SessionSnapshot? = null
+
     fun configureForTest(store: BackingStore, crypto: DeviceCryptoProvider) {
         synchronized(lock) {
             overrideStore = store
             overrideCrypto = crypto
+            lastKnownSnapshot = null
         }
     }
 
@@ -92,6 +101,7 @@ object LicenseSessionStore {
         synchronized(lock) {
             overrideStore = null
             overrideCrypto = null
+            lastKnownSnapshot = null
         }
     }
 
@@ -109,15 +119,32 @@ object LicenseSessionStore {
         synchronized(lock) {
             val s = store()
             val c = crypto()
-            s.putString(K_LICENSE_KEY_ENC, c.encryptString(licenseKey.trim().uppercase()))
-            s.putString(K_SESSION_TOKEN_ENC, c.encryptString(sessionToken.trim()))
-            s.putString(K_SESSION_ID, sessionId.trim())
-            s.putString(K_SUB_URL, subscriptionUrl.trim())
+            val cleanKey = licenseKey.trim().uppercase()
+            val cleanTok = sessionToken.trim()
+            val cleanSid = sessionId.trim()
+            val cleanSub = subscriptionUrl.trim()
+            val isActive = cleanKey.isNotBlank() && cleanTok.isNotBlank()
+            s.putString(K_LICENSE_KEY_ENC, c.encryptString(cleanKey))
+            s.putString(K_SESSION_TOKEN_ENC, c.encryptString(cleanTok))
+            s.putString(K_SESSION_ID, cleanSid)
+            s.putString(K_SUB_URL, cleanSub)
             s.putLong(K_EXPIRES_AT, expiresAtSec)
             s.putLong(K_LAST_VERIFIED, nowSec)
             s.putLong(K_LAST_REFRESHED, nowSec)
             s.putLong(K_REFRESH_FAIL_UNTIL_MS, 0L)
-            s.putBool(K_ACTIVE, licenseKey.isNotBlank() && sessionToken.isNotBlank())
+            s.putBool(K_ACTIVE, isActive)
+            lastKnownSnapshot = if (isActive) {
+                SessionSnapshot(
+                    active = true,
+                    sessionId = cleanSid,
+                    sessionToken = cleanTok,
+                    licenseKey = cleanKey,
+                    subscriptionUrl = cleanSub,
+                    expiresAtSec = expiresAtSec,
+                    lastVerifiedAtSec = nowSec,
+                    lastRefreshedAtSec = nowSec,
+                )
+            } else null
         }
     }
 
@@ -130,13 +157,22 @@ object LicenseSessionStore {
         synchronized(lock) {
             val s = store()
             val c = crypto()
-            s.putString(K_SESSION_TOKEN_ENC, c.encryptString(sessionToken.trim()))
+            val cleanTok = sessionToken.trim()
+            s.putString(K_SESSION_TOKEN_ENC, c.encryptString(cleanTok))
             if (expiresAtSec > 0L) s.putLong(K_EXPIRES_AT, expiresAtSec)
             if (!subscriptionUrl.isNullOrBlank()) s.putString(K_SUB_URL, subscriptionUrl.trim())
             s.putLong(K_LAST_VERIFIED, nowSec)
             s.putLong(K_LAST_REFRESHED, nowSec)
             s.putLong(K_REFRESH_FAIL_UNTIL_MS, 0L)
             s.putBool(K_ACTIVE, true)
+            lastKnownSnapshot = lastKnownSnapshot?.copy(
+                active = true,
+                sessionToken = cleanTok,
+                expiresAtSec = if (expiresAtSec > 0L) expiresAtSec else lastKnownSnapshot?.expiresAtSec ?: 0L,
+                subscriptionUrl = if (!subscriptionUrl.isNullOrBlank()) subscriptionUrl.trim() else lastKnownSnapshot?.subscriptionUrl.orEmpty(),
+                lastVerifiedAtSec = nowSec,
+                lastRefreshedAtSec = nowSec,
+            )
         }
     }
 
@@ -147,9 +183,24 @@ object LicenseSessionStore {
     ) {
         synchronized(lock) {
             val s = store()
-            if (expiresAtSec > 0L) s.putLong(K_EXPIRES_AT, expiresAtSec)
-            if (!subscriptionUrl.isNullOrBlank()) s.putString(K_SUB_URL, subscriptionUrl.trim())
-            s.putLong(K_LAST_VERIFIED, nowSec)
+            if (expiresAtSec > 0L && s.getLong(K_EXPIRES_AT, 0L) != expiresAtSec) {
+                s.putLong(K_EXPIRES_AT, expiresAtSec)
+            }
+            if (!subscriptionUrl.isNullOrBlank()) {
+                val cleanSub = subscriptionUrl.trim()
+                if (s.getString(K_SUB_URL, "") != cleanSub) {
+                    s.putString(K_SUB_URL, cleanSub)
+                }
+            }
+            val prevVer = s.getLong(K_LAST_VERIFIED, 0L)
+            if (nowSec - prevVer >= 5L || nowSec < prevVer) {
+                s.putLong(K_LAST_VERIFIED, nowSec)
+            }
+            lastKnownSnapshot = lastKnownSnapshot?.copy(
+                expiresAtSec = if (expiresAtSec > 0L) expiresAtSec else lastKnownSnapshot?.expiresAtSec ?: 0L,
+                subscriptionUrl = if (!subscriptionUrl.isNullOrBlank()) subscriptionUrl.trim() else lastKnownSnapshot?.subscriptionUrl.orEmpty(),
+                lastVerifiedAtSec = nowSec,
+            )
         }
     }
 
@@ -160,24 +211,55 @@ object LicenseSessionStore {
             val active = s.getBool(K_ACTIVE, false)
             val encTok = s.getString(K_SESSION_TOKEN_ENC, "")
             val encKey = s.getString(K_LICENSE_KEY_ENC, "")
-            val tok = if (encTok.isNotBlank()) c.decryptString(encTok).orEmpty() else ""
-            val key = if (encKey.isNotBlank()) c.decryptString(encKey).orEmpty() else ""
             val sid = s.getString(K_SESSION_ID, "")
             val subUrl = s.getString(K_SUB_URL, "")
             val exp = s.getLong(K_EXPIRES_AT, 0L)
             val lastVer = s.getLong(K_LAST_VERIFIED, 0L)
             val lastRef = s.getLong(K_LAST_REFRESHED, 0L)
+            if (!active && encTok.isBlank() && encKey.isBlank()) {
+                lastKnownSnapshot = null
+                return SessionSnapshot(
+                    active = false,
+                    sessionId = sid,
+                    sessionToken = "",
+                    licenseKey = "",
+                    subscriptionUrl = subUrl,
+                    expiresAtSec = exp,
+                    lastVerifiedAtSec = lastVer,
+                    lastRefreshedAtSec = lastRef,
+                )
+            }
+            var tok = if (encTok.isNotBlank()) c.decryptString(encTok).orEmpty() else ""
+            var key = if (encKey.isNotBlank()) c.decryptString(encKey).orEmpty() else ""
+            val cached = lastKnownSnapshot
+            if (active && cached != null && cached.active && (sid.isBlank() || sid == cached.sessionId)) {
+                if (tok.isBlank() && encTok.isNotBlank()) tok = cached.sessionToken
+                if (key.isBlank() && encKey.isNotBlank()) key = cached.licenseKey
+            }
             val effectiveActive = active && tok.isNotBlank() && key.isNotBlank()
-            return SessionSnapshot(
+            val snap = SessionSnapshot(
                 active = effectiveActive,
-                sessionId = sid,
+                sessionId = sid.ifBlank { cached?.sessionId.orEmpty() },
                 sessionToken = tok,
                 licenseKey = key,
-                subscriptionUrl = subUrl,
-                expiresAtSec = exp,
-                lastVerifiedAtSec = lastVer,
-                lastRefreshedAtSec = lastRef,
+                subscriptionUrl = subUrl.ifBlank { cached?.subscriptionUrl.orEmpty() },
+                expiresAtSec = if (exp > 0L) exp else (cached?.expiresAtSec ?: 0L),
+                lastVerifiedAtSec = if (lastVer > 0L) lastVer else (cached?.lastVerifiedAtSec ?: 0L),
+                lastRefreshedAtSec = if (lastRef > 0L) lastRef else (cached?.lastRefreshedAtSec ?: 0L),
             )
+            if (effectiveActive) {
+                lastKnownSnapshot = snap
+            }
+            return snap
+        }
+    }
+
+    fun isExplicitlyCleared(): Boolean {
+        synchronized(lock) {
+            val s = store()
+            return !s.getBool(K_ACTIVE, false) &&
+                s.getString(K_SESSION_TOKEN_ENC, "").isBlank() &&
+                s.getString(K_LICENSE_KEY_ENC, "").isBlank()
         }
     }
 
@@ -190,6 +272,7 @@ object LicenseSessionStore {
 
     fun clearActiveSession() {
         synchronized(lock) {
+            lastKnownSnapshot = null
             val s = store()
             s.putBool(K_ACTIVE, false)
             s.putString(K_SESSION_TOKEN_ENC, "")

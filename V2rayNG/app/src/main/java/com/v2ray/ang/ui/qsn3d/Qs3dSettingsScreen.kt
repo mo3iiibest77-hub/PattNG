@@ -1,8 +1,10 @@
 package com.v2ray.ang.ui.qsn3d
 
+import android.os.Build
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -22,11 +24,13 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -37,13 +41,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import android.os.Build
 import com.v2ray.ang.BuildConfig
 import com.v2ray.ang.R
 import com.v2ray.ang.dto.AppInfo
@@ -72,27 +75,30 @@ fun Qs3dSettingsScreen(
     onRedeemNewLicense: (String) -> Unit,
     onScanLicenseQr: () -> Unit,
     onOpenMySubscription: () -> Unit,
+    onRefreshSubscription: () -> Unit,
+    onOpenLogs: () -> Unit,
     onOpenAboutPromo: () -> Unit,
     onCheckUpdates: () -> Unit,
     onOpenAvailableUpdate: () -> Unit,
     onLogoutLicense: () -> Unit,
 ) {
+    var appQuery by remember { mutableStateOf("") }
+    var showPerAppList by remember { mutableStateOf(false) }
     var showChangeLicenseDialog by remember { mutableStateOf(false) }
     var showLogoutConfirmDialog by remember { mutableStateOf(false) }
     var licenseDraft by remember { mutableStateOf("") }
-    var appQuery by remember { mutableStateOf("") }
 
-    val activeSub = state.subscriptions.firstOrNull { it.enabled } ?: state.subscriptions.firstOrNull()
-    val quota = activeSub?.quota
+    val gbUnit = stringResource(R.string.novapulse_unit_gb)
+    val mbUnit = stringResource(R.string.novapulse_unit_mb)
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
+        contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        // 1. Account & License Management Card (Privacy-hardened: NEVER displays the license code)
+        // 1. Account & Subscription Card (never prints raw license key)
         item {
-            Glass3dCard(beamSeed = 3, glowColor = QsColors.PlasmaViolet.copy(alpha = 0.40f)) {
+            Glass3dCard(surfaceColor = QsColors.SurfaceElevated) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -104,92 +110,464 @@ fun Qs3dSettingsScreen(
                         fontWeight = FontWeight.Bold,
                         fontSize = 15.sp
                     )
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(10.dp))
-                            .background(QsColors.ConnectedEmerald.copy(alpha = 0.16f))
-                            .padding(horizontal = 10.dp, vertical = 4.dp)
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = QsColors.ConnectedEmerald.copy(alpha = 0.14f),
+                        border = BorderStroke(1.dp, QsColors.ConnectedEmerald.copy(alpha = 0.35f)),
                     ) {
-                        StatusDot(active = state.hasActiveLicense)
                         Text(
                             text = stringResource(R.string.novapulse_license_active_status),
                             color = QsColors.ConnectedEmerald,
                             fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
                         )
                     }
                 }
-                Spacer(Modifier.height(6.dp))
-                val quotaSummary = when {
-                    quota?.remainingBytes != null -> stringResource(
-                        R.string.novapulse_settings_quota_summary_fmt,
-                        formatGbCompact(quota.remainingBytes!!)
+
+                val activeSub = state.subscriptions.firstOrNull()
+                val quota = activeSub?.quota
+                if (activeSub != null) {
+                    Spacer(Modifier.height(6.dp))
+                    val remText = when {
+                        quota == null -> "—"
+                        quota.totalBytes <= 0L -> stringResource(R.string.novapulse_unlimited)
+                        else -> formatTrafficLocalized(quota.remainingBytes ?: 0L, gbUnit, mbUnit)
+                    }
+                    Text(
+                        text = "${activeSub.remarks}  •  ${stringResource(R.string.novapulse_settings_quota_summary_fmt, remText)}",
+                        style = QsTextStyles.TabularStat,
+                        color = QsColors.TextSecondary,
+                        fontSize = 12.sp
                     )
-                    quota != null && quota.totalBytes <= 0L -> stringResource(R.string.novapulse_unlimited)
-                    else -> activeSub?.remarks ?: stringResource(R.string.novapulse_sub_default_title)
                 }
-                Text(
-                    text = quotaSummary,
-                    color = QsColors.TextSecondary,
-                    fontSize = 12.sp
-                )
-                Spacer(Modifier.height(10.dp))
+
+                Spacer(Modifier.height(12.dp))
+
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     Button(
                         onClick = onOpenMySubscription,
                         modifier = Modifier.weight(1f),
-                        shape = RoundedCornerShape(12.dp)
+                        shape = RoundedCornerShape(10.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = QsColors.ElectricCyan,
+                            contentColor = Color(0xFF04151E),
+                        )
                     ) {
-                        Text(stringResource(R.string.novapulse_my_subscription_title))
+                        Text(
+                            text = stringResource(R.string.novapulse_my_subscription_title),
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 12.sp,
+                            maxLines = 1,
+                        )
                     }
+
                     OutlinedButton(
-                        onClick = { showChangeLicenseDialog = true },
+                        onClick = onRefreshSubscription,
                         modifier = Modifier.weight(1f),
-                        shape = RoundedCornerShape(12.dp)
+                        shape = RoundedCornerShape(10.dp),
+                        border = BorderStroke(1.dp, QsColors.BorderStrong),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = QsColors.ElectricCyan)
                     ) {
-                        Text(stringResource(R.string.novapulse_change_license_btn))
+                        Text(
+                            text = stringResource(R.string.novapulse_sync_sub_btn),
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 12.sp,
+                            maxLines = 1,
+                        )
                     }
                 }
-                Spacer(Modifier.height(6.dp))
+
+                Spacer(Modifier.height(8.dp))
+
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     OutlinedButton(
-                        onClick = onScanLicenseQr,
-                        enabled = !state.isLoggingOut,
+                        onClick = { showChangeLicenseDialog = true },
                         modifier = Modifier.weight(1f),
-                        shape = RoundedCornerShape(12.dp)
+                        shape = RoundedCornerShape(10.dp),
+                        border = BorderStroke(1.dp, QsColors.BorderSubtle),
                     ) {
-                        Text(stringResource(R.string.novapulse_license_scan_qr))
+                        Text(
+                            text = stringResource(R.string.novapulse_change_license_btn),
+                            color = QsColors.TextPrimary,
+                            fontSize = 11.sp,
+                            maxLines = 1,
+                        )
                     }
                     OutlinedButton(
-                        onClick = { showLogoutConfirmDialog = true },
-                        enabled = !state.isLoggingOut,
-                        modifier = Modifier.weight(1f),
-                        shape = RoundedCornerShape(12.dp)
+                        onClick = onScanLicenseQr,
+                        modifier = Modifier.weight(0.75f),
+                        shape = RoundedCornerShape(10.dp),
+                        border = BorderStroke(1.dp, QsColors.BorderSubtle),
                     ) {
-                        if (state.isLoggingOut) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(16.dp),
-                                strokeWidth = 2.dp,
-                                color = QsColors.DangerCrimson
+                        Text(
+                            text = stringResource(R.string.qsn3d_scan_qr),
+                            color = QsColors.TextPrimary,
+                            fontSize = 11.sp,
+                            maxLines = 1,
+                        )
+                    }
+                }
+
+                Spacer(Modifier.height(8.dp))
+
+                OutlinedButton(
+                    onClick = { showLogoutConfirmDialog = true },
+                    enabled = !state.isLoggingOut,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(10.dp),
+                    border = BorderStroke(1.dp, QsColors.DangerCrimson.copy(alpha = 0.45f)),
+                ) {
+                    if (state.isLoggingOut) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            strokeWidth = 2.dp,
+                            color = QsColors.DangerCrimson
+                        )
+                        Spacer(Modifier.width(8.dp))
+                    }
+                    Text(
+                        text = stringResource(R.string.novapulse_logout_license_btn),
+                        color = QsColors.DangerCrimson,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 12.sp,
+                        maxLines = 1,
+                    )
+                }
+            }
+        }
+
+        // 2. Smart Routing & Telemetry Controls
+        item {
+            Glass3dCard {
+                Text(
+                    text = stringResource(R.string.qsn3d_smart_automation_title),
+                    color = QsColors.TextPrimary,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 15.sp
+                )
+                Spacer(Modifier.height(10.dp))
+
+                ToggleSettingRow(
+                    title = stringResource(R.string.novapulse_auto_failover_label),
+                    description = stringResource(R.string.novapulse_auto_failover_desc),
+                    checked = state.autoSmartFailover,
+                    onCheckedChange = onAutoSmartFailoverChange
+                )
+                HorizontalDivider(modifier = Modifier.padding(vertical = 9.dp), color = QsColors.BorderSubtle.copy(alpha = 0.6f))
+                ToggleSettingRow(
+                    title = stringResource(R.string.qsn3d_auto_discovery_label),
+                    description = stringResource(R.string.qsn3d_auto_discovery_desc),
+                    checked = state.autoPostConnectDiscovery,
+                    onCheckedChange = onAutoDiscoveryChange
+                )
+                HorizontalDivider(modifier = Modifier.padding(vertical = 9.dp), color = QsColors.BorderSubtle.copy(alpha = 0.6f))
+                ToggleSettingRow(
+                    title = stringResource(R.string.qsn3d_auto_2h_optimize_label),
+                    description = stringResource(R.string.qsn3d_auto_2h_optimize_desc),
+                    checked = state.auto2hOptimize,
+                    onCheckedChange = onAuto2hOptimizeChange
+                )
+                HorizontalDivider(modifier = Modifier.padding(vertical = 9.dp), color = QsColors.BorderSubtle.copy(alpha = 0.6f))
+                ToggleSettingRow(
+                    title = stringResource(R.string.novapulse_speed_display_label),
+                    description = stringResource(R.string.novapulse_speed_display_desc),
+                    checked = state.speedDisplayEnabled,
+                    onCheckedChange = onSpeedDisplayChange
+                )
+
+                if (state.lastOptimizeAt > 0L) {
+                    val dt = DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT, Locale.getDefault())
+                        .format(Date(state.lastOptimizeAt))
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        text = stringResource(R.string.novapulse_last_opt_fmt, dt, "${state.lastOptimizeUploadKBps} KB/s"),
+                        style = QsTextStyles.TabularStat,
+                        color = QsColors.AuroraMint,
+                        fontSize = 11.sp
+                    )
+                }
+            }
+        }
+
+        // 3. Per-App Split Tunneling (with dedicated Expand / Collapse button right beside it)
+        item {
+            Glass3dCard {
+                Text(
+                    text = stringResource(R.string.title_pref_per_app_proxy),
+                    color = QsColors.TextPrimary,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 15.sp
+                )
+                Spacer(Modifier.height(8.dp))
+                ToggleSettingRow(
+                    title = stringResource(R.string.per_app_proxy_settings_enable),
+                    description = stringResource(R.string.qsn3d_per_app_desc),
+                    checked = perAppEnabled,
+                    onCheckedChange = { enabled ->
+                        onPerAppEnabledChange(enabled)
+                        if (!enabled) showPerAppList = false
+                    }
+                )
+
+                if (perAppEnabled) {
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 9.dp), color = QsColors.BorderSubtle.copy(alpha = 0.6f))
+                    ToggleSettingRow(
+                        title = stringResource(R.string.switch_bypass_apps_mode),
+                        description = if (perAppBypass) {
+                            stringResource(R.string.novapulse_per_app_summary_bypass_fmt, selectedApps.size)
+                        } else {
+                            stringResource(R.string.novapulse_per_app_summary_proxy_fmt, selectedApps.size)
+                        },
+                        checked = perAppBypass,
+                        onCheckedChange = onPerAppBypassChange
+                    )
+
+                    Spacer(Modifier.height(10.dp))
+
+                    // Explicit Collapse / Expand Toggle beside Search
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Button(
+                            onClick = { showPerAppList = !showPerAppList },
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(10.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = if (showPerAppList) QsColors.SurfaceInset else QsColors.ElectricCyan.copy(alpha = 0.16f),
+                                contentColor = QsColors.ElectricCyan,
+                            ),
+                            border = BorderStroke(1.dp, QsColors.ElectricCyan.copy(alpha = 0.40f)),
+                        ) {
+                            Text(
+                                text = if (showPerAppList) {
+                                    stringResource(R.string.novapulse_per_app_hide_list)
+                                } else {
+                                    stringResource(R.string.novapulse_per_app_show_list_fmt, selectedApps.size)
+                                },
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
                             )
-                            Spacer(Modifier.width(6.dp))
                         }
-                        Text(stringResource(R.string.novapulse_logout_license_btn), color = QsColors.DangerCrimson)
+                    }
+
+                    if (showPerAppList) {
+                        Spacer(Modifier.height(10.dp))
+                        OutlinedTextField(
+                            value = appQuery,
+                            onValueChange = {
+                                appQuery = it
+                                onSearchApps(it)
+                            },
+                            placeholder = {
+                                Text(stringResource(R.string.qsn3d_search_apps_hint), color = QsColors.TextMuted, fontSize = 12.sp)
+                            },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = QsColors.ElectricCyan,
+                                unfocusedBorderColor = QsColors.BorderSubtle,
+                                focusedContainerColor = QsColors.SurfaceInset,
+                                unfocusedContainerColor = QsColors.SurfaceInset,
+                                focusedTextColor = QsColors.TextPrimary,
+                                unfocusedTextColor = QsColors.TextPrimary,
+                            ),
+                            shape = RoundedCornerShape(10.dp),
+                        )
                     }
                 }
             }
         }
 
-        // 1.5 Standalone Promo, Guide & Support Telegram Entry Card
+        if (perAppEnabled && showPerAppList) {
+            if (appsLoading) {
+                item {
+                    Box(modifier = Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator(color = QsColors.ElectricCyan)
+                    }
+                }
+            } else {
+                items(apps, key = { it.packageName }) { app ->
+                    AppListItem(
+                        appName = app.appName,
+                        packageName = app.packageName,
+                        icon = null,
+                        checked = selectedApps.contains(app.packageName),
+                        onCheckedChange = { onToggleApp(app.packageName) }
+                    )
+                }
+            }
+        }
+
+        // 4. Diagnostics & Live Redacted Logs
         item {
-            Glass3dCard(beamSeed = 17, glowColor = QsColors.AuroraMint.copy(alpha = 0.40f)) {
+            Glass3dCard {
+                Text(
+                    text = stringResource(R.string.novapulse_logs_section_title),
+                    color = QsColors.TextPrimary,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 15.sp
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    text = stringResource(R.string.novapulse_logs_section_desc),
+                    color = QsColors.TextSecondary,
+                    fontSize = 12.sp,
+                    lineHeight = 18.sp,
+                )
+                Spacer(Modifier.height(10.dp))
+                OutlinedButton(
+                    onClick = onOpenLogs,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(10.dp),
+                    border = BorderStroke(1.dp, QsColors.BorderStrong),
+                ) {
+                    Text(
+                        text = stringResource(R.string.novapulse_logs_open_btn),
+                        color = QsColors.ElectricCyan,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 12.sp,
+                    )
+                }
+            }
+        }
+
+        // 5. Language Selector
+        item {
+            Glass3dCard {
+                Text(
+                    text = stringResource(R.string.qsn3d_language_title),
+                    color = QsColors.TextPrimary,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 14.sp
+                )
+                Spacer(Modifier.height(10.dp))
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(QsColors.SurfaceInset)
+                        .border(1.dp, QsColors.BorderSubtle, RoundedCornerShape(10.dp))
+                        .padding(4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    val isFa = state.currentLanguageCode == "fa" || state.currentLanguageCode == "auto"
+                    LanguageSegmentOption(
+                        label = "فارسی",
+                        selected = isFa,
+                        onClick = { onLanguageSelected("fa") },
+                        modifier = Modifier.weight(1f),
+                    )
+                    LanguageSegmentOption(
+                        label = "English",
+                        selected = state.currentLanguageCode == "en",
+                        onClick = { onLanguageSelected("en") },
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+            }
+        }
+
+        // 6. App Version & Self-Update
+        item {
+            val upd = state.availableUpdate
+            val hasUpd = upd?.hasUpdate == true && !upd.latestVersion.isNullOrBlank()
+            val abiLabel = Build.SUPPORTED_ABIS.firstOrNull().orEmpty().ifBlank { "arm64-v8a" }
+
+            Glass3dCard(
+                glowColor = if (hasUpd) QsColors.AuroraMint.copy(alpha = 0.42f) else QsColors.BorderSubtle
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = stringResource(R.string.novapulse_update_card_title),
+                            color = QsColors.TextPrimary,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 15.sp
+                        )
+                        Spacer(Modifier.height(3.dp))
+                        Text(
+                            text = stringResource(R.string.novapulse_update_current_ver_fmt, BuildConfig.VERSION_NAME, abiLabel),
+                            style = QsTextStyles.MonoCode,
+                            color = QsColors.TextSecondary,
+                            fontSize = 11.sp
+                        )
+                    }
+
+                    val pillColor = if (hasUpd) QsColors.AuroraMint else QsColors.ElectricCyan
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = pillColor.copy(alpha = 0.14f),
+                        border = BorderStroke(1.dp, pillColor.copy(alpha = 0.40f)),
+                    ) {
+                        Text(
+                            text = if (hasUpd) {
+                                "${stringResource(R.string.novapulse_update_badge_new)} v${upd?.latestVersion}"
+                            } else {
+                                stringResource(R.string.novapulse_update_badge_up_to_date)
+                            },
+                            color = pillColor,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                        )
+                    }
+                }
+
+                Spacer(Modifier.height(10.dp))
+
+                if (hasUpd) {
+                    Button(
+                        onClick = onOpenAvailableUpdate,
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(10.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = QsColors.AuroraMint,
+                            contentColor = Color(0xFF04151E),
+                        )
+                    ) {
+                        Text(
+                            text = stringResource(R.string.novapulse_update_available_title_fmt, upd?.latestVersion.orEmpty()),
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 12.sp,
+                        )
+                    }
+                    Spacer(Modifier.height(6.dp))
+                }
+
+                OutlinedButton(
+                    onClick = onCheckUpdates,
+                    enabled = !state.isCheckingUpdate,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(10.dp),
+                    border = BorderStroke(1.dp, QsColors.BorderStrong),
+                ) {
+                    if (state.isCheckingUpdate) {
+                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp, color = QsColors.ElectricCyan)
+                        Spacer(Modifier.width(8.dp))
+                        Text(stringResource(R.string.novapulse_update_checking), color = QsColors.ElectricCyan, fontSize = 12.sp)
+                    } else {
+                        Text(stringResource(R.string.novapulse_update_check_btn), color = QsColors.ElectricCyan, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                    }
+                }
+            }
+        }
+
+        // 7. Guide, Official Channel & Telegram Support
+        item {
+            Glass3dCard {
                 Text(
                     text = stringResource(R.string.novapulse_promo_card_title),
                     color = QsColors.TextPrimary,
@@ -206,267 +584,14 @@ fun Qs3dSettingsScreen(
                 OutlinedButton(
                     onClick = onOpenAboutPromo,
                     modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(12.dp)
+                    shape = RoundedCornerShape(10.dp),
+                    border = BorderStroke(1.dp, QsColors.AuroraMint.copy(alpha = 0.45f)),
                 ) {
                     Text(
                         text = stringResource(R.string.novapulse_open_promo_guide_btn),
                         color = QsColors.AuroraMint,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                }
-            }
-        }
-
-        // 1.7 App Version & Self-Updater Card
-        item {
-            val deviceAbi = Build.SUPPORTED_ABIS?.firstOrNull() ?: "arm64-v8a"
-            val updateInfo = state.availableUpdate
-            val hasUpdate = updateInfo?.hasUpdate == true && !updateInfo.latestVersion.isNullOrBlank()
-            Glass3dCard(
-                beamSeed = 23,
-                glowColor = if (hasUpdate) QsColors.AuroraMint.copy(alpha = 0.55f) else QsColors.ElectricCyan.copy(alpha = 0.42f)
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        text = stringResource(R.string.novapulse_update_card_title),
-                        color = QsColors.TextPrimary,
                         fontWeight = FontWeight.Bold,
-                        fontSize = 15.sp
-                    )
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(999.dp))
-                            .background(
-                                if (hasUpdate) QsColors.AuroraMint.copy(alpha = 0.20f)
-                                else QsColors.ConnectedEmerald.copy(alpha = 0.18f)
-                            )
-                            .border(
-                                0.8.dp,
-                                if (hasUpdate) QsColors.AuroraMint.copy(alpha = 0.60f)
-                                else QsColors.ConnectedEmerald.copy(alpha = 0.50f),
-                                RoundedCornerShape(999.dp),
-                            )
-                            .padding(horizontal = 9.dp, vertical = 3.dp)
-                    ) {
-                        Text(
-                            text = if (hasUpdate) {
-                                stringResource(R.string.novapulse_update_badge_new)
-                            } else {
-                                stringResource(R.string.novapulse_update_badge_up_to_date)
-                            },
-                            color = if (hasUpdate) QsColors.AuroraMint else QsColors.ConnectedEmerald,
-                            fontSize = 10.5.sp,
-                            fontWeight = FontWeight.ExtraBold,
-                        )
-                    }
-                }
-                Spacer(Modifier.height(6.dp))
-                Text(
-                    text = stringResource(
-                        R.string.novapulse_update_current_ver_fmt,
-                        "v${BuildConfig.VERSION_NAME}",
-                        deviceAbi
-                    ),
-                    color = QsColors.TextSecondary,
-                    fontSize = 12.sp
-                )
-                if (hasUpdate && updateInfo != null) {
-                    Spacer(Modifier.height(10.dp))
-                    Button(
-                        onClick = onOpenAvailableUpdate,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(
-                                Brush.horizontalGradient(
-                                    listOf(QsColors.AuroraMint, QsColors.ElectricCyan)
-                                )
-                            ),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = Color.Transparent,
-                            contentColor = QsColors.DeepVoid,
-                        ),
-                        shape = RoundedCornerShape(12.dp),
-                        contentPadding = PaddingValues(vertical = 11.dp),
-                    ) {
-                        Text(
-                            text = stringResource(
-                                R.string.novapulse_update_available_banner_fmt,
-                                updateInfo.latestVersion ?: ""
-                            ),
-                            color = QsColors.DeepVoid,
-                            fontWeight = FontWeight.ExtraBold,
-                            fontSize = 13.sp,
-                        )
-                    }
-                }
-                Spacer(Modifier.height(10.dp))
-                OutlinedButton(
-                    onClick = onCheckUpdates,
-                    enabled = !state.isCheckingUpdate,
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(12.dp),
-                    border = BorderStroke(1.dp, QsColors.ElectricCyan.copy(alpha = 0.45f)),
-                ) {
-                    if (state.isCheckingUpdate) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(16.dp),
-                            strokeWidth = 2.dp,
-                            color = QsColors.ElectricCyan
-                        )
-                        Spacer(Modifier.width(8.dp))
-                        Text(
-                            text = stringResource(R.string.novapulse_update_checking),
-                            color = QsColors.ElectricCyan
-                        )
-                    } else {
-                        Text(
-                            text = stringResource(R.string.novapulse_update_check_btn),
-                            color = QsColors.ElectricCyan,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                    }
-                }
-            }
-        }
-
-        // 2. Smart Engine & Speed HUD Preferences
-        item {
-            Glass3dCard(glowColor = QsColors.ElectricCyan.copy(alpha = 0.35f)) {
-                Text(
-                    text = stringResource(R.string.qsn3d_smart_automation_title),
-                    color = QsColors.TextPrimary,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 15.sp
-                )
-                Spacer(Modifier.height(10.dp))
-
-                ToggleSettingRow(
-                    title = stringResource(R.string.novapulse_speed_display_label),
-                    description = stringResource(R.string.novapulse_speed_display_desc),
-                    checked = state.speedDisplayEnabled,
-                    onCheckedChange = onSpeedDisplayChange
-                )
-
-                HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp), color = Color.White.copy(alpha = 0.08f))
-
-                ToggleSettingRow(
-                    title = stringResource(R.string.qsn3d_auto_discovery_label),
-                    description = stringResource(R.string.qsn3d_auto_discovery_desc),
-                    checked = state.autoPostConnectDiscovery,
-                    onCheckedChange = onAutoDiscoveryChange
-                )
-
-                HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp), color = Color.White.copy(alpha = 0.08f))
-
-                ToggleSettingRow(
-                    title = stringResource(R.string.qsn3d_auto_2h_optimize_label),
-                    description = stringResource(R.string.qsn3d_auto_2h_optimize_desc),
-                    checked = state.auto2hOptimize,
-                    onCheckedChange = onAuto2hOptimizeChange
-                )
-
-                HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp), color = Color.White.copy(alpha = 0.08f))
-
-                ToggleSettingRow(
-                    title = stringResource(R.string.novapulse_auto_failover_label),
-                    description = stringResource(R.string.novapulse_auto_failover_desc),
-                    checked = state.autoSmartFailover,
-                    onCheckedChange = onAutoSmartFailoverChange
-                )
-
-                if (state.lastOptimizeAt > 0L) {
-                    val dt = DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT, Locale.getDefault())
-                        .format(Date(state.lastOptimizeAt))
-                    Spacer(Modifier.height(6.dp))
-                    Text(
-                        text = stringResource(R.string.novapulse_last_opt_fmt, dt, "${state.lastOptimizeUploadKBps} KB/s"),
-                        color = QsColors.AuroraMint,
-                        fontSize = 11.sp
-                    )
-                }
-            }
-        }
-
-        // 3. Language Selector Card (Persian Default)
-        item {
-            Glass3dCard(glowColor = QsColors.AuroraMint.copy(alpha = 0.25f)) {
-                Text(
-                    text = stringResource(R.string.qsn3d_language_title),
-                    color = QsColors.TextPrimary,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 14.sp
-                )
-                Spacer(Modifier.height(8.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    FilterChip(
-                        selected = state.currentLanguageCode == "fa" || state.currentLanguageCode == "auto",
-                        onClick = { onLanguageSelected("fa") },
-                        label = { Text("فارسی (پیش‌فرض)") }
-                    )
-                    FilterChip(
-                        selected = state.currentLanguageCode == "en",
-                        onClick = { onLanguageSelected("en") },
-                        label = { Text("English") }
-                    )
-                }
-            }
-        }
-
-        // 4. Per-App Split Tunneling Card
-        item {
-            Glass3dCard(glowColor = QsColors.CloudFrontSky.copy(alpha = 0.28f)) {
-                Text(
-                    text = stringResource(R.string.title_pref_per_app_proxy),
-                    color = QsColors.TextPrimary,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 15.sp
-                )
-                Spacer(Modifier.height(8.dp))
-                ToggleSettingRow(
-                    title = stringResource(R.string.per_app_proxy_settings_enable),
-                    description = null,
-                    checked = perAppEnabled,
-                    onCheckedChange = onPerAppEnabledChange
-                )
-                if (perAppEnabled) {
-                    Spacer(Modifier.height(6.dp))
-                    ToggleSettingRow(
-                        title = stringResource(R.string.switch_bypass_apps_mode),
-                        description = null,
-                        checked = perAppBypass,
-                        onCheckedChange = onPerAppBypassChange
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    OutlinedTextField(
-                        value = appQuery,
-                        onValueChange = {
-                            appQuery = it
-                            onSearchApps(it)
-                        },
-                        placeholder = { Text(stringResource(R.string.qsn3d_search_apps_hint)) },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
-            }
-        }
-
-        if (perAppEnabled) {
-            if (appsLoading) {
-                item { CircularProgressIndicator() }
-            } else {
-                items(apps, key = { it.packageName }) { app ->
-                    AppListItem(
-                        appName = app.appName,
-                        packageName = app.packageName,
-                        icon = null,
-                        checked = selectedApps.contains(app.packageName),
-                        onCheckedChange = { onToggleApp(app.packageName) }
+                        fontSize = 12.sp,
                     )
                 }
             }
@@ -476,12 +601,15 @@ fun Qs3dSettingsScreen(
     if (showChangeLicenseDialog) {
         AlertDialog(
             onDismissRequest = { showChangeLicenseDialog = false },
+            containerColor = QsColors.SurfaceElevated,
+            titleContentColor = QsColors.TextPrimary,
+            textContentColor = QsColors.TextPrimary,
             title = { Text(stringResource(R.string.novapulse_change_license_btn)) },
             text = {
                 OutlinedTextField(
                     value = licenseDraft,
                     onValueChange = { licenseDraft = it },
-                    placeholder = { Text("NP-XXXX-XXXX-XXXX") },
+                    placeholder = { Text("NP-XXXX-XXXX-XXXX", color = QsColors.TextMuted) },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -506,14 +634,20 @@ fun Qs3dSettingsScreen(
     if (showLogoutConfirmDialog) {
         AlertDialog(
             onDismissRequest = { showLogoutConfirmDialog = false },
+            containerColor = QsColors.SurfaceElevated,
+            titleContentColor = QsColors.TextPrimary,
+            textContentColor = QsColors.TextSecondary,
             title = { Text(stringResource(R.string.novapulse_logout_confirm_title)) },
             text = { Text(stringResource(R.string.novapulse_logout_confirm_body)) },
             confirmButton = {
-                Button(onClick = {
-                    showLogoutConfirmDialog = false
-                    onLogoutLicense()
-                }) {
-                    Text(stringResource(R.string.novapulse_logout_license_btn))
+                Button(
+                    onClick = {
+                        showLogoutConfirmDialog = false
+                        onLogoutLicense()
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = QsColors.DangerCrimson),
+                ) {
+                    Text(stringResource(R.string.novapulse_logout_license_btn), color = Color.White)
                 }
             },
             dismissButton = {
@@ -522,6 +656,35 @@ fun Qs3dSettingsScreen(
                 }
             }
         )
+    }
+}
+
+@Composable
+private fun LanguageSegmentOption(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        modifier = modifier
+            .clip(RoundedCornerShape(8.dp))
+            .clickable(onClick = onClick),
+        shape = RoundedCornerShape(8.dp),
+        color = if (selected) QsColors.SurfaceElevated else Color.Transparent,
+        border = if (selected) BorderStroke(1.dp, QsColors.BorderStrong) else null,
+    ) {
+        Box(
+            modifier = Modifier.padding(vertical = 8.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                text = label,
+                color = if (selected) QsColors.ElectricCyan else QsColors.TextSecondary,
+                fontSize = 12.sp,
+                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+            )
+        }
     }
 }
 
@@ -537,21 +700,35 @@ private fun ToggleSettingRow(
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+        Column(modifier = Modifier.weight(1f).padding(end = 10.dp)) {
             Text(
                 text = title,
                 color = QsColors.TextPrimary,
                 fontSize = 13.sp,
-                fontWeight = FontWeight.SemiBold
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
             )
             if (!description.isNullOrBlank()) {
+                Spacer(Modifier.height(2.dp))
                 Text(
                     text = description,
                     color = QsColors.TextSecondary,
-                    fontSize = 11.sp
+                    fontSize = 11.sp,
+                    lineHeight = 16.sp,
                 )
             }
         }
-        Switch(checked = checked, onCheckedChange = onCheckedChange)
+        Switch(
+            checked = checked,
+            onCheckedChange = onCheckedChange,
+            colors = SwitchDefaults.colors(
+                checkedThumbColor = Color(0xFF04151E),
+                checkedTrackColor = QsColors.ElectricCyan,
+                uncheckedThumbColor = QsColors.TextSecondary,
+                uncheckedTrackColor = QsColors.SurfaceInset,
+                uncheckedBorderColor = QsColors.BorderStrong,
+            )
+        )
     }
 }

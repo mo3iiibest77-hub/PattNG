@@ -1,8 +1,11 @@
 package com.v2ray.ang.ui.qsn3d
 
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -13,20 +16,25 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
-import androidx.compose.material3.FilterChip
+import androidx.compose.material3.CheckboxDefaults
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -35,26 +43,24 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
 import com.v2ray.ang.R
-import com.v2ray.ang.senpai.CdnType
 import com.v2ray.ang.senpai.ConfigListBucket
 import com.v2ray.ang.senpai.ConfigPipeline
-import com.v2ray.ang.util.Utils
 
 /**
- * Privacy-hardened dual-pipeline NovaPulse Server List:
- * - Strictly separates CDN nodes (Cloudflare / CloudFront) from Standard v2rayNG protocols
- *   (XHTTP REALITY, TCP REALITY, Hysteria2, VMess, Trojan, SS, WireGuard, etc.)
- * - Zero raw IP / domain / port / credential leaks in the UI
- * - Allows importing custom Standard/REALITY configs (when licensed) alongside subscription nodes
- * - Keeps Search, Test All Delays, Sort by Ping, Bulk Select/Delete
+ * Redesigned Servers / Configs Screen:
+ * - Clean single-track segmented switcher (`All | CDN | Direct`) instead of generic boxy chips
+ * - Dedicated top Search + Add Config bar without visual clutter
+ * - Crisp server rows with left/right active indicator bar, pipeline badge & tabular delay badge
  */
 @Composable
 fun Qs3dConfigsScreen(
@@ -71,352 +77,553 @@ fun Qs3dConfigsScreen(
     onImportManualConfig: (String) -> Unit,
     onScanConfigQr: () -> Unit,
 ) {
-    val context = LocalContext.current
-    var bulkMode by remember { mutableStateOf(false) }
     var showAddDialog by remember { mutableStateOf(false) }
-    var manualDraft by remember { mutableStateOf("") }
 
+    val allCount = state.configs.size
     val cdnCount = state.configs.count { it.pipeline == ConfigPipeline.CDN }
     val stdCount = state.configs.count { it.pipeline == ConfigPipeline.STANDARD }
 
     val cdnRows = filteredConfigs.filter { it.pipeline == ConfigPipeline.CDN }
     val stdRows = filteredConfigs.filter { it.pipeline == ConfigPipeline.STANDARD }
 
-    LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(horizontal = 16.dp)
     ) {
-        // 1. Search Bar, Pipeline Bucket Filter Chips & Action Strip
-        item {
-            Glass3dCard(glowColor = QsColors.ElectricCyan.copy(alpha = 0.30f)) {
-                OutlinedTextField(
-                    value = state.configSearchQuery,
-                    onValueChange = onSearchChange,
-                    placeholder = { Text(stringResource(R.string.novapulse_search_servers_hint)) },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(10.dp))
 
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+        // Search + Dedicated Add Config Button
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            OutlinedTextField(
+                value = state.configSearchQuery,
+                onValueChange = onSearchChange,
+                modifier = Modifier.weight(1f),
+                singleLine = true,
+                placeholder = {
+                    Text(
+                        text = stringResource(R.string.novapulse_search_servers_hint),
+                        color = QsColors.TextMuted,
+                        fontSize = 13.sp,
+                    )
+                },
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = QsColors.ElectricCyan,
+                    unfocusedBorderColor = QsColors.BorderSubtle,
+                    focusedContainerColor = QsColors.SurfaceInset,
+                    unfocusedContainerColor = QsColors.SurfaceInset,
+                    focusedTextColor = QsColors.TextPrimary,
+                    unfocusedTextColor = QsColors.TextPrimary,
+                ),
+                shape = RoundedCornerShape(12.dp),
+            )
+
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = QsColors.ElectricCyan.copy(alpha = 0.14f),
+                border = BorderStroke(1.dp, QsColors.ElectricCyan.copy(alpha = 0.45f)),
+                modifier = Modifier
+                    .height(50.dp)
+                    .clickable { showAddDialog = true },
+            ) {
+                Box(
+                    modifier = Modifier.padding(horizontal = 12.dp),
+                    contentAlignment = Alignment.Center,
                 ) {
-                    FilterChip(
-                        selected = state.configBucket == ConfigListBucket.ALL,
-                        onClick = { onBucketChange(ConfigListBucket.ALL) },
-                        label = { Text(stringResource(R.string.novapulse_configs_tab_all, state.configs.size)) }
-                    )
-                    FilterChip(
-                        selected = state.configBucket == ConfigListBucket.CDN,
-                        onClick = { onBucketChange(ConfigListBucket.CDN) },
-                        label = { Text(stringResource(R.string.novapulse_configs_tab_cdn, cdnCount)) }
-                    )
-                    FilterChip(
-                        selected = state.configBucket == ConfigListBucket.STANDARD,
-                        onClick = { onBucketChange(ConfigListBucket.STANDARD) },
-                        label = { Text(stringResource(R.string.novapulse_configs_tab_standard, stdCount)) }
+                    Text(
+                        text = stringResource(R.string.novapulse_add_config_btn),
+                        color = QsColors.ElectricCyan,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
                     )
                 }
+            }
+        }
 
-                Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(10.dp))
 
+        // Unified Segmented Pipeline Switcher (Anti-Slop single track)
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(12.dp))
+                .background(QsColors.SurfaceInset)
+                .border(1.dp, QsColors.BorderSubtle, RoundedCornerShape(12.dp))
+                .padding(4.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            SegmentBucketTab(
+                label = stringResource(R.string.novapulse_configs_tab_all, allCount),
+                selected = state.configBucket == ConfigListBucket.ALL,
+                onClick = { onBucketChange(ConfigListBucket.ALL) },
+                modifier = Modifier.weight(1f),
+            )
+            SegmentBucketTab(
+                label = stringResource(R.string.novapulse_configs_tab_cdn, cdnCount),
+                selected = state.configBucket == ConfigListBucket.CDN,
+                onClick = { onBucketChange(ConfigListBucket.CDN) },
+                modifier = Modifier.weight(1f),
+            )
+            SegmentBucketTab(
+                label = stringResource(R.string.novapulse_configs_tab_standard, stdCount),
+                selected = state.configBucket == ConfigListBucket.STANDARD,
+                onClick = { onBucketChange(ConfigListBucket.STANDARD) },
+                modifier = Modifier.weight(1f),
+            )
+        }
+
+        Spacer(Modifier.height(10.dp))
+
+        // Compact Utilities Strip OR Bulk Selection Action Bar
+        if (state.bulkSelectedGuids.isNotEmpty()) {
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(12.dp),
+                color = QsColors.DangerCrimson.copy(alpha = 0.10f),
+                border = BorderStroke(1.dp, QsColors.DangerCrimson.copy(alpha = 0.35f)),
+            ) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    OutlinedButton(onClick = {
-                        manualDraft = ""
-                        showAddDialog = true
-                    }) {
-                        Text(
-                            text = stringResource(R.string.novapulse_add_config_btn),
-                            color = QsColors.ElectricCyan
-                        )
-                    }
-                    OutlinedButton(onClick = onTestAllDelays) {
-                        Text(
-                            if (state.isDelayTestingAll) stringResource(R.string.qsn3d_stop_fmt, state.delayTestProgress)
-                            else stringResource(R.string.qsn3d_test_all)
-                        )
-                    }
-                    OutlinedButton(onClick = onSortByDelay) {
-                        Text(stringResource(R.string.qsn3d_sort_ping))
-                    }
-                    OutlinedButton(
-                        onClick = {
-                            bulkMode = !bulkMode
-                            if (!bulkMode) onClearBulkSelection()
+                    Text(
+                        text = "${state.bulkSelectedGuids.size} ${stringResource(R.string.qsn3d_selected)}",
+                        style = QsTextStyles.TabularStat,
+                        color = QsColors.TextPrimary,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        TextButton(onClick = onClearBulkSelection) {
+                            Text(stringResource(R.string.qsn3d_cancel), color = QsColors.TextSecondary, fontSize = 12.sp)
                         }
-                    ) {
-                        Text(
-                            if (bulkMode) stringResource(R.string.qsn3d_done_bulk)
-                            else stringResource(R.string.qsn3d_bulk_select)
-                        )
-                    }
-                    if (bulkMode && state.bulkSelectedGuids.isNotEmpty()) {
-                        OutlinedButton(onClick = onDeleteBulkSelected) {
+                        Button(
+                            onClick = onDeleteBulkSelected,
+                            shape = RoundedCornerShape(8.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = QsColors.DangerCrimson),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                        ) {
                             Text(
                                 text = stringResource(R.string.qsn3d_delete_count_fmt, state.bulkSelectedGuids.size),
-                                color = QsColors.DangerCrimson
+                                color = Color.White,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
                             )
                         }
                     }
                 }
             }
-        }
-
-        // 2. CDN Optimized Section
-        if (cdnRows.isNotEmpty()) {
-            if (state.configBucket == ConfigListBucket.ALL) {
-                item(key = "section_hdr_cdn") {
-                    ConfigPipelineSectionHeader(
-                        title = stringResource(R.string.novapulse_configs_section_cdn),
-                        count = cdnRows.size,
-                        accent = QsColors.CloudflareOrange,
-                    )
-                }
-            }
-            items(cdnRows, key = { "cdn_${it.guid}" }) { row ->
-                ConfigRowCard(
-                    row = row,
-                    isSelected = row.guid == state.selectedGuid,
-                    coreRunning = state.coreRunning,
-                    bulkMode = bulkMode,
-                    isBulkChecked = row.guid in state.bulkSelectedGuids,
-                    onClick = {
-                        if (bulkMode) onToggleBulkSelect(row.guid) else onSelectConfig(row.guid)
-                    },
-                    onToggleBulk = { onToggleBulkSelect(row.guid) },
+        } else {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                UtilityActionButton(
+                    label = if (state.isDelayTestingAll) state.delayTestProgress.ifBlank { "…" }
+                    else stringResource(R.string.qsn3d_test_all),
+                    enabled = !state.isDelayTestingAll,
+                    onClick = onTestAllDelays,
+                    modifier = Modifier.weight(1f),
+                )
+                UtilityActionButton(
+                    label = stringResource(R.string.qsn3d_sort_delay),
+                    enabled = true,
+                    onClick = onSortByDelay,
+                    modifier = Modifier.weight(1f),
                 )
             }
         }
 
-        // 3. Standard / Direct v2rayNG Protocols Section (REALITY, Hysteria2, VMess, Trojan, SS...)
-        if (stdRows.isNotEmpty()) {
-            if (state.configBucket == ConfigListBucket.ALL) {
-                item(key = "section_hdr_std") {
-                    ConfigPipelineSectionHeader(
-                        title = stringResource(R.string.novapulse_configs_section_standard),
-                        count = stdRows.size,
-                        accent = QsColors.PlasmaViolet,
+        if (state.isDelayTestingAll) {
+            Spacer(Modifier.height(6.dp))
+            LinearProgressIndicator(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(3.dp)
+                    .clip(RoundedCornerShape(999.dp)),
+                color = QsColors.ElectricCyan,
+                trackColor = QsColors.SurfaceInset,
+            )
+        }
+
+        Spacer(Modifier.height(10.dp))
+
+        // Server List
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(bottom = 18.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            if (state.configBucket != ConfigListBucket.STANDARD && cdnRows.isNotEmpty()) {
+                item(key = "hdr_cdn") {
+                    Text(
+                        text = stringResource(R.string.novapulse_configs_section_cdn),
+                        color = QsColors.TextSecondary,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(top = 4.dp, bottom = 2.dp),
+                    )
+                }
+                items(cdnRows, key = { it.guid }) { cfg ->
+                    ServerNodeRow(
+                        cfg = cfg,
+                        selected = cfg.guid == state.selectedGuid,
+                        running = cfg.guid == state.selectedGuid && state.coreRunning,
+                        inBulkMode = state.bulkSelectedGuids.isNotEmpty(),
+                        bulkChecked = cfg.guid in state.bulkSelectedGuids,
+                        onClick = {
+                            if (state.bulkSelectedGuids.isNotEmpty()) onToggleBulkSelect(cfg.guid)
+                            else onSelectConfig(cfg.guid)
+                        },
+                        onLongClick = { onToggleBulkSelect(cfg.guid) },
                     )
                 }
             }
-            items(stdRows, key = { "std_${it.guid}" }) { row ->
-                ConfigRowCard(
-                    row = row,
-                    isSelected = row.guid == state.selectedGuid,
-                    coreRunning = state.coreRunning,
-                    bulkMode = bulkMode,
-                    isBulkChecked = row.guid in state.bulkSelectedGuids,
-                    onClick = {
-                        if (bulkMode) onToggleBulkSelect(row.guid) else onSelectConfig(row.guid)
-                    },
-                    onToggleBulk = { onToggleBulkSelect(row.guid) },
-                )
+
+            if (state.configBucket != ConfigListBucket.CDN && stdRows.isNotEmpty()) {
+                item(key = "hdr_std") {
+                    Text(
+                        text = stringResource(R.string.novapulse_configs_section_standard),
+                        color = QsColors.TextSecondary,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(top = 8.dp, bottom = 2.dp),
+                    )
+                }
+                items(stdRows, key = { it.guid }) { cfg ->
+                    ServerNodeRow(
+                        cfg = cfg,
+                        selected = cfg.guid == state.selectedGuid,
+                        running = cfg.guid == state.selectedGuid && state.coreRunning,
+                        inBulkMode = state.bulkSelectedGuids.isNotEmpty(),
+                        bulkChecked = cfg.guid in state.bulkSelectedGuids,
+                        onClick = {
+                            if (state.bulkSelectedGuids.isNotEmpty()) onToggleBulkSelect(cfg.guid)
+                            else onSelectConfig(cfg.guid)
+                        },
+                        onLongClick = { onToggleBulkSelect(cfg.guid) },
+                    )
+                }
             }
         }
     }
 
     if (showAddDialog) {
-        AlertDialog(
-            onDismissRequest = { showAddDialog = false },
-            title = { Text(stringResource(R.string.novapulse_add_config_title)) },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(
-                        value = manualDraft,
-                        onValueChange = { manualDraft = it },
-                        placeholder = { Text(stringResource(R.string.novapulse_add_config_hint), fontSize = 12.sp) },
-                        minLines = 3,
-                        maxLines = 6,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedButton(onClick = {
-                            val clip = Utils.getClipboard(context).trim()
-                            if (clip.isNotEmpty()) {
-                                manualDraft = if (manualDraft.isBlank()) clip else "$manualDraft\n$clip"
-                            }
-                        }) {
-                            Text(stringResource(R.string.novapulse_add_config_paste_btn))
-                        }
-                        OutlinedButton(onClick = {
-                            showAddDialog = false
-                            onScanConfigQr()
-                        }) {
-                            Text(stringResource(R.string.novapulse_add_config_scan_qr_btn))
-                        }
-                    }
-                }
+        AddManualConfigDialog(
+            onDismiss = { showAddDialog = false },
+            onImport = { raw ->
+                onImportManualConfig(raw)
+                showAddDialog = false
             },
-            confirmButton = {
-                Button(
-                    enabled = manualDraft.isNotBlank(),
-                    onClick = {
-                        val payload = manualDraft
-                        showAddDialog = false
-                        onImportManualConfig(payload)
-                    }
-                ) {
-                    Text(stringResource(R.string.novapulse_add_config_save_btn))
-                }
+            onScanQr = {
+                showAddDialog = false
+                onScanConfigQr()
             },
-            dismissButton = {
-                TextButton(onClick = { showAddDialog = false }) {
-                    Text(stringResource(R.string.novapulse_add_config_cancel_btn))
-                }
-            }
         )
     }
 }
 
 @Composable
-private fun ConfigPipelineSectionHeader(
-    title: String,
-    count: Int,
-    accent: Color,
+private fun SegmentBucketTab(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
-    Row(
+    Surface(
+        modifier = modifier
+            .clip(RoundedCornerShape(9.dp))
+            .clickable(onClick = onClick),
+        shape = RoundedCornerShape(9.dp),
+        color = if (selected) QsColors.SurfaceElevated else Color.Transparent,
+        border = if (selected) BorderStroke(1.dp, QsColors.BorderStrong) else null,
+    ) {
+        Box(
+            modifier = Modifier.padding(vertical = 8.dp, horizontal = 6.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                text = label,
+                style = QsTextStyles.TabularStat,
+                color = if (selected) QsColors.ElectricCyan else QsColors.TextSecondary,
+                fontSize = 11.sp,
+                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
+@Composable
+private fun UtilityActionButton(
+    label: String,
+    enabled: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        modifier = modifier
+            .clip(RoundedCornerShape(10.dp))
+            .clickable(enabled = enabled, onClick = onClick),
+        shape = RoundedCornerShape(10.dp),
+        color = QsColors.SurfaceCard,
+        border = BorderStroke(1.dp, QsColors.BorderSubtle),
+    ) {
+        Box(
+            modifier = Modifier.padding(vertical = 8.dp, horizontal = 10.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                text = label,
+                color = if (enabled) QsColors.TextPrimary else QsColors.TextMuted,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun ServerNodeRow(
+    cfg: ConfigUiRow,
+    selected: Boolean,
+    running: Boolean,
+    inBulkMode: Boolean,
+    bulkChecked: Boolean,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit,
+) {
+    val accentBorder = when {
+        running -> QsColors.ConnectedEmerald.copy(alpha = 0.55f)
+        selected -> QsColors.ElectricCyan.copy(alpha = 0.55f)
+        else -> QsColors.BorderSubtle
+    }
+    val rowBg = when {
+        running -> QsColors.ConnectedEmerald.copy(alpha = 0.08f)
+        selected -> QsColors.SurfaceElevated
+        else -> QsColors.SurfaceCard
+    }
+
+    Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(top = 6.dp, bottom = 2.dp, start = 4.dp, end = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween,
+            .clip(RoundedCornerShape(14.dp))
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick),
+        shape = RoundedCornerShape(14.dp),
+        color = rowBg,
+        border = BorderStroke(1.dp, accentBorder),
     ) {
-        Text(
-            text = title,
-            color = accent,
-            fontSize = 12.sp,
-            fontWeight = FontWeight.Bold,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f),
-        )
-        Text(
-            text = count.toString(),
-            color = accent.copy(alpha = 0.85f),
-            fontSize = 11.sp,
-            fontWeight = FontWeight.SemiBold,
-        )
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 13.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Row(
+                modifier = Modifier.weight(1f),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                if (inBulkMode) {
+                    Checkbox(
+                        checked = bulkChecked,
+                        onCheckedChange = { onClick() },
+                        colors = CheckboxDefaults.colors(checkedColor = QsColors.ElectricCyan),
+                        modifier = Modifier.size(20.dp),
+                    )
+                } else {
+                    Box(
+                        modifier = Modifier
+                            .size(9.dp)
+                            .clip(CircleShape)
+                            .background(
+                                when {
+                                    running -> QsColors.ConnectedEmerald
+                                    selected -> QsColors.ElectricCyan
+                                    else -> QsColors.BorderStrong
+                                }
+                            )
+                    )
+                }
+
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = cfg.remarks.ifBlank { stringResource(R.string.novapulse_default_server_name) },
+                        color = QsColors.TextPrimary,
+                        fontSize = 14.sp,
+                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        if (cfg.pipeline == ConfigPipeline.STANDARD) {
+                            StandardPipelineBadge(label = cfg.transportBadge)
+                        } else {
+                            CdnProviderBadge(cdnType = cfg.cdnHint)
+                        }
+
+                        if (cfg.isManual) {
+                            Surface(
+                                shape = RoundedCornerShape(6.dp),
+                                color = QsColors.SurfaceInset,
+                                border = BorderStroke(1.dp, QsColors.BorderSubtle),
+                            ) {
+                                Text(
+                                    text = stringResource(R.string.novapulse_manual_badge),
+                                    color = QsColors.TextSecondary,
+                                    fontSize = 10.sp,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                )
+                            }
+                        }
+
+                        if (running) {
+                            Text(
+                                text = stringResource(R.string.novapulse_connected_badge),
+                                color = QsColors.ConnectedEmerald,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                            )
+                        }
+                    }
+                }
+            }
+
+            Spacer(Modifier.width(8.dp))
+
+            // Latency Pill
+            val delay = cfg.delayMillis
+            val (delayText, delayColor) = when {
+                delay > 0L && delay < 900L -> "${delay} ms" to QsColors.ConnectedEmerald
+                delay >= 900L -> "${delay} ms" to QsColors.SolarGold
+                delay < 0L -> stringResource(R.string.novapulse_timeout) to QsColors.DangerCrimson
+                else -> "—" to QsColors.TextMuted
+            }
+            Surface(
+                shape = RoundedCornerShape(8.dp),
+                color = QsColors.SurfaceInset,
+                border = BorderStroke(1.dp, QsColors.BorderSubtle),
+            ) {
+                Text(
+                    text = delayText,
+                    style = QsTextStyles.TabularStat,
+                    color = delayColor,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
+                )
+            }
+        }
     }
 }
 
 @Composable
-private fun ConfigRowCard(
-    row: ConfigUiRow,
-    isSelected: Boolean,
-    coreRunning: Boolean,
-    bulkMode: Boolean,
-    isBulkChecked: Boolean,
-    onClick: () -> Unit,
-    onToggleBulk: () -> Unit,
+private fun AddManualConfigDialog(
+    onDismiss: () -> Unit,
+    onImport: (String) -> Unit,
+    onScanQr: () -> Unit,
 ) {
-    val isConnectedHere = isSelected && coreRunning
+    var inputText by remember { mutableStateOf("") }
+    @Suppress("DEPRECATION")
+    val clipboard = LocalClipboardManager.current
 
-    Glass3dCard(
-        cornerRadius = 18.dp,
-        glowColor = when {
-            isConnectedHere -> QsColors.ConnectedEmerald.copy(alpha = 0.65f)
-            isSelected -> QsColors.ElectricCyan.copy(alpha = 0.55f)
-            row.pipeline == ConfigPipeline.STANDARD -> QsColors.PlasmaViolet.copy(alpha = 0.28f)
-            else -> QsColors.GlassBorderTop.copy(alpha = 0.25f)
-        },
-        onClick = onClick
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically
+    Dialog(onDismissRequest = onDismiss) {
+        Glass3dCard(
+            surfaceColor = QsColors.SurfaceElevated,
+            glowColor = QsColors.ElectricCyan.copy(alpha = 0.40f),
         ) {
-            if (bulkMode) {
-                Checkbox(
-                    checked = isBulkChecked,
-                    onCheckedChange = { onToggleBulk() }
+            Text(
+                text = stringResource(R.string.novapulse_add_config_title),
+                color = QsColors.TextPrimary,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Bold,
+            )
+            Spacer(Modifier.height(10.dp))
+            CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+                OutlinedTextField(
+                    value = inputText,
+                    onValueChange = { inputText = it },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(124.dp),
+                    placeholder = {
+                        Text(
+                            text = stringResource(R.string.novapulse_add_config_hint),
+                            color = QsColors.TextMuted,
+                            fontSize = 12.sp,
+                        )
+                    },
+                    textStyle = QsTextStyles.MonoCode.copy(color = QsColors.TextPrimary, fontSize = 12.sp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = QsColors.ElectricCyan,
+                        unfocusedBorderColor = QsColors.BorderStrong,
+                        focusedContainerColor = QsColors.SurfaceInset,
+                        unfocusedContainerColor = QsColors.SurfaceInset,
+                    ),
+                    shape = RoundedCornerShape(12.dp),
                 )
             }
-            StatusDot(active = isConnectedHere || isSelected)
-            Spacer(Modifier.width(4.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = row.remarks,
-                    color = QsColors.TextPrimary,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 14.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                Spacer(Modifier.height(4.dp))
-                Row(
-                    modifier = Modifier.horizontalScroll(rememberScrollState()),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+            Spacer(Modifier.height(10.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                OutlinedButton(
+                    onClick = {
+                        val pasted = clipboard.getText()?.text.orEmpty()
+                        if (pasted.isNotBlank()) inputText = pasted
+                    },
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(10.dp),
+                    border = BorderStroke(1.dp, QsColors.BorderStrong),
                 ) {
-                    if (isConnectedHere) {
-                        Text(
-                            text = stringResource(R.string.novapulse_connected_badge),
-                            color = QsColors.ConnectedEmerald,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                    } else if (isSelected) {
-                        Text(
-                            text = stringResource(R.string.novapulse_selected_badge),
-                            color = QsColors.ElectricCyan,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Medium
-                        )
-                    }
-                    if (row.pipeline == ConfigPipeline.CDN) {
-                        if (row.cdnHint != CdnType.UNKNOWN) {
-                            CdnProviderBadge(cdnType = row.cdnHint)
-                        } else if (row.transportBadge.isNotBlank()) {
-                            StandardPipelineBadge(label = row.transportBadge, accent = QsColors.ElectricCyan)
-                        }
-                    } else {
-                        StandardPipelineBadge(
-                            label = row.transportBadge.ifBlank { "Standard" },
-                            accent = QsColors.PlasmaViolet,
-                        )
-                    }
-                    if (row.isManual) {
-                        StandardPipelineBadge(
-                            label = stringResource(R.string.novapulse_manual_badge),
-                            accent = QsColors.SolarGold,
-                        )
-                    }
+                    Text(stringResource(R.string.novapulse_add_config_paste_btn), color = QsColors.TextPrimary, fontSize = 12.sp)
+                }
+                OutlinedButton(
+                    onClick = onScanQr,
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(10.dp),
+                    border = BorderStroke(1.dp, QsColors.BorderStrong),
+                ) {
+                    Text(stringResource(R.string.novapulse_add_config_scan_qr_btn), color = QsColors.ElectricCyan, fontSize = 12.sp)
                 }
             }
-            Spacer(Modifier.width(8.dp))
-            val delayLabel = when {
-                row.delayMillis > 0L -> "${row.delayMillis} ms"
-                row.delayMillis == -1L -> "—"
-                else -> stringResource(R.string.novapulse_timeout)
-            }
-            val delayColor = when {
-                row.delayMillis in 1..450 -> QsColors.ConnectedEmerald
-                row.delayMillis > 450 -> QsColors.SolarGold
-                else -> QsColors.TextMuted
-            }
-            Box(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(delayColor.copy(alpha = 0.14f))
-                    .border(0.75.dp, delayColor.copy(alpha = 0.35f), RoundedCornerShape(10.dp))
-                    .padding(horizontal = 10.dp, vertical = 5.dp)
+            Spacer(Modifier.height(10.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End,
             ) {
-                Text(
-                    text = delayLabel,
-                    color = delayColor,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Bold,
-                    style = TextStyle(fontFeatureSettings = "tnum")
-                )
+                TextButton(onClick = onDismiss) {
+                    Text(stringResource(R.string.novapulse_add_config_cancel_btn), color = QsColors.TextSecondary)
+                }
+                Spacer(Modifier.width(8.dp))
+                Button(
+                    onClick = { if (inputText.isNotBlank()) onImport(inputText) },
+                    enabled = inputText.isNotBlank(),
+                    shape = RoundedCornerShape(10.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = QsColors.ElectricCyan,
+                        contentColor = Color(0xFF04151E),
+                    ),
+                ) {
+                    Text(stringResource(R.string.novapulse_add_config_save_btn), fontWeight = FontWeight.Bold)
+                }
             }
         }
     }

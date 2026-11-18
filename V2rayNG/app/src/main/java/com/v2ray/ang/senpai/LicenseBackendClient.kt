@@ -468,7 +468,7 @@ object LicenseBackendClient {
         if (sessionToken.isBlank() && client == null) {
             return LicenseResolutionResult.Failure(
                 reason = "نشست فعال دستگاه یافت نشد؛ لطفاً دوباره وارد شوید.",
-                isDefinitiveRejection = true,
+                isDefinitiveRejection = LicenseSessionStore.isExplicitlyCleared(),
                 httpCode = 401,
                 statusCode = "session_required",
             )
@@ -507,20 +507,37 @@ object LicenseBackendClient {
                 )
             }
 
-            // If /refresh previously hit a network drop after server commit, recover once via ECDSA redeem.
-            if (LicenseSessionStore.hasRecentRefreshTransportFailure() && cleanKey.isNotBlank()) {
-                LicenseSessionStore.clearRefreshTransportFailure()
-                val recovered = redeem(
-                    rawInput = cleanKey,
-                    remarksHint = remarksHint,
-                    deviceId = devId,
-                    backendBaseUrlOverride = baseUrl,
-                    client = http,
-                )
-                if (recovered is LicenseResolutionResult.ReadySubscription ||
-                    (recovered is LicenseResolutionResult.Failure && recovered.isDefinitiveRejection)
-                ) {
-                    return recovered
+            // Recover once via ECDSA redeem if the rotated token was lost in transit or in a killed peer process.
+            if (cleanKey.isNotBlank()) {
+                synchronized(refreshMutex) {
+                    val lockedSnap = LicenseSessionStore.getSnapshot()
+                    if (lockedSnap.active &&
+                        lockedSnap.sessionToken.isNotBlank() &&
+                        lockedSnap.sessionToken != sessionToken
+                    ) {
+                        return executeStatusRequest(
+                            baseUrl = baseUrl,
+                            http = http,
+                            cleanKey = cleanKey,
+                            devId = devId,
+                            sessionToken = lockedSnap.sessionToken,
+                            remarksHint = remarksHint,
+                            snapActive = lockedSnap.active,
+                        )
+                    }
+                    LicenseSessionStore.clearRefreshTransportFailure()
+                    val recovered = redeem(
+                        rawInput = cleanKey,
+                        remarksHint = remarksHint,
+                        deviceId = devId,
+                        backendBaseUrlOverride = baseUrl,
+                        client = http,
+                    )
+                    if (recovered is LicenseResolutionResult.ReadySubscription ||
+                        (recovered is LicenseResolutionResult.Failure && recovered.isDefinitiveRejection)
+                    ) {
+                        return recovered
+                    }
                 }
             }
         }
@@ -703,6 +720,8 @@ object LicenseBackendClient {
                 )
                 return true
             }
+        } else if (code == 409 || (code == 401 && parseRedeemJson(bodyStr)?.resolvedStatusCode() == "session_invalid")) {
+            LicenseSessionStore.markRefreshTransportFailure()
         }
         return false
     }

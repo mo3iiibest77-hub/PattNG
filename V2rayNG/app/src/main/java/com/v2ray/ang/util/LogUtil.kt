@@ -3,6 +3,7 @@ package com.v2ray.ang.util
 import android.util.Log
 import com.v2ray.ang.AppConfig
 import com.v2ray.ang.handler.MmkvManager
+import com.v2ray.ang.senpai.AppLogBuffer
 import java.util.Locale
 
 object LogUtil {
@@ -58,6 +59,14 @@ object LogUtil {
     }
 
     private fun log(priority: Int, tag: String, message: String, throwable: Throwable? = null) {
+        if (priority >= Log.WARN) {
+            val suffix = throwable?.message?.takeIf { it.isNotBlank() }?.let { " ($it)" }.orEmpty()
+            if (priority >= Log.ERROR) {
+                AppLogBuffer.error(tag, message + suffix)
+            } else {
+                AppLogBuffer.warn(tag, message + suffix)
+            }
+        }
         if (!isEnabled(priority)) return
 
         try {

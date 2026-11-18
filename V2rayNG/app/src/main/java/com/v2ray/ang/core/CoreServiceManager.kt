@@ -58,6 +58,7 @@ object CoreServiceManager {
 
     private const val LICENSE_WATCHDOG_INTERVAL_MS = 20_000L
     private const val LICENSE_WATCHDOG_FRESH_SKIP_SEC = 15L
+    private const val MISSING_SESSION_DISCONNECT_STRIKES = 3
     private const val CDN_FAILOVER_INITIAL_DELAY_MS = 15_000L
     private const val CDN_FAILOVER_PROBE_INTERVAL_MS = 22_000L
 
@@ -71,6 +72,7 @@ object CoreServiceManager {
     private var cdnFailoverWatchdogJob: Job? = null
     private val daemonWatchdogInFlight = AtomicBoolean(false)
     private val daemonDisconnecting = AtomicBoolean(false)
+    private val consecutiveMissingSessionStrikes = java.util.concurrent.atomic.AtomicInteger(0)
 
     @Volatile
     private var isReloading = false
@@ -277,6 +279,7 @@ object CoreServiceManager {
     private fun startDaemonLicenseWatchdog(service: Service) {
         stopDaemonLicenseWatchdog()
         daemonDisconnecting.set(false)
+        consecutiveMissingSessionStrikes.set(0)
         licenseWatchdogJob = CoroutineScope(Dispatchers.IO).launch {
             delay(1_500L)
             while (isActive && isRunning()) {
@@ -382,22 +385,19 @@ object CoreServiceManager {
                 )
                 return
             }
-            if (!LicenseBackendClient.isLicenseSessionActive()) {
-                triggerDaemonLicenseDisconnect(
-                    service,
-                    appCtx.getString(com.v2ray.ang.R.string.novapulse_license_force_revoked),
-                )
-                return
-            }
-
             val snap = LicenseSessionStore.getSnapshot()
             if (!snap.active || snap.sessionToken.isBlank() || snap.licenseKey.isBlank()) {
-                triggerDaemonLicenseDisconnect(
-                    service,
-                    appCtx.getString(com.v2ray.ang.R.string.novapulse_license_force_revoked),
-                )
+                val explicitlyCleared = LicenseSessionStore.isExplicitlyCleared()
+                val strikes = consecutiveMissingSessionStrikes.incrementAndGet()
+                if (explicitlyCleared || strikes >= MISSING_SESSION_DISCONNECT_STRIKES) {
+                    triggerDaemonLicenseDisconnect(
+                        service,
+                        appCtx.getString(com.v2ray.ang.R.string.novapulse_license_force_revoked),
+                    )
+                }
                 return
             }
+            consecutiveMissingSessionStrikes.set(0)
 
             val nowSec = System.currentTimeMillis() / 1000L
             if (snap.lastVerifiedAtSec > 0L && (nowSec - snap.lastVerifiedAtSec) < LICENSE_WATCHDOG_FRESH_SKIP_SEC) {

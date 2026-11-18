@@ -32,11 +32,24 @@ object AndroidKeystoreCryptoProvider : DeviceCryptoProvider {
     private const val PREFIX_V1 = "v1:"
 
     private val lock = Any()
+    @Volatile
+    private var cachedAesKey: SecretKey? = null
+    @Volatile
+    private var cachedSigningEntry: KeyStore.PrivateKeyEntry? = null
 
-    private fun getOrCreateAesKey(): SecretKey {
+    private fun getOrCreateAesKey(forceReload: Boolean = false): SecretKey {
+        if (!forceReload) {
+            cachedAesKey?.let { return it }
+        }
         val ks = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
         val existing = (ks.getEntry(AES_ALIAS, null) as? KeyStore.SecretKeyEntry)?.secretKey
-        if (existing != null) return existing
+        if (existing != null) {
+            cachedAesKey = existing
+            return existing
+        }
+        if (ks.containsAlias(AES_ALIAS)) {
+            throw IllegalStateException("AndroidKeyStore alias $AES_ALIAS exists but SecretKeyEntry was temporarily unavailable")
+        }
 
         val keyGen = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, ANDROID_KEYSTORE)
         val spec = KeyGenParameterSpec.Builder(
@@ -49,13 +62,22 @@ object AndroidKeystoreCryptoProvider : DeviceCryptoProvider {
             .setRandomizedEncryptionRequired(true)
             .build()
         keyGen.init(spec)
-        return keyGen.generateKey()
+        return keyGen.generateKey().also { cachedAesKey = it }
     }
 
-    private fun getOrCreateSigningEntry(): KeyStore.PrivateKeyEntry {
+    private fun getOrCreateSigningEntry(forceReload: Boolean = false): KeyStore.PrivateKeyEntry {
+        if (!forceReload) {
+            cachedSigningEntry?.let { return it }
+        }
         val ks = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
         val existing = ks.getEntry(ECDSA_ALIAS, null) as? KeyStore.PrivateKeyEntry
-        if (existing != null) return existing
+        if (existing != null) {
+            cachedSigningEntry = existing
+            return existing
+        }
+        if (ks.containsAlias(ECDSA_ALIAS)) {
+            throw IllegalStateException("AndroidKeyStore alias $ECDSA_ALIAS exists but PrivateKeyEntry was temporarily unavailable")
+        }
 
         val kpg = KeyPairGenerator.getInstance(KeyProperties.KEY_ALGORITHM_EC, ANDROID_KEYSTORE)
         val spec = KeyGenParameterSpec.Builder(
@@ -69,6 +91,7 @@ object AndroidKeystoreCryptoProvider : DeviceCryptoProvider {
         kpg.generateKeyPair()
 
         return (ks.getEntry(ECDSA_ALIAS, null) as? KeyStore.PrivateKeyEntry)
+            ?.also { cachedSigningEntry = it }
             ?: throw IllegalStateException("Keystore failed to persist ECDSA signing key")
     }
 
@@ -90,36 +113,61 @@ object AndroidKeystoreCryptoProvider : DeviceCryptoProvider {
         if (encoded.isBlank()) return null
         if (!encoded.startsWith(PREFIX_V1)) return null
         return synchronized(lock) {
-            runCatching {
-                val payload = encoded.removePrefix(PREFIX_V1)
-                val sep = payload.indexOf(':')
-                if (sep <= 0) return@runCatching null
-                val iv = Base64.decode(payload.substring(0, sep), Base64.DEFAULT)
-                val ct = Base64.decode(payload.substring(sep + 1), Base64.DEFAULT)
-                val key = getOrCreateAesKey()
-                val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-                cipher.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(GCM_TAG_BITS, iv))
-                String(cipher.doFinal(ct), Charsets.UTF_8)
-            }.getOrNull()
+            val payload = encoded.removePrefix(PREFIX_V1)
+            val sep = payload.indexOf(':')
+            if (sep <= 0) return@synchronized null
+            val iv = runCatching { Base64.decode(payload.substring(0, sep), Base64.DEFAULT) }.getOrNull()
+                ?: return@synchronized null
+            val ct = runCatching { Base64.decode(payload.substring(sep + 1), Base64.DEFAULT) }.getOrNull()
+                ?: return@synchronized null
+            for (attempt in 0..1) {
+                val res = runCatching {
+                    val key = getOrCreateAesKey(forceReload = attempt > 0)
+                    val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+                    cipher.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(GCM_TAG_BITS, iv))
+                    String(cipher.doFinal(ct), Charsets.UTF_8)
+                }.getOrNull()
+                if (res != null) return@synchronized res
+                cachedAesKey = null
+            }
+            null
         }
     }
 
     override fun getOrCreateSigningPublicKeySpkiB64(): String {
         synchronized(lock) {
-            val entry = getOrCreateSigningEntry()
-            val spki = entry.certificate.publicKey.encoded
-            return Base64.encodeToString(spki, Base64.NO_WRAP)
+            var lastErr: Throwable? = null
+            for (attempt in 0..1) {
+                try {
+                    val entry = getOrCreateSigningEntry(forceReload = attempt > 0)
+                    val spki = entry.certificate.publicKey.encoded
+                    return Base64.encodeToString(spki, Base64.NO_WRAP)
+                } catch (t: Throwable) {
+                    cachedSigningEntry = null
+                    lastErr = t
+                }
+            }
+            throw (lastErr ?: IllegalStateException("Unable to read ECDSA signing public key"))
         }
     }
 
     override fun signProofMessage(message: ByteArray): String {
         synchronized(lock) {
-            val entry = getOrCreateSigningEntry()
-            val priv: PrivateKey = entry.privateKey
-            val sig = Signature.getInstance("SHA256withECDSA")
-            sig.initSign(priv)
-            sig.update(message)
-            return Base64.encodeToString(sig.sign(), Base64.NO_WRAP)
+            var lastErr: Throwable? = null
+            for (attempt in 0..1) {
+                try {
+                    val entry = getOrCreateSigningEntry(forceReload = attempt > 0)
+                    val priv: PrivateKey = entry.privateKey
+                    val sig = Signature.getInstance("SHA256withECDSA")
+                    sig.initSign(priv)
+                    sig.update(message)
+                    return Base64.encodeToString(sig.sign(), Base64.NO_WRAP)
+                } catch (t: Throwable) {
+                    cachedSigningEntry = null
+                    lastErr = t
+                }
+            }
+            throw (lastErr ?: IllegalStateException("Unable to sign ECDSA challenge proof"))
         }
     }
 }

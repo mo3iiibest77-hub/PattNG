@@ -167,4 +167,13 @@ class AppSecurityGuardTest {
             NovaPulseApkDownloader.certificateSha256Hex("abc".toByteArray(Charsets.US_ASCII)),
         )
     }
+
+    @Test
+    fun antiInstrumentationHelpers_detectPtraceFridaXposedCleanly() {
+        assertEquals(0, AppSecurityGuard.parseTracerPidFromStatus("Name:\tapp\nTracerPid:\t0\nUid:\t1000\n"))
+        assertEquals(4242, AppSecurityGuard.parseTracerPidFromStatus("Name:\tapp\nTracerPid:\t4242\n"))
+        assertTrue(AppSecurityGuard.isSuspiciousMapLine("7f8000-7f9000 r-xp /data/local/tmp/frida-agent-64.so"))
+        assertTrue(AppSecurityGuard.isSuspiciousMapLine("7f8000-7f9000 r-xp /system/framework/LSPosedBridge.jar"))
+        assertFalse(AppSecurityGuard.isSuspiciousMapLine("7f8000-7f9000 r-xp /system/lib64/libc.so"))
+    }
 }

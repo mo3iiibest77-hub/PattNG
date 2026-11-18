@@ -4,7 +4,6 @@ import android.animation.ValueAnimator
 import android.os.Build
 import android.provider.Settings
 import androidx.annotation.DrawableRes
-import androidx.compose.animation.Crossfade
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
@@ -25,6 +24,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
@@ -40,37 +40,28 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawWithContent
-import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Rect
-import androidx.compose.ui.geometry.RoundRect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.PathMeasure
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -84,8 +75,7 @@ import kotlin.math.cos
 import kotlin.math.sin
 
 /**
- * Returns true only when the screen is active in the foreground (`Lifecycle.State.STARTED`)
- * and OS Reduce Motion / Animator Scale allows visual motion.
+ * Returns true only when the screen is in the foreground and OS animation scale permits motion.
  */
 @Composable
 fun rememberMotionActive(): Boolean {
@@ -99,988 +89,694 @@ fun rememberMotionActive(): Boolean {
                 Settings.Global.ANIMATOR_DURATION_SCALE,
                 1f
             )
-            val osEnabled = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val animatorsAllowed = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 ValueAnimator.areAnimatorsEnabled()
-            } else true
-            osEnabled && scale > 0f
+            } else {
+                true
+            }
+            scale > 0f && animatorsAllowed
         }.getOrDefault(true)
     }
     return inForeground && animatorEnabled
 }
 
 enum class OrbVisualMode {
-    DISCONNECTED,
-    PROCESSING,
+    IDLE,
+    CONNECTING,
+    SCANNING,
     CONNECTED,
-    ERROR
-}
-
-private data class Vec3(val x: Float, val y: Float, val z: Float)
-
-private fun projectPoint(
-    v: Vec3,
-    yaw: Float,
-    pitch: Float,
-    cx: Float,
-    cy: Float,
-    scale: Float,
-): Pair<Offset, Float> {
-    val cosY = cos(yaw)
-    val sinY = sin(yaw)
-    val cosP = cos(pitch)
-    val sinP = sin(pitch)
-
-    val rx = v.x * cosY - v.z * sinY
-    val rz1 = v.x * sinY + v.z * cosY
-    val ry = v.y * cosP - rz1 * sinP
-    val rz = v.y * sinP + rz1 * cosP
-
-    val camDist = 3.2f
-    val persp = camDist / (camDist + rz + 1.4f)
-    return Offset(cx + rx * scale * persp, cy + ry * scale * persp) to persp
 }
 
 /**
- * Genuine 60fps 3D animated space backdrop featuring:
- * - True perspective 3D rotating crystal polyhedron (octahedron + inner cube lattice)
- * - Scrolling infinite 3D synth-grid horizon zooming toward the viewer
- * - Volumetric plasma aurora fields & parallax particle depth field
+ * Clean, understated obsidian-slate backdrop with subtle radial telemetry rings and single top glow.
+ * Eliminates visual clutter behind cards while smoothly shifting hue when connected.
  */
 @Composable
 fun Cosmic3dBackdrop(
-    modifier: Modifier = Modifier,
     isConnected: Boolean = false,
+    isBusy: Boolean = false,
     @DrawableRes backgroundImageRes: Int? = null,
+    modifier: Modifier = Modifier,
 ) {
     val motionActive = rememberMotionActive()
-    val spin: Float
-    val gridScroll: Float
-    val auroraBreath: Float
-    if (motionActive) {
-        val transition = rememberInfiniteTransition(label = "cosmic_3d_bg")
-        spin = transition.animateFloat(
-            initialValue = 0f,
-            targetValue = (2f * PI).toFloat(),
-            animationSpec = infiniteRepeatable(
-                animation = tween(durationMillis = 16000, easing = LinearEasing),
-                repeatMode = RepeatMode.Restart
-            ),
-            label = "poly_spin"
-        ).value
-        gridScroll = transition.animateFloat(
+    val haloColor by animateColorAsState(
+        targetValue = when {
+            isConnected -> QsColors.ConnectedEmerald.copy(alpha = 0.16f)
+            isBusy -> QsColors.SolarGold.copy(alpha = 0.14f)
+            else -> QsColors.ElectricCyan.copy(alpha = 0.12f)
+        },
+        animationSpec = tween(700),
+        label = "backdrop_halo",
+    )
+
+    val phase = if (motionActive) {
+        val transition = rememberInfiniteTransition(label = "ambient_phase")
+        transition.animateFloat(
             initialValue = 0f,
             targetValue = 1f,
             animationSpec = infiniteRepeatable(
-                animation = tween(durationMillis = 3600, easing = LinearEasing),
+                animation = tween(14_000, easing = LinearEasing),
                 repeatMode = RepeatMode.Restart
             ),
-            label = "grid_scroll"
-        ).value
-        auroraBreath = transition.animateFloat(
-            initialValue = 0.72f,
-            targetValue = 1.0f,
-            animationSpec = infiniteRepeatable(
-                animation = tween(durationMillis = 4800, easing = FastOutSlowInEasing),
-                repeatMode = RepeatMode.Reverse
-            ),
-            label = "aurora_breath"
+            label = "phase",
         ).value
     } else {
-        spin = 0.55f
-        gridScroll = 0.25f
-        auroraBreath = 0.85f
-    }
-
-    val accentColor by animateColorAsState(
-        targetValue = if (isConnected) QsColors.ConnectedEmerald else QsColors.ElectricCyan,
-        animationSpec = tween(700),
-        label = "bg_accent"
-    )
-
-    val octaVertices = remember {
-        listOf(
-            Vec3(0f, -1.25f, 0f),
-            Vec3(1.1f, 0f, 0f),
-            Vec3(0f, 0f, 1.1f),
-            Vec3(-1.1f, 0f, 0f),
-            Vec3(0f, 0f, -1.1f),
-            Vec3(0f, 1.25f, 0f),
-        )
-    }
-    val octaEdges = remember {
-        listOf(
-            0 to 1, 0 to 2, 0 to 3, 0 to 4,
-            5 to 1, 5 to 2, 5 to 3, 5 to 4,
-            1 to 2, 2 to 3, 3 to 4, 4 to 1
-        )
-    }
-    val innerCubeVertices = remember {
-        listOf(
-            Vec3(-0.56f, -0.56f, -0.56f),
-            Vec3(0.56f, -0.56f, -0.56f),
-            Vec3(0.56f, 0.56f, -0.56f),
-            Vec3(-0.56f, 0.56f, -0.56f),
-            Vec3(-0.56f, -0.56f, 0.56f),
-            Vec3(0.56f, -0.56f, 0.56f),
-            Vec3(0.56f, 0.56f, 0.56f),
-            Vec3(-0.56f, 0.56f, 0.56f),
-        )
-    }
-    val innerCubeEdges = remember {
-        listOf(
-            0 to 1, 1 to 2, 2 to 3, 3 to 0,
-            4 to 5, 5 to 6, 6 to 7, 7 to 4,
-            0 to 4, 1 to 5, 2 to 6, 3 to 7
-        )
-    }
-
-    val particles = remember {
-        List(46) { idx ->
-            val fx = ((idx * 67 + 23) % 100) / 100f
-            val fy = ((idx * 43 + 11) % 100) / 100f
-            val depth = 0.35f + (idx % 5) * 0.18f
-            Triple(fx, fy, depth)
-        }
+        0.2f
     }
 
     Box(
         modifier = modifier
             .fillMaxSize()
-            .background(QsColors.DeepVoid)
-    ) {
-        if (backgroundImageRes != null) {
-            Crossfade(
-                targetState = backgroundImageRes,
-                animationSpec = tween(520),
-                label = "section_bg_crossfade"
-            ) { resId ->
-                Image(
-                    painter = painterResource(resId),
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .graphicsLayer {
-                            val drift = 1.04f + 0.03f * sin(spin * 0.6f)
-                            scaleX = drift
-                            scaleY = drift
-                            translationX = 10f * sin(spin * 0.5f)
-                            translationY = 8f * cos(spin * 0.4f)
-                        }
-                        .alpha(0.78f)
-                )
-            }
-        }
-
-        // Subtle atmospheric contrast vignette so transparent cards stay crisp and legible
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(
-                    Brush.verticalGradient(
-                        colors = listOf(
-                            Color(0x5A040814),
-                            Color(0x28070E22),
-                            Color(0x5E040814),
-                        )
+            .background(
+                Brush.verticalGradient(
+                    colors = listOf(
+                        QsColors.DeepVoid,
+                        QsColors.MidnightNavy,
+                        QsColors.DeepVoid,
                     )
                 )
-        )
+            )
+    ) {
+        if (backgroundImageRes != null) {
+            Image(
+                painter = painterResource(backgroundImageRes),
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .alpha(0.11f)
+            )
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(
+                        Brush.verticalGradient(
+                            colors = listOf(
+                                QsColors.DeepVoid.copy(alpha = 0.72f),
+                                QsColors.MidnightNavy.copy(alpha = 0.86f),
+                                QsColors.DeepVoid.copy(alpha = 0.94f),
+                            )
+                        )
+                    )
+            )
+        }
 
         Canvas(modifier = Modifier.fillMaxSize()) {
             val w = size.width
             val h = size.height
+            val center = Offset(w * 0.5f, h * 0.28f)
+            val driftX = cos(phase * 2f * PI).toFloat() * (w * 0.03f)
+            val glowCenter = Offset(center.x + driftX, center.y)
 
-            // 1. Volumetric glowing nebula clouds
-            val orb1Center = Offset(w * (0.24f + 0.1f * sin(spin)), h * 0.20f)
             drawCircle(
                 brush = Brush.radialGradient(
-                    colors = listOf(accentColor.copy(alpha = 0.20f * auroraBreath), Color.Transparent),
-                    center = orb1Center,
-                    radius = w * 0.70f
+                    colors = listOf(haloColor, Color.Transparent),
+                    center = glowCenter,
+                    radius = w * 0.85f
                 ),
-                radius = w * 0.70f,
-                center = orb1Center
+                center = glowCenter,
+                radius = w * 0.85f
             )
 
-            val orb2Center = Offset(w * 0.80f, h * (0.55f + 0.08f * cos(spin)))
+            // Subtle architectural instrument arcs
+            val ringStroke = Stroke(width = 1.dp.toPx())
             drawCircle(
-                brush = Brush.radialGradient(
-                    colors = listOf(QsColors.PlasmaViolet.copy(alpha = 0.18f * auroraBreath), Color.Transparent),
-                    center = orb2Center,
-                    radius = w * 0.74f
-                ),
-                radius = w * 0.74f,
-                center = orb2Center
+                color = QsColors.BorderSubtle.copy(alpha = 0.22f),
+                radius = w * 0.36f,
+                center = center,
+                style = ringStroke,
             )
-
-            // 2. Rotating dual 3D wireframe polyhedron + inner counter-rotating cube
-            val polyCx = w * 0.5f
-            val polyCy = h * 0.30f
-            val polyScale = w * 0.40f
-            val projected = octaVertices.map { v ->
-                projectPoint(v, yaw = spin, pitch = 0.42f + 0.22f * sin(spin * 0.5f), polyCx, polyCy, polyScale)
-            }
-            for ((a, b) in octaEdges) {
-                val (p1, d1) = projected[a]
-                val (p2, d2) = projected[b]
-                val depthAlpha = (((d1 + d2) * 0.5f).coerceIn(0.35f, 1.1f)) * 0.24f
-                drawLine(
-                    brush = Brush.linearGradient(
-                        listOf(
-                            accentColor.copy(alpha = depthAlpha),
-                            QsColors.PlasmaViolet.copy(alpha = depthAlpha * 0.9f),
-                        ),
-                        start = p1,
-                        end = p2
-                    ),
-                    start = p1,
-                    end = p2,
-                    strokeWidth = 1.6f
-                )
-            }
-            val cubeProj = innerCubeVertices.map { v ->
-                projectPoint(v, yaw = -spin * 1.35f, pitch = 0.55f * cos(spin * 0.4f), polyCx, polyCy, polyScale)
-            }
-            for ((a, b) in innerCubeEdges) {
-                val (p1, d1) = cubeProj[a]
-                val (p2, d2) = cubeProj[b]
-                val depthAlpha = (((d1 + d2) * 0.5f).coerceIn(0.30f, 1.0f)) * 0.18f
-                drawLine(
-                    color = QsColors.NeonRose.copy(alpha = depthAlpha),
-                    start = p1,
-                    end = p2,
-                    strokeWidth = 1.2f
-                )
-            }
-            projected.forEach { (pt, d) ->
-                drawCircle(
-                    color = accentColor.copy(alpha = (0.42f * d).coerceIn(0.12f, 0.52f)),
-                    radius = (2.4f * d).dp.toPx(),
-                    center = pt
-                )
-            }
-
-            // 3. Scrolling 3D perspective horizon plane
-            val horizonY = h * 0.65f
-            val rows = 10
-            for (i in 0 until rows) {
-                val t = ((i + gridScroll) / rows.toFloat()).coerceIn(0f, 1f)
-                val curvedY = horizonY + (h - horizonY) * (t * t)
-                drawLine(
-                    color = accentColor.copy(alpha = 0.13f * t),
-                    start = Offset(0f, curvedY),
-                    end = Offset(w, curvedY),
-                    strokeWidth = 1.1f
-                )
-            }
-            val vpX = w * 0.5f
-            for (j in -6..6) {
-                val bottomX = vpX + j * (w * 0.23f)
-                drawLine(
-                    color = QsColors.PlasmaViolet.copy(alpha = 0.10f),
-                    start = Offset(vpX, horizonY),
-                    end = Offset(bottomX, h),
-                    strokeWidth = 1.0f
-                )
-            }
-
-            // 4. Parallax starfield
-            particles.forEachIndexed { idx, (fx, fy, depth) ->
-                val yShift = ((fy + gridScroll * 0.18f * depth) % 1f) * h
-                val tw = 0.22f + 0.52f * absSin(spin + idx * 0.7f)
-                drawCircle(
-                    color = if (idx % 3 == 0) accentColor.copy(alpha = tw * depth)
-                    else Color.White.copy(alpha = tw * 0.68f * depth),
-                    radius = (1.1f + depth * 1.3f).dp.toPx(),
-                    center = Offset(fx * w, yShift)
-                )
-            }
+            drawCircle(
+                color = QsColors.BorderSubtle.copy(alpha = 0.14f),
+                radius = w * 0.56f,
+                center = center,
+                style = ringStroke,
+            )
         }
     }
 }
 
-private fun absSin(rad: Float): Float {
-    val s = sin(rad)
-    return if (s < 0f) -s else s
-}
-
 /**
- * Mirror-transparent Liquid Glass card with subtle specular reflection and a stationary
- * rounded-rectangle perimeter light beam traveling cleanly along the card frame (never spinning).
+ * Crisp slate architectural card with controlled elevation and hairline 1dp border.
+ * Keeps surface contrast clean without loud neon borders.
  */
 @Composable
 fun Glass3dCard(
     modifier: Modifier = Modifier,
-    cornerRadius: Dp = 22.dp,
-    glowColor: Color = QsColors.ElectricCyan.copy(alpha = 0.36f),
-    beamSeed: Int = 0,
-    onClick: (() -> Unit)? = null,
-    backdropContent: (@Composable BoxScope.() -> Unit)? = null,
+    cornerRadius: Dp = 18.dp,
+    glowColor: Color = QsColors.BorderSubtle,
+    surfaceColor: Color = QsColors.SurfaceCard,
+    elevationDp: Dp = 4.dp,
+    contentPadding: Dp = 16.dp,
     content: @Composable ColumnScope.() -> Unit,
 ) {
-    val density = LocalDensity.current.density
-    val motionActive = rememberMotionActive()
-    val seedVal = remember(glowColor, beamSeed) {
-        kotlin.math.abs(glowColor.value.toInt() xor (beamSeed * 2654435761L).toInt())
-    }
-    val initialPhase = remember(seedVal) { (seedVal % 100) / 100f }
-    val clockwise = remember(seedVal) { (seedVal % 2) == 0 }
-    val durationMs = remember(seedVal) { 5200 + (seedVal % 4) * 950 }
-
-    val beamPhase = if (motionActive) {
-        rememberInfiniteTransition(label = "card_beam_flow").animateFloat(
-            initialValue = 0f,
-            targetValue = 1f,
-            animationSpec = infiniteRepeatable(
-                animation = tween(durationMillis = durationMs, easing = LinearEasing),
-                repeatMode = RepeatMode.Restart
-            ),
-            label = "card_beam_phase"
-        ).value
-    } else {
-        0.18f
-    }
-
-    val interaction = remember { MutableInteractionSource() }
-    val pressed by interaction.collectIsPressedAsState()
-    val pressScale by animateFloatAsState(
-        targetValue = if (pressed && onClick != null) 0.975f else 1f,
-        animationSpec = spring(stiffness = 500f),
-        label = "card_scale"
-    )
-    val tiltX by animateFloatAsState(
-        targetValue = if (pressed && onClick != null) 4f else 0f,
-        animationSpec = spring(stiffness = 500f),
-        label = "card_tiltx"
-    )
-
-    val clickMod = if (onClick != null) {
-        Modifier.clickable(
-            interactionSource = interaction,
-            indication = null,
-            onClick = onClick
-        )
-    } else Modifier
-
-    val leadColor = glowColor.copy(alpha = 0.96f)
-    val palettePairs = remember {
-        listOf(
-            QsColors.ElectricCyan to QsColors.PlasmaViolet,
-            QsColors.AuroraMint to QsColors.ElectricCyan,
-            QsColors.PlasmaViolet to QsColors.NeonRose,
-            QsColors.ConnectedEmerald to QsColors.ElectricCyan,
-            QsColors.CloudFrontSky to QsColors.AuroraMint,
-        )
-    }
-    val pair = palettePairs[seedVal % palettePairs.size]
-    val beamPrimary = if (beamSeed == 0) leadColor else pair.first.copy(alpha = 0.95f)
-    val beamSecondary = pair.second.copy(alpha = 0.92f)
     val shape = RoundedCornerShape(cornerRadius)
-    val perimeterPath = remember { Path() }
-    val beamSegmentPath = remember { Path() }
-    val coreSegmentPath = remember { Path() }
-    val pathMeasure = remember { PathMeasure() }
+    val resolvedBorder = if (glowColor == QsColors.BorderSubtle || glowColor.alpha < 0.08f) {
+        QsColors.BorderSubtle
+    } else {
+        glowColor.copy(alpha = glowColor.alpha.coerceIn(0.24f, 0.55f))
+    }
 
     Surface(
-        modifier = modifier
-            .graphicsLayer {
-                scaleX = pressScale
-                scaleY = pressScale
-                rotationX = tiltX
-                cameraDistance = 14f * density
-            }
-            .drawWithContent {
-                drawContent()
-                val crPx = cornerRadius.toPx().coerceAtMost(size.minDimension * 0.48f)
-                val inset = 0.9.dp.toPx()
-                val w = (size.width - inset * 2f).coerceAtLeast(2f)
-                val h = (size.height - inset * 2f).coerceAtLeast(2f)
-                perimeterPath.reset()
-                perimeterPath.addRoundRect(
-                    RoundRect(
-                        rect = Rect(inset, inset, inset + w, inset + h),
-                        cornerRadius = CornerRadius(crPx, crPx)
-                    )
-                )
-                pathMeasure.setPath(perimeterPath, forceClosed = true)
-                val totalLen = pathMeasure.length
-                if (totalLen > 4f) {
-                    val progress = ((beamPhase + initialPhase) % 1f).let { if (clockwise) it else 1f - it }
-                    val beamFraction = 0.24f
-                    val coreFraction = 0.08f
-                    val startDist = progress * totalLen
-                    val endDist = startDist + totalLen * beamFraction
-
-                    beamSegmentPath.reset()
-                    extractWrappedSegment(pathMeasure, totalLen, startDist, endDist, beamSegmentPath)
-
-                    val coreStartDist = startDist + totalLen * (beamFraction - coreFraction)
-                    coreSegmentPath.reset()
-                    extractWrappedSegment(pathMeasure, totalLen, coreStartDist, endDist, coreSegmentPath)
-
-                    val tangentOffset = pathMeasure.getPosition(endDist % totalLen)
-                    val tailOffset = pathMeasure.getPosition(startDist % totalLen)
-                    val beamBrush = Brush.linearGradient(
-                        colors = listOf(
-                            Color.Transparent,
-                            beamSecondary.copy(alpha = 0.55f),
-                            beamPrimary,
-                            Color.White.copy(alpha = 0.95f),
-                        ),
-                        start = tailOffset,
-                        end = tangentOffset
-                    )
-
-                    // 1. Soft outer halo along the stationary rounded card perimeter
-                    drawPath(
-                        path = beamSegmentPath,
-                        brush = beamBrush,
-                        alpha = 0.34f,
-                        style = Stroke(width = 4.6.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
-                    )
-                    // 2. Vibrant main neon perimeter laser
-                    drawPath(
-                        path = beamSegmentPath,
-                        brush = beamBrush,
-                        alpha = 0.92f,
-                        style = Stroke(width = 1.9.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
-                    )
-                    // 3. Bright crisp core trace at the leading edge
-                    drawPath(
-                        path = coreSegmentPath,
-                        color = Color.White.copy(alpha = 0.92f),
-                        style = Stroke(width = 1.05.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
-                    )
-                }
-            }
-            .then(clickMod),
+        modifier = modifier,
         shape = shape,
-        color = Color.Transparent,
-        shadowElevation = 6.dp,
-        border = BorderStroke(
-            width = 0.65.dp,
-            brush = Brush.verticalGradient(
-                colors = listOf(
-                    Color.White.copy(alpha = 0.32f),
-                    Color.White.copy(alpha = 0.08f),
-                    beamPrimary.copy(alpha = 0.24f),
-                )
-            )
-        )
+        color = surfaceColor,
+        shadowElevation = elevationDp,
+        border = BorderStroke(1.dp, resolvedBorder)
     ) {
-        Box(
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(
-                    Brush.verticalGradient(
-                        colors = listOf(
-                            Color(0x36122042),
-                            Color(0x220B132B),
-                            Color(0x30080F24),
-                        )
-                    )
-                )
-        ) {
-            if (backdropContent != null) {
-                backdropContent()
-            }
-            // Mirror top-left specular sheen so the surface feels like reflective frosted crystal
-            Box(
-                modifier = Modifier
-                    .matchParentSize()
-                    .background(
-                        Brush.linearGradient(
-                            colors = listOf(
-                                Color.White.copy(alpha = 0.13f),
-                                Color.Transparent,
-                                leadColor.copy(alpha = 0.07f),
-                            ),
-                            start = Offset.Zero,
-                            end = Offset(720f, 720f)
-                        )
-                    )
-            )
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(16.dp),
-                content = content
-            )
-        }
-    }
-}
-
-private fun extractWrappedSegment(
-    measure: PathMeasure,
-    totalLen: Float,
-    startDist: Float,
-    endDist: Float,
-    outPath: Path,
-) {
-    val start = ((startDist % totalLen) + totalLen) % totalLen
-    val span = (endDist - startDist).coerceIn(0f, totalLen)
-    if (span <= 0.5f) return
-    val end = start + span
-    if (end <= totalLen) {
-        measure.getSegment(start, end, outPath, startWithMoveTo = true)
-    } else {
-        measure.getSegment(start, totalLen, outPath, startWithMoveTo = true)
-        measure.getSegment(0f, end - totalLen, outPath, startWithMoveTo = true)
+                .padding(contentPadding),
+            content = content
+        )
     }
 }
 
 /**
- * High-craft 3D Orbital Gimbal Connection Sphere with nested rotating Saturnian rings,
- * energy radar sweep during connection/scan, and glowing plasma state transitions.
+ * Precision Magnetic Tunnel Trigger Orb.
+ * Distinct animations per mode:
+ * - IDLE: calibrated 36-tick bezel + subtle breathing halo + clean vector power glyph
+ * - CONNECTING / SCANNING: sweeping radar arc, progress track (if scanTotal > 0), orbiting satellite dot & sonar wave
+ * - CONNECTED: serene harmonic shield waves + slow orbital lock ring + crisp shield-check glyph
  */
 @Composable
 fun ConnectionOrb3d(
-    mode: OrbVisualMode,
-    progressFraction: Float?,
-    primaryText: String,
-    secondaryText: String,
-    connectedCountryCode: String = "",
+    isRunning: Boolean,
+    isBusy: Boolean,
+    mode: OrbVisualMode = when {
+        isRunning && isBusy -> OrbVisualMode.SCANNING
+        isRunning -> OrbVisualMode.CONNECTED
+        isBusy -> OrbVisualMode.CONNECTING
+        else -> OrbVisualMode.IDLE
+    },
+    scanProgressFraction: Float? = null,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    sizeDp: Dp = 196.dp,
+    centerContent: @Composable BoxScope.() -> Unit = {},
 ) {
     val motionActive = rememberMotionActive()
-    val ringRotation: Float
-    val breath: Float
-    val shockwave: Float
-    if (motionActive) {
-        val transition = rememberInfiniteTransition(label = "orb_anim")
-        ringRotation = transition.animateFloat(
-            initialValue = 0f,
-            targetValue = 360f,
-            animationSpec = infiniteRepeatable(
-                animation = tween(
-                    durationMillis = if (mode == OrbVisualMode.PROCESSING) 2600 else 10000,
-                    easing = LinearEasing
-                ),
-                repeatMode = RepeatMode.Restart
-            ),
-            label = "ring_rot"
-        ).value
-        breath = transition.animateFloat(
-            initialValue = 0.94f,
-            targetValue = 1.04f,
-            animationSpec = infiniteRepeatable(
-                animation = tween(2200, easing = FastOutSlowInEasing),
-                repeatMode = RepeatMode.Reverse
-            ),
-            label = "orb_breath"
-        ).value
-        shockwave = transition.animateFloat(
-            initialValue = 0f,
-            targetValue = 1f,
-            animationSpec = infiniteRepeatable(
-                animation = tween(2400, easing = LinearEasing),
-                repeatMode = RepeatMode.Restart
-            ),
-            label = "orb_shockwave"
-        ).value
-    } else {
-        ringRotation = 24f
-        breath = 1.0f
-        shockwave = 0f
-    }
+    val interactionSource = remember { MutableInteractionSource() }
+    val isPressed by interactionSource.collectIsPressedAsState()
+
+    val pressScale by animateFloatAsState(
+        targetValue = if (isPressed) 0.94f else 1.0f,
+        animationSpec = spring(dampingRatio = 0.65f, stiffness = 420f),
+        label = "orb_press",
+    )
 
     val primaryColor by animateColorAsState(
         targetValue = when (mode) {
             OrbVisualMode.CONNECTED -> QsColors.ConnectedEmerald
-            OrbVisualMode.PROCESSING -> QsColors.PlasmaViolet
-            OrbVisualMode.ERROR -> QsColors.DangerCrimson
-            OrbVisualMode.DISCONNECTED -> QsColors.ElectricCyan
+            OrbVisualMode.SCANNING -> QsColors.SolarGold
+            OrbVisualMode.CONNECTING -> QsColors.ElectricCyan
+            OrbVisualMode.IDLE -> QsColors.ElectricCyan
         },
-        animationSpec = tween(550),
-        label = "orb_color"
+        animationSpec = tween(420),
+        label = "orb_primary_color",
     )
+
     val secondaryColor by animateColorAsState(
         targetValue = when (mode) {
             OrbVisualMode.CONNECTED -> QsColors.AuroraMint
-            OrbVisualMode.PROCESSING -> QsColors.ElectricCyan
-            OrbVisualMode.ERROR -> QsColors.SolarGold
-            OrbVisualMode.DISCONNECTED -> QsColors.PlasmaViolet
+            OrbVisualMode.SCANNING -> QsColors.ElectricCyan
+            OrbVisualMode.CONNECTING -> QsColors.PlasmaViolet
+            OrbVisualMode.IDLE -> QsColors.BorderStrong
         },
-        animationSpec = tween(550),
-        label = "orb_sec_color"
+        animationSpec = tween(420),
+        label = "orb_secondary_color",
     )
 
-    val interaction = remember { MutableInteractionSource() }
-    val pressed by interaction.collectIsPressedAsState()
-    val scale by animateFloatAsState(
-        targetValue = if (pressed) 0.93f else 1f,
-        animationSpec = spring(stiffness = 450f),
-        label = "orb_press"
+    val spinDeg: Float
+    val pulse: Float
+    val wavePhase: Float
+    if (motionActive) {
+        val infinite = rememberInfiniteTransition(label = "orb_motion")
+        spinDeg = infinite.animateFloat(
+            initialValue = 0f,
+            targetValue = 360f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(
+                    durationMillis = when (mode) {
+                        OrbVisualMode.CONNECTING, OrbVisualMode.SCANNING -> 2200
+                        OrbVisualMode.CONNECTED -> 9000
+                        OrbVisualMode.IDLE -> 16000
+                    },
+                    easing = LinearEasing,
+                ),
+                repeatMode = RepeatMode.Restart,
+            ),
+            label = "orb_spin",
+        ).value
+        pulse = infinite.animateFloat(
+            initialValue = 0f,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(2100, easing = FastOutSlowInEasing),
+                repeatMode = RepeatMode.Reverse,
+            ),
+            label = "orb_pulse",
+        ).value
+        wavePhase = infinite.animateFloat(
+            initialValue = 0f,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(2400, easing = LinearEasing),
+                repeatMode = RepeatMode.Restart,
+            ),
+            label = "orb_wave",
+        ).value
+    } else {
+        spinDeg = 0f
+        pulse = 0.5f
+        wavePhase = 0f
+    }
+
+    val animatedProgress by animateFloatAsState(
+        targetValue = (scanProgressFraction ?: 0f).coerceIn(0f, 1f),
+        animationSpec = tween(260),
+        label = "orb_scan_progress",
     )
 
     Box(
         modifier = modifier
-            .size(236.dp)
+            .size(sizeDp)
             .graphicsLayer {
-                scaleX = scale
-                scaleY = scale
+                scaleX = pressScale
+                scaleY = pressScale
             }
+            .clip(CircleShape)
             .clickable(
-                interactionSource = interaction,
+                interactionSource = interactionSource,
                 indication = null,
                 onClick = onClick
             ),
         contentAlignment = Alignment.Center
     ) {
         Canvas(modifier = Modifier.fillMaxSize()) {
-            val center = Offset(size.width / 2f, size.height / 2f)
-            val maxR = size.minDimension / 2f
+            val w = size.width
+            val h = size.height
+            val cx = w / 2f
+            val cy = h / 2f
+            val maxR = minOf(w, h) / 2f
 
-            // Volumetric outer shockwave aura
-            if (mode == OrbVisualMode.CONNECTED || mode == OrbVisualMode.PROCESSING) {
-                val waveRadius = maxR * (0.66f + 0.32f * shockwave)
+            // 1. Outward sonar / harmonic shield wave (Connected or Scanning/Connecting)
+            if (mode != OrbVisualMode.IDLE) {
+                val waveRadius1 = maxR * (0.64f + 0.34f * wavePhase)
+                val waveAlpha1 = (1f - wavePhase) * 0.42f
                 drawCircle(
-                    color = primaryColor.copy(alpha = (1f - shockwave) * 0.35f),
-                    radius = waveRadius,
-                    center = center,
-                    style = Stroke(width = 2.5f)
+                    color = primaryColor.copy(alpha = waveAlpha1),
+                    radius = waveRadius1,
+                    center = Offset(cx, cy),
+                    style = Stroke(width = 1.6.dp.toPx())
                 )
-            }
 
-            drawCircle(
-                brush = Brush.radialGradient(
-                    colors = listOf(primaryColor.copy(alpha = 0.34f), Color.Transparent),
-                    center = center,
-                    radius = maxR
-                ),
-                radius = maxR,
-                center = center
-            )
-
-            // 3D tilted Saturnian orbital arc 1
-            val tiltAngle = ringRotation * (PI / 180.0).toFloat()
-            val rx1 = maxR * 0.90f
-            val ry1 = maxR * 0.44f
-            val orbitPath = Path()
-            for (deg in 0..360 step 6) {
-                val rad = (deg * PI / 180.0).toFloat()
-                val lx = cos(rad) * rx1
-                val ly = sin(rad) * ry1
-                val wx = center.x + lx * cos(tiltAngle) - ly * sin(tiltAngle)
-                val wy = center.y + lx * sin(tiltAngle) + ly * cos(tiltAngle)
-                if (deg == 0) orbitPath.moveTo(wx, wy) else orbitPath.lineTo(wx, wy)
-            }
-            drawPath(
-                path = orbitPath,
-                brush = Brush.linearGradient(listOf(primaryColor.copy(alpha = 0.7f), secondaryColor.copy(alpha = 0.25f))),
-                style = Stroke(width = 2.2f)
-            )
-
-            // Second orthogonal tilted orbital ring
-            val tiltAngle2 = (-ringRotation * 0.7f) * (PI / 180.0).toFloat()
-            val orbitPath2 = Path()
-            for (deg in 0..360 step 6) {
-                val rad = (deg * PI / 180.0).toFloat()
-                val lx = cos(rad) * (maxR * 0.85f)
-                val ly = sin(rad) * (maxR * 0.34f)
-                val wx = center.x + lx * cos(tiltAngle2) - ly * sin(tiltAngle2)
-                val wy = center.y + lx * sin(tiltAngle2) + ly * cos(tiltAngle2)
-                if (deg == 0) orbitPath2.moveTo(wx, wy) else orbitPath2.lineTo(wx, wy)
-            }
-            drawPath(
-                path = orbitPath2,
-                brush = Brush.linearGradient(listOf(secondaryColor.copy(alpha = 0.55f), Color.Transparent)),
-                style = Stroke(width = 1.6f)
-            )
-
-            // Sweep arc around main sphere
-            drawArc(
-                brush = Brush.sweepGradient(listOf(primaryColor, secondaryColor, primaryColor.copy(alpha = 0.1f))),
-                startAngle = ringRotation,
-                sweepAngle = if (mode == OrbVisualMode.PROCESSING) 220f else 120f,
-                useCenter = false,
-                topLeft = Offset(center.x - maxR * 0.78f, center.y - maxR * 0.78f),
-                size = Size(maxR * 1.56f, maxR * 1.56f),
-                style = Stroke(width = 4.dp.toPx(), cap = StrokeCap.Round)
-            )
-
-            if (mode == OrbVisualMode.PROCESSING && progressFraction != null) {
-                drawArc(
-                    color = QsColors.AuroraMint,
-                    startAngle = -90f,
-                    sweepAngle = 360f * progressFraction.coerceIn(0f, 1f),
-                    useCenter = false,
-                    topLeft = Offset(center.x - maxR * 0.71f, center.y - maxR * 0.71f),
-                    size = Size(maxR * 1.42f, maxR * 1.42f),
-                    style = Stroke(width = 5.dp.toPx(), cap = StrokeCap.Round)
+                val p2 = (wavePhase + 0.5f) % 1f
+                val waveRadius2 = maxR * (0.64f + 0.34f * p2)
+                val waveAlpha2 = (1f - p2) * 0.28f
+                drawCircle(
+                    color = secondaryColor.copy(alpha = waveAlpha2),
+                    radius = waveRadius2,
+                    center = Offset(cx, cy),
+                    style = Stroke(width = 1.2.dp.toPx())
                 )
-            }
-
-            // Inner 3D shaded obsidian sphere with off-center specular studio light
-            val coreRadius = maxR * 0.62f * (if (mode == OrbVisualMode.CONNECTED) breath else 1f)
-            drawCircle(
-                brush = Brush.radialGradient(
-                    colors = listOf(
-                        primaryColor.copy(alpha = 0.55f),
-                        Color(0xFF141E3C),
-                        Color(0xFF060A18),
+            } else {
+                // Idle gentle ambient aura
+                drawCircle(
+                    brush = Brush.radialGradient(
+                        colors = listOf(
+                            primaryColor.copy(alpha = 0.08f + pulse * 0.06f),
+                            Color.Transparent,
+                        ),
+                        center = Offset(cx, cy),
+                        radius = maxR * 0.96f,
                     ),
-                    center = Offset(center.x - coreRadius * 0.34f, center.y - coreRadius * 0.36f),
-                    radius = coreRadius * 1.38f
-                ),
-                radius = coreRadius,
-                center = center
+                    radius = maxR * 0.96f,
+                    center = Offset(cx, cy),
+                )
+            }
+
+            // 2. Calibrated 36-tick outer bezel
+            val tickOuterR = maxR * 0.89f
+            val tickCount = 36
+            for (i in 0 until tickCount) {
+                val isMajor = i % 3 == 0
+                val angleDeg = i * (360f / tickCount)
+                val angleRad = (angleDeg - 90f) * (PI / 180.0)
+                val innerR = tickOuterR - (if (isMajor) 5.5.dp.toPx() else 2.8.dp.toPx())
+                val tickColor = if (mode == OrbVisualMode.CONNECTED || (mode != OrbVisualMode.IDLE && isMajor)) {
+                    primaryColor.copy(alpha = if (isMajor) 0.72f else 0.30f)
+                } else {
+                    QsColors.BorderStrong.copy(alpha = if (isMajor) 0.75f else 0.38f)
+                }
+                drawLine(
+                    color = tickColor,
+                    start = Offset(
+                        cx + cos(angleRad).toFloat() * innerR,
+                        cy + sin(angleRad).toFloat() * innerR,
+                    ),
+                    end = Offset(
+                        cx + cos(angleRad).toFloat() * tickOuterR,
+                        cy + sin(angleRad).toFloat() * tickOuterR,
+                    ),
+                    strokeWidth = if (isMajor) 1.5.dp.toPx() else 1.dp.toPx(),
+                    cap = StrokeCap.Round,
+                )
+            }
+
+            // 3. Orbital track & dynamic sweep / scan progress
+            val ringR = maxR * 0.75f
+            val ringStroke = 3.2.dp.toPx()
+            drawCircle(
+                color = QsColors.BorderSubtle.copy(alpha = 0.75f),
+                radius = ringR,
+                center = Offset(cx, cy),
+                style = Stroke(width = ringStroke),
             )
 
-            // Glossy sphere rim
+            if (mode == OrbVisualMode.SCANNING && scanProgressFraction != null && animatedProgress > 0.01f) {
+                drawArc(
+                    brush = Brush.sweepGradient(listOf(primaryColor, secondaryColor, primaryColor)),
+                    startAngle = -90f,
+                    sweepAngle = 360f * animatedProgress,
+                    useCenter = false,
+                    topLeft = Offset(cx - ringR, cy - ringR),
+                    size = Size(ringR * 2f, ringR * 2f),
+                    style = Stroke(width = ringStroke + 1.dp.toPx(), cap = StrokeCap.Round),
+                )
+            }
+
+            if (mode == OrbVisualMode.CONNECTING || mode == OrbVisualMode.SCANNING) {
+                rotate(degrees = spinDeg, pivot = Offset(cx, cy)) {
+                    drawArc(
+                        brush = Brush.sweepGradient(
+                            0.0f to Color.Transparent,
+                            0.55f to primaryColor.copy(alpha = 0.85f),
+                            0.85f to secondaryColor,
+                            1.0f to Color.Transparent,
+                        ),
+                        startAngle = 0f,
+                        sweepAngle = 140f,
+                        useCenter = false,
+                        topLeft = Offset(cx - ringR, cy - ringR),
+                        size = Size(ringR * 2f, ringR * 2f),
+                        style = Stroke(width = ringStroke + 1.2.dp.toPx(), cap = StrokeCap.Round),
+                    )
+                }
+                // Orbiting telemetry node dot
+                val orbAngle = (spinDeg + 125f - 90f) * (PI / 180.0)
+                val dotOffset = Offset(
+                    cx + cos(orbAngle).toFloat() * ringR,
+                    cy + sin(orbAngle).toFloat() * ringR,
+                )
+                drawCircle(color = primaryColor, radius = 4.2.dp.toPx(), center = dotOffset)
+                drawCircle(color = Color.White, radius = 2.dp.toPx(), center = dotOffset)
+            } else if (mode == OrbVisualMode.CONNECTED) {
+                rotate(degrees = spinDeg, pivot = Offset(cx, cy)) {
+                    drawArc(
+                        brush = Brush.sweepGradient(
+                            listOf(
+                                QsColors.ConnectedEmerald,
+                                QsColors.AuroraMint,
+                                QsColors.ElectricCyan,
+                                QsColors.ConnectedEmerald,
+                            )
+                        ),
+                        startAngle = 0f,
+                        sweepAngle = 360f,
+                        useCenter = false,
+                        topLeft = Offset(cx - ringR, cy - ringR),
+                        size = Size(ringR * 2f, ringR * 2f),
+                        style = Stroke(width = ringStroke + 0.6.dp.toPx()),
+                    )
+                }
+            }
+
+            // 4. Inner Machined Slate Dome
+            val coreR = maxR * 0.62f
+            val coreBrush = when (mode) {
+                OrbVisualMode.CONNECTED -> Brush.radialGradient(
+                    colors = listOf(
+                        Color(0xFF103F35),
+                        Color(0xFF0C2B27),
+                        Color(0xFF0A1B1E),
+                    ),
+                    center = Offset(cx - coreR * 0.25f, cy - coreR * 0.28f),
+                    radius = coreR * 1.35f,
+                )
+                OrbVisualMode.SCANNING, OrbVisualMode.CONNECTING -> Brush.radialGradient(
+                    colors = listOf(
+                        Color(0xFF162C46),
+                        Color(0xFF101E33),
+                        Color(0xFF0B1322),
+                    ),
+                    center = Offset(cx - coreR * 0.25f, cy - coreR * 0.28f),
+                    radius = coreR * 1.35f,
+                )
+                OrbVisualMode.IDLE -> Brush.radialGradient(
+                    colors = listOf(
+                        Color(0xFF1D2940),
+                        Color(0xFF131C2D),
+                        Color(0xFF0D1422),
+                    ),
+                    center = Offset(cx - coreR * 0.25f, cy - coreR * 0.28f),
+                    radius = coreR * 1.35f,
+                )
+            }
+            drawCircle(brush = coreBrush, radius = coreR, center = Offset(cx, cy))
+
+            // Specular rim highlight
             drawCircle(
                 brush = Brush.verticalGradient(
-                    listOf(Color.White.copy(alpha = 0.45f), primaryColor.copy(alpha = 0.75f), Color.Transparent)
+                    colors = listOf(
+                        primaryColor.copy(alpha = if (mode == OrbVisualMode.IDLE) 0.35f else 0.72f),
+                        QsColors.BorderSubtle.copy(alpha = 0.45f),
+                    ),
+                    startY = cy - coreR,
+                    endY = cy + coreR,
                 ),
-                radius = coreRadius,
-                center = center,
-                style = Stroke(width = 2.dp.toPx())
+                radius = coreR,
+                center = Offset(cx, cy),
+                style = Stroke(width = 1.4.dp.toPx()),
             )
         }
 
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            modifier = Modifier.padding(horizontal = 30.dp)
-        ) {
-            if (mode == OrbVisualMode.CONNECTED && connectedCountryCode.length == 2) {
-                CountryFlagMedallion(
-                    countryCode = connectedCountryCode,
-                    size = 30.dp,
-                    borderColor = QsColors.ConnectedEmerald,
-                )
-                Spacer(modifier = Modifier.height(6.dp))
-            }
-            Text(
-                text = primaryText,
-                color = QsColors.TextPrimary,
-                fontSize = 16.sp,
-                fontWeight = FontWeight.ExtraBold,
-                textAlign = TextAlign.Center
-            )
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = secondaryText,
-                color = primaryColor.copy(alpha = 0.92f),
-                fontSize = 11.sp,
-                fontWeight = FontWeight.Medium,
-                textAlign = TextAlign.Center,
-                maxLines = 2
-            )
+        // Center content slot (falls back to clean vector glyph if no custom content provided)
+        Box(contentAlignment = Alignment.Center) {
+            centerContent()
         }
     }
 }
 
 /**
- * 3D Volumetric Animated Quota Ring Gauge for the Subscription Dashboard.
- * Features an extruded 3D shadow ring base, animated remaining-traffic sweep, and orbiting specular pulse.
+ * Clean vector glyph drawn inside the center of ConnectionOrb3d (no emojis).
+ */
+@Composable
+fun OrbCenterGlyph(
+    mode: OrbVisualMode,
+    modifier: Modifier = Modifier,
+    sizeDp: Dp = 44.dp,
+) {
+    val tint by animateColorAsState(
+        targetValue = when (mode) {
+            OrbVisualMode.CONNECTED -> QsColors.AuroraMint
+            OrbVisualMode.SCANNING -> QsColors.SolarGold
+            OrbVisualMode.CONNECTING -> QsColors.ElectricCyan
+            OrbVisualMode.IDLE -> QsColors.TextPrimary
+        },
+        animationSpec = tween(300),
+        label = "glyph_tint",
+    )
+
+    Canvas(modifier = modifier.size(sizeDp)) {
+        val w = size.width
+        val h = size.height
+        val cx = w / 2f
+        val cy = h / 2f
+        val strokeW = 2.8.dp.toPx()
+
+        when (mode) {
+            OrbVisualMode.CONNECTED -> {
+                // Shield outline + check mark
+                val shield = Path().apply {
+                    moveTo(cx, h * 0.14f)
+                    lineTo(w * 0.80f, h * 0.28f)
+                    lineTo(w * 0.80f, h * 0.52f)
+                    cubicTo(w * 0.80f, h * 0.74f, cx, h * 0.88f, cx, h * 0.88f)
+                    cubicTo(cx, h * 0.88f, w * 0.20f, h * 0.74f, w * 0.20f, h * 0.52f)
+                    lineTo(w * 0.20f, h * 0.28f)
+                    close()
+                }
+                drawPath(
+                    path = shield,
+                    color = tint,
+                    style = Stroke(width = strokeW, cap = StrokeCap.Round, join = StrokeJoin.Round),
+                )
+                val check = Path().apply {
+                    moveTo(w * 0.36f, h * 0.52f)
+                    lineTo(w * 0.46f, h * 0.62f)
+                    lineTo(w * 0.66f, h * 0.40f)
+                }
+                drawPath(
+                    path = check,
+                    color = Color.White,
+                    style = Stroke(width = strokeW, cap = StrokeCap.Round, join = StrokeJoin.Round),
+                )
+            }
+            OrbVisualMode.SCANNING, OrbVisualMode.CONNECTING -> {
+                // Crisp lightning pulse glyph
+                val bolt = Path().apply {
+                    moveTo(w * 0.54f, h * 0.16f)
+                    lineTo(w * 0.32f, h * 0.54f)
+                    lineTo(w * 0.50f, h * 0.54f)
+                    lineTo(w * 0.45f, h * 0.84f)
+                    lineTo(w * 0.68f, h * 0.46f)
+                    lineTo(w * 0.50f, h * 0.46f)
+                    close()
+                }
+                drawPath(path = bolt, color = tint)
+            }
+            OrbVisualMode.IDLE -> {
+                // Classic power emblem
+                val arcR = minOf(w, h) * 0.32f
+                drawArc(
+                    color = tint,
+                    startAngle = -52f,
+                    sweepAngle = 284f,
+                    useCenter = false,
+                    topLeft = Offset(cx - arcR, cy - arcR + 2.dp.toPx()),
+                    size = Size(arcR * 2f, arcR * 2f),
+                    style = Stroke(width = strokeW, cap = StrokeCap.Round),
+                )
+                drawLine(
+                    color = QsColors.ElectricCyan,
+                    start = Offset(cx, cy - arcR - 3.dp.toPx()),
+                    end = Offset(cx, cy + 1.dp.toPx()),
+                    strokeWidth = strokeW,
+                    cap = StrokeCap.Round,
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Precision donut quota ring with tabular numeral percentage and clean single track.
  */
 @Composable
 fun Animated3dQuotaChart(
-    remainingFraction: Float,
-    centerPrimary: String,
-    centerSecondary: String,
+    usedFraction: Float,
+    usedPercentText: String,
+    caption: String,
+    accentColor: Color = QsColors.ElectricCyan,
     modifier: Modifier = Modifier,
+    sizeDp: Dp = 128.dp,
 ) {
-    val motionActive = rememberMotionActive()
     val animatedSweep by animateFloatAsState(
-        targetValue = remainingFraction.coerceIn(0f, 1f),
-        animationSpec = tween(durationMillis = if (motionActive) 1200 else 0, easing = FastOutSlowInEasing),
+        targetValue = (usedFraction.coerceIn(0f, 1f) * 360f),
+        animationSpec = tween(durationMillis = 750, easing = FastOutSlowInEasing),
         label = "quota_sweep"
     )
-    val highlightDeg = if (motionActive) {
-        val transition = rememberInfiniteTransition(label = "quota_orbit")
-        transition.animateFloat(
-            initialValue = 0f,
-            targetValue = 360f,
-            animationSpec = infiniteRepeatable(
-                animation = tween(durationMillis = 6000, easing = LinearEasing),
-                repeatMode = RepeatMode.Restart
-            ),
-            label = "quota_glow_deg"
-        ).value
-    } else 45f
 
-    Box(
-        modifier = modifier.size(210.dp),
-        contentAlignment = Alignment.Center
-    ) {
+    Box(modifier = modifier.size(sizeDp), contentAlignment = Alignment.Center) {
         Canvas(modifier = Modifier.fillMaxSize()) {
-            val c = Offset(size.width / 2f, size.height / 2f)
-            val r = size.minDimension * 0.39f
-            val strokePx = 18.dp.toPx()
+            val strokePx = 11.dp.toPx()
+            val inset = strokePx * 0.85f
+            val arcSize = Size(size.width - inset * 2f, size.height - inset * 2f)
+            val topLeft = Offset(inset, inset)
 
-            // Ambient backdrop glow
-            drawCircle(
-                brush = Brush.radialGradient(
-                    colors = listOf(QsColors.ElectricCyan.copy(alpha = 0.24f), Color.Transparent),
-                    center = c,
-                    radius = r * 1.45f
-                ),
-                radius = r * 1.45f,
-                center = c
-            )
-
-            // 3D depth extruded lower shadow arc (+7dp Z-offset effect)
             drawArc(
-                color = Color(0xFF020612),
+                color = QsColors.SurfaceInset,
                 startAngle = 0f,
                 sweepAngle = 360f,
                 useCenter = false,
-                topLeft = Offset(c.x - r, c.y - r + 7.dp.toPx()),
-                size = Size(r * 2f, r * 2f),
-                style = Stroke(width = strokePx + 4.dp.toPx(), cap = StrokeCap.Round)
+                topLeft = topLeft,
+                size = arcSize,
+                style = Stroke(width = strokePx, cap = StrokeCap.Round)
+            )
+            drawArc(
+                color = QsColors.BorderSubtle,
+                startAngle = 0f,
+                sweepAngle = 360f,
+                useCenter = false,
+                topLeft = topLeft,
+                size = arcSize,
+                style = Stroke(width = 1.dp.toPx())
             )
 
-            // Recessed track groove
-            drawCircle(
-                color = Color(0xFF1A2546),
-                radius = r,
-                center = c,
-                style = Stroke(width = strokePx)
-            )
-
-            // Active remaining-traffic 3D gradient arc
-            val sweepDeg = 360f * animatedSweep
-            if (sweepDeg > 1f) {
+            if (animatedSweep > 0.5f) {
                 drawArc(
                     brush = Brush.sweepGradient(
-                        colors = listOf(
-                            QsColors.ElectricCyan,
-                            QsColors.AuroraMint,
-                            QsColors.PlasmaViolet,
-                            QsColors.ElectricCyan
-                        ),
-                        center = c
+                        listOf(
+                            accentColor,
+                            if (usedFraction > 0.85f) QsColors.SolarGold else QsColors.AuroraMint,
+                            accentColor,
+                        )
                     ),
                     startAngle = -90f,
-                    sweepAngle = sweepDeg,
+                    sweepAngle = animatedSweep,
                     useCenter = false,
-                    topLeft = Offset(c.x - r, c.y - r),
-                    size = Size(r * 2f, r * 2f),
+                    topLeft = topLeft,
+                    size = arcSize,
                     style = Stroke(width = strokePx, cap = StrokeCap.Round)
                 )
-
-                // Specular highlight tip dot orbiting edge
-                val endRad = ((-90f + sweepDeg) * PI / 180.0).toFloat()
-                val tip = Offset(c.x + r * cos(endRad), c.y + r * sin(endRad))
-                drawCircle(
-                    color = Color.White.copy(alpha = 0.9f),
-                    radius = 5.dp.toPx(),
-                    center = tip
-                )
             }
-
-            // Inner rotating holographic ring
-            val radGlow = (highlightDeg * PI / 180.0).toFloat()
-            drawArc(
-                brush = Brush.sweepGradient(
-                    colors = listOf(Color.Transparent, QsColors.ElectricCyan.copy(alpha = 0.6f), Color.Transparent),
-                    center = c
-                ),
-                startAngle = highlightDeg,
-                sweepAngle = 110f,
-                useCenter = false,
-                topLeft = Offset(c.x - r * 0.74f, c.y - r * 0.74f),
-                size = Size(r * 1.48f, r * 1.48f),
-                style = Stroke(width = 2.dp.toPx(), cap = StrokeCap.Round)
-            )
-            drawCircle(
-                color = QsColors.AuroraMint.copy(alpha = 0.5f),
-                radius = 2.5.dp.toPx(),
-                center = Offset(c.x + r * 0.74f * cos(radGlow), c.y + r * 0.74f * sin(radGlow))
-            )
         }
 
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Text(
-                text = centerPrimary,
+                text = usedPercentText,
+                style = QsTextStyles.TabularStat,
                 color = QsColors.TextPrimary,
-                fontSize = 24.sp,
-                fontWeight = FontWeight.ExtraBold
+                fontSize = 20.sp,
+                fontWeight = FontWeight.Bold,
             )
-            Spacer(Modifier.height(2.dp))
             Text(
-                text = centerSecondary,
-                color = QsColors.AuroraMint,
-                fontSize = 11.sp,
-                fontWeight = FontWeight.SemiBold
+                text = caption,
+                color = QsColors.TextSecondary,
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Medium,
             )
         }
     }
 }
 
 /**
- * Animated real-time Download/Upload data-packet & live waveform telemetry HUD for NovaPulse.
- * Replaces audio equalizer bars with directional fiber packet conduits + live throughput trace.
+ * Clean tabular live speed monitor pair (`↓ Download` and `↑ Upload`).
  */
 @Composable
 fun LiveSpeedHudRow(
-    downloadSpeedText: String,
-    uploadSpeedText: String,
     downloadLabel: String,
+    downloadFormatted: String,
+    downloadBps: Long,
     uploadLabel: String,
-    active: Boolean,
-    downloadBps: Long = 0L,
-    uploadBps: Long = 0L,
+    uploadFormatted: String,
+    uploadBps: Long,
+    isRunning: Boolean,
     modifier: Modifier = Modifier,
 ) {
-    val motionActive = rememberMotionActive()
-    val packetFlow = if (motionActive && active) {
-        rememberInfiniteTransition(label = "data_packet_stream").animateFloat(
-            initialValue = 0f,
-            targetValue = 1f,
-            animationSpec = infiniteRepeatable(
-                animation = tween(1350, easing = LinearEasing),
-                repeatMode = RepeatMode.Restart
-            ),
-            label = "packet_t"
-        ).value
-    } else 0f
-
-    val dlHistory = remember { mutableStateListOf(0.08f, 0.1f, 0.08f, 0.12f, 0.1f, 0.08f, 0.1f, 0.12f, 0.09f, 0.11f) }
-    val ulHistory = remember { mutableStateListOf(0.08f, 0.1f, 0.08f, 0.12f, 0.1f, 0.08f, 0.1f, 0.12f, 0.09f, 0.11f) }
-    LaunchedEffect(downloadBps, uploadBps, active) {
-        val dlNorm = if (!active) 0.05f else {
-            val scaled = kotlin.math.ln(1.0 + downloadBps.coerceAtLeast(0L).toDouble()) / kotlin.math.ln(1.0 + 10_000_000.0)
-            scaled.toFloat().coerceIn(0.12f, 1.0f)
-        }
-        val ulNorm = if (!active) 0.05f else {
-            val scaled = kotlin.math.ln(1.0 + uploadBps.coerceAtLeast(0L).toDouble()) / kotlin.math.ln(1.0 + 4_000_000.0)
-            scaled.toFloat().coerceIn(0.12f, 1.0f)
-        }
-        dlHistory.removeAt(0)
-        dlHistory.add(dlNorm)
-        ulHistory.removeAt(0)
-        ulHistory.add(ulNorm)
-    }
-
     Row(
         modifier = modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(10.dp)
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         SpeedMeterTile(
             label = downloadLabel,
-            value = downloadSpeedText,
-            accent = QsColors.AuroraMint,
-            secondaryAccent = QsColors.ElectricCyan,
-            flowProgress = packetFlow,
-            history = dlHistory,
-            active = active,
+            value = downloadFormatted,
+            bps = downloadBps,
             isDownload = true,
-            modifier = Modifier.weight(1f)
+            isRunning = isRunning,
+            accent = QsColors.ConnectedEmerald,
+            modifier = Modifier.weight(1f),
         )
         SpeedMeterTile(
             label = uploadLabel,
-            value = uploadSpeedText,
-            accent = QsColors.ElectricCyan,
-            secondaryAccent = QsColors.PlasmaViolet,
-            flowProgress = packetFlow,
-            history = ulHistory,
-            active = active,
+            value = uploadFormatted,
+            bps = uploadBps,
             isDownload = false,
-            modifier = Modifier.weight(1f)
+            isRunning = isRunning,
+            accent = QsColors.ElectricCyan,
+            modifier = Modifier.weight(1f),
         )
     }
 }
@@ -1089,121 +785,99 @@ fun LiveSpeedHudRow(
 private fun SpeedMeterTile(
     label: String,
     value: String,
-    accent: Color,
-    secondaryAccent: Color,
-    flowProgress: Float,
-    history: List<Float>,
-    active: Boolean,
+    bps: Long,
     isDownload: Boolean,
+    isRunning: Boolean,
+    accent: Color,
     modifier: Modifier = Modifier,
 ) {
-    Glass3dCard(
+    val samples = remember { mutableStateListOf(0.08f, 0.08f, 0.08f, 0.08f, 0.08f, 0.08f, 0.08f, 0.08f) }
+    LaunchedEffect(bps, isRunning) {
+        val norm = if (!isRunning) 0.06f else {
+            val kbps = (bps / 1024f)
+            when {
+                kbps <= 1f -> 0.10f
+                kbps < 100f -> 0.22f + (kbps / 100f) * 0.25f
+                kbps < 1500f -> 0.47f + ((kbps - 100f) / 1400f) * 0.35f
+                else -> 0.94f
+            }.coerceIn(0.08f, 0.98f)
+        }
+        if (samples.size >= 8) samples.removeAt(0)
+        samples.add(norm)
+    }
+
+    Surface(
         modifier = modifier,
-        cornerRadius = 18.dp,
-        glowColor = accent.copy(alpha = if (active) 0.55f else 0.25f),
+        shape = RoundedCornerShape(14.dp),
+        color = QsColors.SurfaceCard,
+        border = BorderStroke(1.dp, if (isRunning && bps > 0L) accent.copy(alpha = 0.28f) else QsColors.BorderSubtle),
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = if (isDownload) "↓ $label" else "↑ $label",
-                    color = QsColors.TextSecondary,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Medium
-                )
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    text = value,
-                    color = if (active) QsColors.TextPrimary else QsColors.TextMuted,
-                    fontSize = 15.sp,
-                    fontWeight = FontWeight.Bold,
-                    style = TextStyle(fontFeatureSettings = "tnum")
-                )
-                Spacer(Modifier.height(6.dp))
-                // Real-time directional telemetry waveform trace
-                Canvas(modifier = Modifier.fillMaxWidth().height(16.dp).padding(end = 6.dp)) {
-                    val count = history.size.coerceAtLeast(2)
-                    val stepX = size.width / (count - 1).toFloat()
-                    val tracePath = Path()
-                    val fillPath = Path()
-                    for (i in 0 until count) {
-                        val x = i * stepX
-                        val y = size.height * (1f - history[i].coerceIn(0.05f, 0.96f))
-                        if (i == 0) {
-                            tracePath.moveTo(x, y)
-                            fillPath.moveTo(x, size.height)
-                            fillPath.lineTo(x, y)
+        Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Canvas(modifier = Modifier.size(10.dp)) {
+                    val w = size.width
+                    val h = size.height
+                    val path = Path().apply {
+                        if (isDownload) {
+                            moveTo(w * 0.5f, h * 0.1f)
+                            lineTo(w * 0.5f, h * 0.85f)
+                            moveTo(w * 0.22f, h * 0.58f)
+                            lineTo(w * 0.5f, h * 0.86f)
+                            lineTo(w * 0.78f, h * 0.58f)
                         } else {
-                            val prevX = (i - 1) * stepX
-                            val prevY = size.height * (1f - history[i - 1].coerceIn(0.05f, 0.96f))
-                            val midX = (prevX + x) * 0.5f
-                            tracePath.cubicTo(midX, prevY, midX, y, x, y)
-                            fillPath.cubicTo(midX, prevY, midX, y, x, y)
+                            moveTo(w * 0.5f, h * 0.9f)
+                            lineTo(w * 0.5f, h * 0.15f)
+                            moveTo(w * 0.22f, h * 0.42f)
+                            lineTo(w * 0.5f, h * 0.14f)
+                            lineTo(w * 0.78f, h * 0.42f)
                         }
                     }
-                    fillPath.lineTo(size.width, size.height)
-                    fillPath.close()
                     drawPath(
-                        path = fillPath,
-                        brush = Brush.verticalGradient(
-                            colors = listOf(accent.copy(alpha = if (active) 0.34f else 0.10f), Color.Transparent)
-                        )
-                    )
-                    drawPath(
-                        path = tracePath,
-                        brush = Brush.horizontalGradient(listOf(secondaryAccent.copy(alpha = 0.7f), accent)),
-                        style = Stroke(
-                            width = 1.6.dp.toPx(),
-                            cap = StrokeCap.Round,
-                            join = StrokeJoin.Round
-                        )
+                        path = path,
+                        color = accent,
+                        style = Stroke(width = 1.6.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round),
                     )
                 }
+                Text(
+                    text = label,
+                    color = QsColors.TextSecondary,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
             }
-
-            // Directional Fiber Data-Packet Conduit (packets travel DOWN for Download, UP for Upload)
-            Canvas(modifier = Modifier.size(width = 24.dp, height = 42.dp)) {
-                val laneX1 = size.width * 0.30f
-                val laneX2 = size.width * 0.70f
-                drawLine(
-                    color = accent.copy(alpha = if (active) 0.25f else 0.12f),
-                    start = Offset(laneX1, 2.dp.toPx()),
-                    end = Offset(laneX1, size.height - 2.dp.toPx()),
-                    strokeWidth = 1.4.dp.toPx(),
-                    cap = StrokeCap.Round
-                )
-                drawLine(
-                    color = secondaryAccent.copy(alpha = if (active) 0.25f else 0.12f),
-                    start = Offset(laneX2, 2.dp.toPx()),
-                    end = Offset(laneX2, size.height - 2.dp.toPx()),
-                    strokeWidth = 1.4.dp.toPx(),
-                    cap = StrokeCap.Round
-                )
-
-                val packetCount = 3
-                for (i in 0 until packetCount) {
-                    val phase = (flowProgress + i / packetCount.toFloat()) % 1f
-                    val yFrac1 = if (isDownload) phase else (1f - phase)
-                    val yFrac2 = if (isDownload) ((phase + 0.45f) % 1f) else (1f - ((phase + 0.45f) % 1f))
-                    val py1 = yFrac1 * size.height
-                    val py2 = yFrac2 * size.height
-                    val alpha1 = if (active) (1f - kotlin.math.abs(yFrac1 - 0.5f) * 1.4f).coerceIn(0.25f, 1f) else 0.22f
-                    val alpha2 = if (active) (1f - kotlin.math.abs(yFrac2 - 0.5f) * 1.4f).coerceIn(0.20f, 0.9f) else 0.18f
-
-                    drawRoundRect(
-                        color = accent.copy(alpha = alpha1),
-                        topLeft = Offset(laneX1 - 2.2.dp.toPx(), (py1 - 3.5.dp.toPx()).coerceIn(0f, size.height - 7.dp.toPx())),
-                        size = Size(4.4.dp.toPx(), 7.dp.toPx()),
-                        cornerRadius = CornerRadius(2.2.dp.toPx(), 2.2.dp.toPx())
-                    )
-                    drawRoundRect(
-                        color = secondaryAccent.copy(alpha = alpha2),
-                        topLeft = Offset(laneX2 - 1.8.dp.toPx(), (py2 - 2.8.dp.toPx()).coerceIn(0f, size.height - 5.5.dp.toPx())),
-                        size = Size(3.6.dp.toPx(), 5.5.dp.toPx()),
-                        cornerRadius = CornerRadius(1.8.dp.toPx(), 1.8.dp.toPx())
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = if (isRunning) value else "0 B/s",
+                style = QsTextStyles.TabularStat,
+                color = QsColors.TextPrimary,
+                fontSize = 15.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+            )
+            Spacer(Modifier.height(6.dp))
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(10.dp),
+                horizontalArrangement = Arrangement.spacedBy(3.dp),
+                verticalAlignment = Alignment.Bottom,
+            ) {
+                samples.forEachIndexed { idx, s ->
+                    val frac = if (idx == samples.lastIndex) 1f else 0.45f + (idx / 14f)
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .height((s * 10f).coerceAtLeast(2f).dp)
+                            .clip(RoundedCornerShape(2.dp))
+                            .background(
+                                if (isRunning && bps > 0L) accent.copy(alpha = frac * 0.82f)
+                                else QsColors.BorderSubtle
+                            )
                     )
                 }
             }
@@ -1213,36 +887,61 @@ private fun SpeedMeterTile(
 
 @Composable
 fun CdnProviderBadge(cdnType: CdnType, modifier: Modifier = Modifier) {
-    val (label, bg, fg) = when (cdnType) {
-        CdnType.CLOUDFLARE -> Triple("Cloudflare", QsColors.CloudflareOrange.copy(alpha = 0.20f), QsColors.CloudflareOrange)
-        CdnType.CLOUDFRONT -> Triple("CloudFront", QsColors.CloudFrontSky.copy(alpha = 0.20f), QsColors.CloudFrontSky)
-        CdnType.UNKNOWN -> Triple("Auto CDN", Color.White.copy(alpha = 0.08f), QsColors.TextSecondary)
+    val (bg, fg, label) = when (cdnType) {
+        CdnType.CLOUDFLARE -> Triple(
+            QsColors.CloudflareOrange.copy(alpha = 0.16f),
+            QsColors.CloudflareOrange,
+            "Cloudflare"
+        )
+        CdnType.CLOUDFRONT -> Triple(
+            QsColors.CloudFrontSky.copy(alpha = 0.16f),
+            QsColors.CloudFrontSky,
+            "CloudFront"
+        )
+        CdnType.UNKNOWN -> Triple(
+            QsColors.BorderSubtle.copy(alpha = 0.5f),
+            QsColors.TextSecondary,
+            "CDN"
+        )
     }
+
     Box(
         modifier = modifier
-            .clip(RoundedCornerShape(10.dp))
+            .clip(RoundedCornerShape(8.dp))
             .background(bg)
-            .border(0.8.dp, fg.copy(alpha = 0.45f), RoundedCornerShape(10.dp))
-            .padding(horizontal = 9.dp, vertical = 4.dp)
+            .border(1.dp, fg.copy(alpha = 0.35f), RoundedCornerShape(8.dp))
+            .padding(horizontal = 8.dp, vertical = 3.dp)
     ) {
-        Text(text = label, color = fg, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+        Text(
+            text = label,
+            color = fg,
+            fontSize = 10.sp,
+            fontWeight = FontWeight.Bold,
+            maxLines = 1,
+        )
     }
 }
 
 @Composable
 fun StandardPipelineBadge(
     label: String,
-    accent: Color = QsColors.PlasmaViolet,
     modifier: Modifier = Modifier,
 ) {
+    val cleanLabel = label.ifBlank { "STANDARD" }
     Box(
         modifier = modifier
-            .clip(RoundedCornerShape(10.dp))
-            .background(accent.copy(alpha = 0.20f))
-            .border(0.8.dp, accent.copy(alpha = 0.48f), RoundedCornerShape(10.dp))
-            .padding(horizontal = 9.dp, vertical = 4.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(QsColors.AuroraMint.copy(alpha = 0.14f))
+            .border(1.dp, QsColors.AuroraMint.copy(alpha = 0.35f), RoundedCornerShape(8.dp))
+            .padding(horizontal = 8.dp, vertical = 3.dp)
     ) {
-        Text(text = label, color = accent, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+        Text(
+            text = cleanLabel,
+            color = QsColors.AuroraMint,
+            fontSize = 10.sp,
+            fontWeight = FontWeight.Bold,
+            maxLines = 1,
+        )
     }
 }
 
@@ -1255,36 +954,32 @@ fun MetricPill(
 ) {
     Column(
         modifier = modifier
-            .clip(RoundedCornerShape(14.dp))
-            .background(Color(0x340B1228))
-            .border(0.75.dp, accent.copy(alpha = 0.34f), RoundedCornerShape(14.dp))
-            .padding(horizontal = 11.dp, vertical = 8.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(QsColors.SurfaceInset)
+            .border(1.dp, QsColors.BorderSubtle, RoundedCornerShape(12.dp))
+            .padding(horizontal = 10.dp, vertical = 8.dp)
     ) {
-        Text(text = label, color = QsColors.TextSecondary, fontSize = 10.sp)
-        Spacer(modifier = Modifier.height(2.dp))
+        Text(text = label, color = QsColors.TextMuted, fontSize = 10.sp, maxLines = 1)
+        Spacer(Modifier.height(2.dp))
         Text(
             text = value,
-            color = QsColors.TextPrimary,
-            fontSize = 13.sp,
+            style = QsTextStyles.TabularStat,
+            color = accent,
+            fontSize = 12.sp,
             fontWeight = FontWeight.Bold,
-            style = TextStyle(fontFeatureSettings = "tnum")
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
         )
     }
 }
 
 @Composable
 fun StatusDot(active: Boolean) {
-    val color by animateColorAsState(
-        targetValue = if (active) QsColors.ConnectedEmerald else QsColors.TextMuted,
-        label = "status_dot"
+    Box(
+        modifier = Modifier
+            .size(9.dp)
+            .clip(CircleShape)
+            .background(if (active) QsColors.ConnectedEmerald else QsColors.TextMuted)
     )
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Box(
-            modifier = Modifier
-                .size(8.dp)
-                .clip(CircleShape)
-                .background(color)
-        )
-        Spacer(modifier = Modifier.width(6.dp))
-    }
+    Spacer(Modifier.width(7.dp))
 }

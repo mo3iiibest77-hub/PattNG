@@ -29,6 +29,8 @@ import com.v2ray.ang.handler.MmkvManager
 import com.v2ray.ang.handler.NovaPulseApkDownloader
 import com.v2ray.ang.handler.UpdateCheckerManager
 import java.io.File
+import com.v2ray.ang.senpai.AppLogBuffer
+import com.v2ray.ang.senpai.AppLogEntry
 import com.v2ray.ang.senpai.AutoConfigFilter
 import com.v2ray.ang.senpai.CdnDetectionResult
 import com.v2ray.ang.senpai.CdnPingClassifier
@@ -111,6 +113,7 @@ data class Qs3dUiState(
     val showSubscriptionDetails: Boolean = false,
     val showRangeExplorer: Boolean = false,
     val showAboutPromo: Boolean = false,
+    val showLogsScreen: Boolean = false,
     val showOptimizeConsentPrompt: Boolean = false,
     val hasActiveLicense: Boolean = false,
     val isRedeemingLicense: Boolean = false,
@@ -166,6 +169,10 @@ data class Qs3dUiState(
     val updateDownloadProgress: Int? = null,
     val readyUpdateApkPath: String? = null,
     val updateNeedsInstallPerm: Boolean = false,
+    // Diagnostics Logs (redacted)
+    val diagnosticLogs: List<AppLogEntry> = emptyList(),
+    val logSearchQuery: String = "",
+    val logFilterBucket: LogFilterBucket = LogFilterBucket.ALL,
 ) {
     val liveDownloadFormatted: String get() = liveDownloadBps.toSpeedString()
     val liveUploadFormatted: String get() = liveUploadBps.toSpeedString()
@@ -192,11 +199,15 @@ class Qs3dViewModel(
     @Volatile
     private var lastUpdateCheckMs = 0L
     @Volatile
+    private var lastSubSyncMs = 0L
+    @Volatile
     private var lastUpdateDialogDismissMs = 0L
     @Volatile
     private var forceRevokingLicense = false
     private val verifyInFlight = AtomicBoolean(false)
     private var licenseWatchdogJob: Job? = null
+    @Volatile
+    private var cachedSystemCoreLogs: List<AppLogEntry> = emptyList()
 
     init {
         viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
@@ -204,12 +215,22 @@ class Qs3dViewModel(
         }
         collectServiceEvents()
         collectCoordinatorFlows()
+        collectDiagnosticLogs()
         refreshAllData(fetchRemoteQuota = true)
         applyPendingDaemonNoticeIfAny()
         verifyLicenseSessionNow(force = true)
         viewModelScope.launch(Dispatchers.IO) {
             delay(1500L)
             checkForAppUpdates(silent = true)
+        }
+    }
+
+    private fun collectDiagnosticLogs() {
+        viewModelScope.launch {
+            AppLogBuffer.logsFlow.collect { bufferEntries ->
+                val merged = (cachedSystemCoreLogs + bufferEntries).distinctBy { it.id }
+                _uiState.update { it.copy(diagnosticLogs = merged) }
+            }
         }
     }
 
@@ -383,6 +404,7 @@ class Qs3dViewModel(
                 showSubscriptionDetails = false,
                 showRangeExplorer = false,
                 showAboutPromo = false,
+                showLogsScreen = false,
             )
         }
         if (tab == Qs3dTab.Ranges) loadRanges(_uiState.value.activeRangeProvider)
@@ -394,6 +416,7 @@ class Qs3dViewModel(
             it.copy(
                 showSubscriptionDetails = open,
                 showAboutPromo = if (open) false else it.showAboutPromo,
+                showLogsScreen = if (open) false else it.showLogsScreen,
             )
         }
         if (open) refreshQuotaOnly()
@@ -404,6 +427,7 @@ class Qs3dViewModel(
             it.copy(
                 showRangeExplorer = open,
                 showAboutPromo = if (open) false else it.showAboutPromo,
+                showLogsScreen = if (open) false else it.showLogsScreen,
             )
         }
         if (open) loadRanges(_uiState.value.activeRangeProvider)
@@ -415,8 +439,53 @@ class Qs3dViewModel(
                 showAboutPromo = open,
                 showSubscriptionDetails = if (open) false else it.showSubscriptionDetails,
                 showRangeExplorer = if (open) false else it.showRangeExplorer,
+                showLogsScreen = if (open) false else it.showLogsScreen,
             )
         }
+    }
+
+    fun openLogsScreen(open: Boolean) {
+        _uiState.update {
+            it.copy(
+                showLogsScreen = open,
+                showSubscriptionDetails = if (open) false else it.showSubscriptionDetails,
+                showRangeExplorer = if (open) false else it.showRangeExplorer,
+                showAboutPromo = if (open) false else it.showAboutPromo,
+            )
+        }
+        if (open) refreshSystemLogs()
+    }
+
+    fun setLogSearchQuery(query: String) {
+        _uiState.update { it.copy(logSearchQuery = query) }
+    }
+
+    fun setLogFilterBucket(bucket: LogFilterBucket) {
+        _uiState.update { it.copy(logFilterBucket = bucket) }
+    }
+
+    fun refreshSystemLogs() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val sys = AppLogBuffer.readSanitizedSystemCoreLines()
+            cachedSystemCoreLogs = sys
+            val merged = (sys + AppLogBuffer.snapshot()).distinctBy { it.id }
+            _uiState.update { it.copy(diagnosticLogs = merged) }
+        }
+    }
+
+    fun clearDiagnosticLogs() {
+        cachedSystemCoreLogs = emptyList()
+        AppLogBuffer.clear()
+        _uiState.update { it.copy(diagnosticLogs = emptyList()) }
+    }
+
+    fun copyLogsToClipboard() {
+        val text = AppLogBuffer.formatExportText(_uiState.value.diagnosticLogs)
+        if (text.isBlank()) return
+        val app = getApplication<Application>()
+        val cm = app.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+        cm?.setPrimaryClip(ClipData.newPlainText("novapulse_logs", text))
+        _uiState.update { it.copy(toastMessage = app.getString(R.string.novapulse_logs_copied)) }
     }
 
     fun respondToOptimizeConsent(accepted: Boolean) {
@@ -455,11 +524,27 @@ class Qs3dViewModel(
         }
     }
 
-    fun refreshQuotaOnly() {
+    fun syncSubscriptionIfStale(minIntervalMs: Long = 180_000L) {
+        val now = System.currentTimeMillis()
+        if ((now - lastSubSyncMs) < minIntervalMs) return
+        if (_uiState.value.smartFlow.busy) return
+        if (LicenseBackendClient.getSavedLicenseKey().isEmpty()) return
+        refreshQuotaOnly(showFeedback = false)
+    }
+
+    fun refreshQuotaOnly(showFeedback: Boolean = false) {
         val ctx = getApplication<Application>()
+        lastSubSyncMs = System.currentTimeMillis()
         SmartConnectCoordinator.refreshQuotaAndSubscription(ctx) { res ->
             res.onSuccess {
                 loadConfigsAndSubs()
+                if (showFeedback) {
+                    _uiState.update { it.copy(toastMessage = ctx.getString(R.string.toast_success)) }
+                }
+            }.onFailure { err ->
+                if (showFeedback) {
+                    _uiState.update { it.copy(toastMessage = err.message ?: ctx.getString(R.string.toast_failure)) }
+                }
             }
         }
     }

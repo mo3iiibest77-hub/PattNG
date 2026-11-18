@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.widget.Toast
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -24,16 +25,16 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
@@ -43,8 +44,7 @@ import androidx.compose.ui.unit.sp
 import com.v2ray.ang.R
 
 /**
- * Central support & purchase configuration for NovaPulse.
- * Update [TELEGRAM_USERNAME] before publishing if your Telegram handle changes.
+ * Central support, official channel & purchase configuration for NovaPulse.
  */
 object SupportLinks {
     const val TELEGRAM_USERNAME = "Mo3i_Best"
@@ -58,10 +58,8 @@ object SupportLinks {
 
     fun openTelegramSupport(context: Context): Boolean = openTelegramTarget(context, TELEGRAM_USERNAME)
 
-    /**
-     * Opens any Telegram handle (`@user`), `t.me/...`, `tg://...`, or HTTPS URL cleanly,
-     * falling back from the native Telegram URI scheme to the web browser if needed.
-     */
+    fun openOfficialChannel(context: Context): Boolean = openTelegramTarget(context, OFFICIAL_CHANNEL_USERNAME)
+
     fun openTelegramTarget(context: Context, target: String): Boolean {
         val clean = target.trim()
         if (clean.isEmpty()) return false
@@ -110,9 +108,7 @@ object SupportLinks {
 }
 
 /**
- * Standalone Promotional, User Guide & License Purchase Screen for NovaPulse.
- * Describes strictly implemented capabilities in warm conversational wording without ever
- * asking users for raw subscription links.
+ * Redesigned User Guide, Service Overview & Telegram Channel / Support Screen.
  */
 @Composable
 fun Qs3dAboutPromoScreen(
@@ -123,7 +119,7 @@ fun Qs3dAboutPromoScreen(
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+        contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         item {
@@ -133,70 +129,59 @@ fun Qs3dAboutPromoScreen(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 TextButton(onClick = onBack) {
-                    Text(stringResource(R.string.novapulse_back_btn), color = QsColors.ElectricCyan)
+                    Text(stringResource(R.string.novapulse_back_btn), color = QsColors.ElectricCyan, fontWeight = FontWeight.SemiBold)
                 }
                 Text(
                     text = stringResource(R.string.novapulse_promo_screen_title),
                     color = QsColors.TextPrimary,
-                    fontSize = 17.sp,
+                    fontSize = 15.sp,
                     fontWeight = FontWeight.Bold
                 )
-                Spacer(modifier = Modifier.width(56.dp))
+                Spacer(Modifier.width(48.dp))
             }
         }
 
-        // 1. Visual Hero Card with Nature + Cyber Artwork
+        // Hero Presentation Card
         item {
             Glass3dCard(
-                beamSeed = 11,
-                glowColor = QsColors.ElectricCyan.copy(alpha = 0.48f)
+                surfaceColor = QsColors.SurfaceElevated,
+                glowColor = QsColors.ElectricCyan.copy(alpha = 0.35f)
             ) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(190.dp)
-                        .clip(RoundedCornerShape(16.dp))
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    Image(
-                        painter = painterResource(R.drawable.np_promo_hero),
-                        contentDescription = stringResource(R.string.novapulse_promo_hero_title),
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier.fillMaxSize()
-                    )
                     Box(
                         modifier = Modifier
-                            .fillMaxSize()
-                            .background(
-                                Brush.verticalGradient(
-                                    colors = listOf(
-                                        Color(0x22040814),
-                                        Color(0x88040814),
-                                        Color(0xDD040814),
-                                    )
-                                )
-                            )
-                    )
-                    Column(
-                        modifier = Modifier
-                            .align(Alignment.BottomStart)
-                            .padding(14.dp)
+                            .size(54.dp)
+                            .clip(CircleShape)
+                            .background(QsColors.SurfaceInset)
+                            .border(1.dp, QsColors.BorderStrong, CircleShape),
+                        contentAlignment = Alignment.Center
                     ) {
+                        Image(
+                            painter = painterResource(R.drawable.ic_stat_name),
+                            contentDescription = null,
+                            modifier = Modifier.size(30.dp)
+                        )
+                    }
+                    Column(modifier = Modifier.weight(1f)) {
                         Text(
                             text = stringResource(R.string.novapulse_promo_hero_badge),
-                            color = QsColors.AuroraMint,
+                            color = QsColors.ElectricCyan,
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold
                         )
-                        Spacer(Modifier.height(4.dp))
+                        Spacer(Modifier.height(2.dp))
                         Text(
                             text = stringResource(R.string.novapulse_promo_hero_title),
                             color = QsColors.TextPrimary,
-                            fontSize = 18.sp,
+                            fontSize = 17.sp,
                             fontWeight = FontWeight.ExtraBold
                         )
                     }
                 }
-                Spacer(Modifier.height(12.dp))
+                Spacer(Modifier.height(10.dp))
                 Text(
                     text = stringResource(R.string.novapulse_promo_intro_body),
                     color = QsColors.TextSecondary,
@@ -206,60 +191,50 @@ fun Qs3dAboutPromoScreen(
             }
         }
 
-        // 2. Implemented Capabilities Overview
+        // Core Features Card
         item {
-            Glass3dCard(
-                beamSeed = 23,
-                glowColor = QsColors.AuroraMint.copy(alpha = 0.42f)
-            ) {
+            Glass3dCard {
                 Text(
                     text = stringResource(R.string.novapulse_promo_features_title),
                     color = QsColors.TextPrimary,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 15.sp
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Bold
                 )
                 Spacer(Modifier.height(10.dp))
                 PromoFeatureRow(
-                    number = "1",
-                    accent = QsColors.ElectricCyan,
                     title = stringResource(R.string.novapulse_promo_feat1_title),
-                    body = stringResource(R.string.novapulse_promo_feat1_desc)
+                    desc = stringResource(R.string.novapulse_promo_feat1_desc),
+                    accent = QsColors.ElectricCyan,
                 )
-                Spacer(Modifier.height(10.dp))
+                HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp), color = QsColors.BorderSubtle.copy(alpha = 0.6f))
                 PromoFeatureRow(
-                    number = "2",
-                    accent = QsColors.PlasmaViolet,
                     title = stringResource(R.string.novapulse_promo_feat2_title),
-                    body = stringResource(R.string.novapulse_promo_feat2_desc)
+                    desc = stringResource(R.string.novapulse_promo_feat2_desc),
+                    accent = QsColors.PlasmaViolet,
                 )
-                Spacer(Modifier.height(10.dp))
+                HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp), color = QsColors.BorderSubtle.copy(alpha = 0.6f))
                 PromoFeatureRow(
-                    number = "3",
-                    accent = QsColors.AuroraMint,
                     title = stringResource(R.string.novapulse_promo_feat3_title),
-                    body = stringResource(R.string.novapulse_promo_feat3_desc)
+                    desc = stringResource(R.string.novapulse_promo_feat3_desc),
+                    accent = QsColors.ConnectedEmerald,
                 )
-                Spacer(Modifier.height(10.dp))
+                HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp), color = QsColors.BorderSubtle.copy(alpha = 0.6f))
                 PromoFeatureRow(
-                    number = "4",
-                    accent = QsColors.CloudflareOrange,
                     title = stringResource(R.string.novapulse_promo_feat4_title),
-                    body = stringResource(R.string.novapulse_promo_feat4_desc)
+                    desc = stringResource(R.string.novapulse_promo_feat4_desc),
+                    accent = QsColors.CloudflareOrange,
                 )
             }
         }
 
-        // 3. Step-by-Step User Guide & Quick Answers
+        // FAQ / Step-by-step Guide Card
         item {
-            Glass3dCard(
-                beamSeed = 37,
-                glowColor = QsColors.PlasmaViolet.copy(alpha = 0.44f)
-            ) {
+            Glass3dCard {
                 Text(
                     text = stringResource(R.string.novapulse_promo_guide_title),
                     color = QsColors.TextPrimary,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 15.sp
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Bold
                 )
                 Spacer(Modifier.height(10.dp))
                 GuideQuestionBlock(
@@ -279,102 +254,138 @@ fun Qs3dAboutPromoScreen(
             }
         }
 
-        // 4. Direct License Purchase & Telegram Support CTA
+        // Official Channel + Support Purchase Card
         item {
             Glass3dCard(
-                beamSeed = 51,
-                glowColor = QsColors.ConnectedEmerald.copy(alpha = 0.48f)
+                surfaceColor = QsColors.SurfaceElevated,
+                glowColor = QsColors.ConnectedEmerald.copy(alpha = 0.35f)
             ) {
                 Text(
                     text = stringResource(R.string.novapulse_promo_buy_title),
                     color = QsColors.TextPrimary,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 16.sp
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Bold
                 )
                 Spacer(Modifier.height(6.dp))
                 Text(
                     text = stringResource(R.string.novapulse_promo_buy_body),
                     color = QsColors.TextSecondary,
-                    fontSize = 13.sp,
-                    lineHeight = 20.sp
+                    fontSize = 12.sp,
+                    lineHeight = 19.sp
                 )
-                Spacer(Modifier.height(10.dp))
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(QsColors.ElectricCyan.copy(alpha = 0.14f))
-                        .border(0.8.dp, QsColors.ElectricCyan.copy(alpha = 0.45f), RoundedCornerShape(10.dp))
-                        .padding(horizontal = 12.dp, vertical = 6.dp)
-                ) {
-                    Text(
-                        text = "@${SupportLinks.TELEGRAM_USERNAME}",
-                        color = QsColors.ElectricCyan,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
                 Spacer(Modifier.height(12.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Surface(
+                        shape = RoundedCornerShape(9.dp),
+                        color = QsColors.ElectricCyan.copy(alpha = 0.14f),
+                        border = BorderStroke(1.dp, QsColors.ElectricCyan.copy(alpha = 0.38f)),
+                    ) {
+                        Text(
+                            text = "@${SupportLinks.TELEGRAM_USERNAME}",
+                            style = QsTextStyles.MonoCode,
+                            color = QsColors.ElectricCyan,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 12.sp,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                        )
+                    }
+                    Surface(
+                        shape = RoundedCornerShape(9.dp),
+                        color = QsColors.AuroraMint.copy(alpha = 0.14f),
+                        border = BorderStroke(1.dp, QsColors.AuroraMint.copy(alpha = 0.38f)),
+                    ) {
+                        Text(
+                            text = "@${SupportLinks.OFFICIAL_CHANNEL_USERNAME}",
+                            style = QsTextStyles.MonoCode,
+                            color = QsColors.AuroraMint,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 12.sp,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                        )
+                    }
+                }
+
+                Spacer(Modifier.height(12.dp))
+
                 Button(
                     onClick = { SupportLinks.openTelegramSupport(context) },
-                    modifier = Modifier.fillMaxWidth().height(50.dp),
-                    shape = RoundedCornerShape(14.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = QsColors.ElectricCyan)
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(46.dp),
+                    shape = RoundedCornerShape(11.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = QsColors.ElectricCyan,
+                        contentColor = Color(0xFF04151E),
+                    )
                 ) {
                     Text(
                         text = stringResource(R.string.novapulse_promo_telegram_btn),
-                        color = Color(0xFF041322),
-                        fontWeight = FontWeight.ExtraBold,
-                        fontSize = 14.sp
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 13.sp
                     )
                 }
+
+                Spacer(Modifier.height(8.dp))
+
+                OutlinedButton(
+                    onClick = { SupportLinks.openOfficialChannel(context) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(44.dp),
+                    shape = RoundedCornerShape(11.dp),
+                    border = BorderStroke(1.dp, QsColors.AuroraMint.copy(alpha = 0.45f)),
+                ) {
+                    Text(
+                        text = stringResource(R.string.novapulse_channel_join_btn),
+                        color = QsColors.AuroraMint,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 13.sp,
+                    )
+                }
+
                 if (!hasActiveLicense) {
                     Spacer(Modifier.height(8.dp))
                     OutlinedButton(
                         onClick = onBack,
-                        modifier = Modifier.fillMaxWidth().height(46.dp),
-                        shape = RoundedCornerShape(14.dp)
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(11.dp),
+                        border = BorderStroke(1.dp, QsColors.BorderStrong)
                     ) {
                         Text(
                             text = stringResource(R.string.novapulse_promo_go_activate_btn),
                             color = QsColors.TextPrimary,
-                            fontWeight = FontWeight.SemiBold
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 13.sp
                         )
                     }
                 }
             }
         }
-
-        item { Spacer(Modifier.height(12.dp)) }
     }
 }
 
 @Composable
 private fun PromoFeatureRow(
-    number: String,
-    accent: Color,
     title: String,
-    body: String,
+    desc: String,
+    accent: Color
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
         verticalAlignment = Alignment.Top
     ) {
         Box(
             modifier = Modifier
-                .size(26.dp)
+                .padding(top = 6.dp)
+                .size(8.dp)
                 .clip(CircleShape)
-                .background(accent.copy(alpha = 0.18f))
-                .border(0.9.dp, accent.copy(alpha = 0.5f), CircleShape),
-            contentAlignment = Alignment.Center
-        ) {
-            Text(
-                text = number,
-                color = accent,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.ExtraBold
-            )
-        }
-        Spacer(Modifier.width(10.dp))
+                .background(accent)
+        )
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = title,
@@ -384,7 +395,7 @@ private fun PromoFeatureRow(
             )
             Spacer(Modifier.height(2.dp))
             Text(
-                text = body,
+                text = desc,
                 color = QsColors.TextSecondary,
                 fontSize = 12.sp,
                 lineHeight = 18.sp
@@ -396,19 +407,19 @@ private fun PromoFeatureRow(
 @Composable
 private fun GuideQuestionBlock(
     question: String,
-    answer: String,
+    answer: String
 ) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(14.dp))
-            .background(Color(0x260A1328))
-            .border(0.7.dp, Color.White.copy(alpha = 0.10f), RoundedCornerShape(14.dp))
+            .clip(RoundedCornerShape(12.dp))
+            .background(QsColors.SurfaceInset)
+            .border(1.dp, QsColors.BorderSubtle, RoundedCornerShape(12.dp))
             .padding(12.dp)
     ) {
         Text(
             text = question,
-            color = QsColors.AuroraMint,
+            color = QsColors.ElectricCyan,
             fontSize = 13.sp,
             fontWeight = FontWeight.Bold
         )

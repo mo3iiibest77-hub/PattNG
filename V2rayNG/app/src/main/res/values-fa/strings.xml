@@ -832,4 +832,48 @@
     <string name="novapulse_auto_failover_label">سوییچ خودکار هوشمند (CDN ← عادی)</string>
     <string name="novapulse_auto_failover_desc">در صورت قطع یا کندی CDN، به‌صورت خودکار روی سریع‌ترین کانفیگ عادی (REALITY / Hysteria2) سوییچ کن.</string>
 
+    <!-- Redesigned UI v2.6 strings -->
+    <string name="novapulse_unit_gb">گیگابایت</string>
+    <string name="novapulse_unit_mb">مگابایت</string>
+    <string name="novapulse_days_hours_left_fmt">%1$d روز و %2$d ساعت</string>
+    <string name="novapulse_hours_left_fmt">%1$d ساعت باقیمانده</string>
+    <string name="novapulse_expired_label">منقضی شده</string>
+    <string name="novapulse_sub_plan_label">سرویس فعال</string>
+    <string name="novapulse_sub_devices_fmt">%1$d از %2$d دستگاه</string>
+    <string name="novapulse_sub_devices_unlimited_fmt">%1$d متصل (نامحدود)</string>
+    <string name="novapulse_sub_upload_label">ارسال (Upload)</string>
+    <string name="novapulse_sub_download_label">دریافت (Download)</string>
+    <string name="novapulse_per_app_show_list_fmt">انتخاب برنامه‌ها (%1$d انتخاب)</string>
+    <string name="novapulse_per_app_hide_list">بستن لیست برنامه‌ها</string>
+    <string name="novapulse_per_app_summary_bypass_fmt">%1$d برنامه از VPN عبور نمی‌کنند</string>
+    <string name="novapulse_per_app_summary_proxy_fmt">فقط %1$d برنامه از VPN عبور می‌کنند</string>
+    <string name="novapulse_logs_section_title">گزارش خطا و لاگ‌های هسته</string>
+    <string name="novapulse_logs_section_desc">مشاهده لاگ‌های زنده SmartConnect، وضعیت لایسنس، سوییچ خودکار و هسته Xray بدون نمایش اطلاعات محرمانه.</string>
+    <string name="novapulse_logs_open_btn">مشاهده لاگ‌های سیستم</string>
+    <string name="novapulse_logs_title">گزارش عملکرد هسته و اتصال</string>
+    <string name="novapulse_logs_search_hint">جستجو در لاگ‌ها…</string>
+    <string name="novapulse_logs_filter_all">همه</string>
+    <string name="novapulse_logs_filter_core">هسته Xray</string>
+    <string name="novapulse_logs_filter_warn">هشدار و خطا</string>
+    <string name="novapulse_logs_copy_btn">کپی لاگ</string>
+    <string name="novapulse_logs_clear_btn">پاک‌سازی</string>
+    <string name="novapulse_logs_refresh_btn">دریافت Xray</string>
+    <string name="novapulse_logs_empty">موردی مطابق فیلتر فعلی ثبت نشده است.</string>
+    <string name="novapulse_logs_copied">لاگ‌های ایمن در کلیپ‌بورد کپی شد.</string>
+    <string name="novapulse_logs_privacy_note">کد لایسنس، توکن نشست، UUID و لینک کانفیگ‌ها به‌صورت خودکار سانسور و مخفی می‌شوند.</string>
+    <string name="novapulse_sync_sub_label">همگام‌سازی اشتراک و سرورها</string>
+    <string name="novapulse_sync_sub_btn">بروزرسانی اشتراک</string>
+    <string name="novapulse_gate_tagline">هسته هوشمند Xray + REALITY + بهینه‌سازی Cloudflare</string>
+    <string name="novapulse_gate_feature_1">کشف خودکار تمیزترین IP متناسب با اینترنت و اپراتور شما</string>
+    <string name="novapulse_gate_feature_2">سوییچ خودکار و بدون قطعی بین CDN و پروتکل‌های عادی</string>
+    <string name="novapulse_gate_feature_3">امنیت سخت‌افزاری لایسنس با پایش دقیق حجم و زمان</string>
+    <string name="novapulse_connect_tap_start">برای اتصال لمس کنید</string>
+    <string name="novapulse_connect_tap_stop">برای قطع اتصال لمس کنید</string>
+    <string name="novapulse_connect_active_tunnel">تونل رمزنگاری‌شده فعال است</string>
+    <string name="novapulse_connect_scanning">در حال پیدا کردن سریع‌ترین مسیر…</string>
+    <string name="novapulse_connect_failover">در حال انتقال به سرور عادی پرسرعت…</string>
+    <string name="novapulse_connect_standby">آماده اتصال • مسیر هوشمند فعال</string>
+    <string name="novapulse_sub_refresh_btn">بروزرسانی مصرف</string>
+    <string name="novapulse_channel_join_btn">کانال رسمی (@NovaPulseVPN)</string>
+
 </resources>
