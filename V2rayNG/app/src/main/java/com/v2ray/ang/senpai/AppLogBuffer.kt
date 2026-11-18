@@ -41,7 +41,7 @@ object AppLogBuffer {
     private val LICENSE_KEY_REGEX = Regex("""\bNP-[A-Z0-9]{2,8}(?:-[A-Z0-9]{2,8})+\b""", RegexOption.IGNORE_CASE)
     private val SESSION_TOKEN_REGEX = Regex("""\bnps_[A-Za-z0-9._~=-]{6,}\b""")
     private val AUTH_HEADER_REGEX = Regex(
-        """(?i)\b(authorization|x-license-key|x-session-token|bearer)\s*[:=]?\s*[A-Za-z0-9._~+/=-]{6,}"""
+        """(?i)\b(authorization|x-license-key|x-session-token|bearer)\s*[:=]?\s*(?:bearer\s+)?[A-Za-z0-9._~+/=-]{4,}"""
     )
     private val RAW_CONFIG_URI_REGEX = Regex(
         """(?i)\b(vless|vmess|trojan|ss|ssr|socks|socks5|http|wireguard|wg|hysteria2|hy2|tuic)://\S+"""
