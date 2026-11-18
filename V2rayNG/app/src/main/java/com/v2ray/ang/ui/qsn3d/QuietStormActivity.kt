@@ -220,6 +220,8 @@ class QuietStormActivity : BaseComponentActivity() {
                                 Qs3dLicenseGateScreen(
                                     activationInput = state.activationInput,
                                     isRedeeming = state.isRedeemingLicense,
+                                    activationProgressPercent = state.activationProgressPercent,
+                                    activationStageKey = state.activationStageKey,
                                     onInputChange = viewModel::setActivationInput,
                                     onRedeemClick = { viewModel.redeemActivationInput() },
                                     onScanLicenseQrClick = {
@@ -243,7 +245,6 @@ class QuietStormActivity : BaseComponentActivity() {
                                     isRunning = state.coreRunning,
                                     onOpenSubscription = { viewModel.openSubscriptionDetails(true) },
                                     onOpenPromo = { viewModel.openAboutPromo(true) },
-                                    onRefresh = { viewModel.refreshQuotaOnly(showFeedback = true) }
                                 )
                                 val upd = state.availableUpdate
                                 if (upd?.hasUpdate == true && !upd.latestVersion.isNullOrBlank()) {
@@ -513,7 +514,6 @@ private fun NovaPulseTopBar(
     isRunning: Boolean,
     onOpenSubscription: () -> Unit,
     onOpenPromo: () -> Unit,
-    onRefresh: () -> Unit,
 ) {
     Row(
         modifier = Modifier
@@ -527,21 +527,23 @@ private fun NovaPulseTopBar(
             modifier = Modifier.weight(1f, fill = false)
         ) {
             Image(
-                painter = painterResource(R.drawable.ic_stat_name),
+                painter = painterResource(R.drawable.np_app_logo),
                 contentDescription = null,
-                modifier = Modifier.size(22.dp)
+                modifier = Modifier
+                    .size(28.dp)
+                    .clip(RoundedCornerShape(8.dp))
             )
-            Spacer(Modifier.width(8.dp))
+            Spacer(Modifier.width(9.dp))
             StatusDot(active = isRunning)
             Text(
                 text = stringResource(R.string.app_name),
                 color = QsColors.TextPrimary,
-                fontSize = 18.sp,
+                fontSize = 19.sp,
                 fontWeight = FontWeight.ExtraBold,
                 maxLines = 1
             )
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             TopBadgeButton(
                 label = stringResource(R.string.novapulse_promo_top_badge),
                 accent = QsColors.TextSecondary,
@@ -552,11 +554,6 @@ private fun NovaPulseTopBar(
                 accent = QsColors.AuroraMint,
                 onClick = onOpenSubscription
             )
-            TopBadgeButton(
-                label = stringResource(R.string.qsn3d_sync_btn),
-                accent = QsColors.ElectricCyan,
-                onClick = onRefresh
-            )
         }
     }
 }
@@ -565,13 +562,13 @@ private fun NovaPulseTopBar(
 private fun TopBadgeButton(label: String, accent: Color, onClick: () -> Unit) {
     Box(
         modifier = Modifier
-            .clip(RoundedCornerShape(10.dp))
+            .clip(RoundedCornerShape(11.dp))
             .background(QsColors.SurfaceElevated)
-            .border(1.dp, QsColors.BorderSubtle, RoundedCornerShape(10.dp))
+            .border(1.dp, accent.copy(alpha = 0.35f), RoundedCornerShape(11.dp))
             .clickable(onClick = onClick)
-            .padding(horizontal = 9.dp, vertical = 6.dp)
+            .padding(horizontal = 11.dp, vertical = 7.dp)
     ) {
-        Text(text = label, color = accent, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+        Text(text = label, color = accent, fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 1)
     }
 }
 

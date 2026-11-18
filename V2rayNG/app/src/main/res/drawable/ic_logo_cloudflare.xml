@@ -1,0 +1,14 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- Cloudflare iconic cloud silhouette -->
+    <path
+        android:fillColor="#FFF38020"
+        android:pathData="M16.5,16.8H5.6c-1.88,0 -3.4,-1.48 -3.4,-3.32c0,-1.66 1.24,-3.04 2.86,-3.27c0.56,-2.28 2.64,-3.96 5.12,-3.96c2.66,0 4.86,1.94 5.22,4.46c0.35,-0.15 0.74,-0.23 1.15,-0.23c1.68,0 3.05,1.34 3.05,3.0c0,0.12 -0.01,0.23 -0.02,0.34l-3.08,2.98z" />
+    <!-- Cloudflare golden edge wing -->
+    <path
+        android:fillColor="#FFFAAE40"
+        android:pathData="M17.1,16.8h2.55c1.18,0 2.15,-0.93 2.15,-2.08c0,-1.05 -0.8,-1.92 -1.84,-2.06c-0.14,-1.18 -1.16,-2.1 -2.41,-2.1c-0.55,0 -1.06,0.18 -1.47,0.48c-0.18,0.85 -0.49,1.88 -0.94,2.84c0.66,0.72 1.28,1.76 1.96,2.92z" />
+</vector>

@@ -810,27 +810,27 @@
     <string name="novapulse_notice_security_title">اطلاعیه وضعیت لایسنس و امنیت</string>
     <string name="novapulse_notice_official_support_title">دسترسی سریع به پشتیبانی و کانال رسمی</string>
 
-    <string name="novapulse_configs_tab_all">همه (%1$d)</string>
-    <string name="novapulse_configs_tab_cdn">سرورهای CDN (%1$d)</string>
-    <string name="novapulse_configs_tab_standard">عادی / Direct (%1$d)</string>
-    <string name="novapulse_configs_section_cdn">سرورهای بهینه CDN</string>
-    <string name="novapulse_configs_section_standard">پروتکل‌های عادی (REALITY / Hysteria2 / v2rayNG)</string>
-    <string name="novapulse_add_config_btn">+ افزودن کانفیگ</string>
-    <string name="novapulse_add_config_title">افزودن کانفیگ عادی / Reality</string>
-    <string name="novapulse_add_config_hint">لینک vless:// ، hysteria2:// ، hy2:// ، vmess:// یا base64 را جای‌گذاری کنید…</string>
+    <string name="novapulse_configs_tab_all">همه</string>
+    <string name="novapulse_configs_tab_cdn">سرورهای ابری</string>
+    <string name="novapulse_configs_tab_standard">مستقیم</string>
+    <string name="novapulse_configs_section_cdn">مسیرهای بهینه کلادفلر و کلادفرانت</string>
+    <string name="novapulse_configs_section_standard">سرورهای مستقیم و اختصاصی</string>
+    <string name="novapulse_add_config_btn">+ افزودن</string>
+    <string name="novapulse_add_config_title">افزودن کانفیگ دستی</string>
+    <string name="novapulse_add_config_hint">لینک اتصال یا متن Base64 کانفیگ را جای‌گذاری کنید…</string>
     <string name="novapulse_add_config_paste_btn">چسباندن</string>
     <string name="novapulse_add_config_scan_qr_btn">اسکن QR</string>
     <string name="novapulse_add_config_save_btn">افزودن</string>
     <string name="novapulse_add_config_cancel_btn">انصراف</string>
     <string name="novapulse_add_config_success_fmt">%1$d کانفیگ با موفقیت اضافه شد.</string>
-    <string name="novapulse_add_config_invalid">لینک کانفیگ معتبری یافت نشد (لینک سابسکریپشن مجاز نیست).</string>
+    <string name="novapulse_add_config_invalid">لینک کانفیگ معتبری یافت نشد (لینک اشتراک مجاز نیست).</string>
     <string name="novapulse_manual_badge">دستی</string>
-    <string name="novapulse_mode_smart_auto">حالت هوشمند • CDN ⇄ عادی</string>
-    <string name="novapulse_mode_manual_pinned_fmt">انتخاب دستی: %1$s</string>
-    <string name="novapulse_switch_smart_auto_btn">بازگشت به هوشمند</string>
-    <string name="novapulse_failover_switched_fmt">سوییچ خودکار به دلیل اختلال CDN ← %1$s (%2$d ms)</string>
-    <string name="novapulse_auto_failover_label">سوییچ خودکار هوشمند (CDN ← عادی)</string>
-    <string name="novapulse_auto_failover_desc">در صورت قطع یا کندی CDN، به‌صورت خودکار روی سریع‌ترین کانفیگ عادی (REALITY / Hysteria2) سوییچ کن.</string>
+    <string name="novapulse_mode_smart_auto">اتصال هوشمند خودکار</string>
+    <string name="novapulse_mode_manual_pinned_fmt">سرور انتخابی: %1$s</string>
+    <string name="novapulse_switch_smart_auto_btn">حالت خودکار</string>
+    <string name="novapulse_failover_switched_fmt">انتقال خودکار روی مسیر مستقیم ← %1$s (%2$d میلی‌ثانیه)</string>
+    <string name="novapulse_auto_failover_label">سوییچ خودکار به مسیر مستقیم</string>
+    <string name="novapulse_auto_failover_desc">در صورت کندی یا اختلال شبکه ابری، به‌صورت خودکار روی سریع‌ترین سرور مستقیم سوییچ کن.</string>
 
     <!-- Redesigned UI v2.6 strings -->
     <string name="novapulse_unit_gb">گیگابایت</string>
@@ -875,5 +875,11 @@
     <string name="novapulse_connect_standby">آماده اتصال • مسیر هوشمند فعال</string>
     <string name="novapulse_sub_refresh_btn">بروزرسانی مصرف</string>
     <string name="novapulse_channel_join_btn">کانال رسمی (@NovaPulseVPN)</string>
+    <string name="novapulse_ping_testing">در حال تست…</string>
+    <string name="novapulse_ping_untested">آماده تست</string>
+    <string name="novapulse_activate_stage_challenge">برقراری ارتباط امن با سرور لایسنس…</string>
+    <string name="novapulse_activate_stage_proof">تایید هویت سخت‌افزاری دستگاه…</string>
+    <string name="novapulse_activate_stage_configs">دریافت سرورها و اطلاعات اشتراک…</string>
+    <string name="novapulse_activate_stage_ping">تست اولیه سرعت و آماده‌سازی…</string>
 
 </resources>

@@ -98,7 +98,11 @@ fun Qs3dSettingsScreen(
     ) {
         // 1. Account & Subscription Card (never prints raw license key)
         item {
-            Glass3dCard(surfaceColor = QsColors.SurfaceElevated) {
+            Glass3dCard(
+                surfaceColor = QsColors.SurfaceElevated,
+                glowColor = QsColors.ConnectedEmerald.copy(alpha = 0.45f),
+                beamSeed = 2,
+            ) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -245,7 +249,10 @@ fun Qs3dSettingsScreen(
 
         // 2. Smart Routing & Telemetry Controls
         item {
-            Glass3dCard {
+            Glass3dCard(
+                glowColor = QsColors.ElectricCyan.copy(alpha = 0.38f),
+                beamSeed = 6,
+            ) {
                 Text(
                     text = stringResource(R.string.qsn3d_smart_automation_title),
                     color = QsColors.TextPrimary,
@@ -298,7 +305,10 @@ fun Qs3dSettingsScreen(
 
         // 3. Per-App Split Tunneling (with dedicated Expand / Collapse button right beside it)
         item {
-            Glass3dCard {
+            Glass3dCard(
+                glowColor = QsColors.CloudFrontSky.copy(alpha = 0.35f),
+                beamSeed = 10,
+            ) {
                 Text(
                     text = stringResource(R.string.title_pref_per_app_proxy),
                     color = QsColors.TextPrimary,
@@ -409,7 +419,10 @@ fun Qs3dSettingsScreen(
 
         // 4. Diagnostics & Live Redacted Logs
         item {
-            Glass3dCard {
+            Glass3dCard(
+                glowColor = QsColors.PlasmaViolet.copy(alpha = 0.34f),
+                beamSeed = 15,
+            ) {
                 Text(
                     text = stringResource(R.string.novapulse_logs_section_title),
                     color = QsColors.TextPrimary,
@@ -704,18 +717,18 @@ private fun ToggleSettingRow(
             Text(
                 text = title,
                 color = QsColors.TextPrimary,
-                fontSize = 13.sp,
-                fontWeight = FontWeight.SemiBold,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Bold,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
             if (!description.isNullOrBlank()) {
-                Spacer(Modifier.height(2.dp))
+                Spacer(Modifier.height(3.dp))
                 Text(
                     text = description,
                     color = QsColors.TextSecondary,
-                    fontSize = 11.sp,
-                    lineHeight = 16.sp,
+                    fontSize = 12.sp,
+                    lineHeight = 18.sp,
                 )
             }
         }

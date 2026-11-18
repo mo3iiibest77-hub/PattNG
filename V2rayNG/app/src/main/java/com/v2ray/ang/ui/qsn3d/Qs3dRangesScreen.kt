@@ -1,6 +1,8 @@
 package com.v2ray.ang.ui.qsn3d
 
+import androidx.annotation.DrawableRes
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -14,7 +16,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -34,6 +36,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -69,19 +72,20 @@ fun Qs3dRangesScreen(
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        // Provider Segmented Switcher
+        // Provider Segmented Switcher with Official Cloudflare / CloudFront Logos
         item {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(12.dp))
+                    .clip(RoundedCornerShape(13.dp))
                     .background(QsColors.SurfaceInset)
-                    .border(1.dp, QsColors.BorderSubtle, RoundedCornerShape(12.dp))
+                    .border(1.dp, QsColors.BorderSubtle, RoundedCornerShape(13.dp))
                     .padding(4.dp),
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 ProviderSegmentTab(
                     label = "Cloudflare",
+                    iconRes = R.drawable.ic_logo_cloudflare,
                     selected = provider == CdnType.CLOUDFLARE,
                     accent = QsColors.CloudflareOrange,
                     onClick = { onSelectProvider(CdnType.CLOUDFLARE) },
@@ -89,6 +93,7 @@ fun Qs3dRangesScreen(
                 )
                 ProviderSegmentTab(
                     label = "CloudFront",
+                    iconRes = R.drawable.ic_logo_cloudfront,
                     selected = provider == CdnType.CLOUDFRONT,
                     accent = QsColors.CloudFrontSky,
                     onClick = { onSelectProvider(CdnType.CLOUDFRONT) },
@@ -99,7 +104,12 @@ fun Qs3dRangesScreen(
 
         // Overview Stats Card
         item {
-            Glass3dCard(surfaceColor = QsColors.SurfaceElevated) {
+            val providerAccent = if (provider == CdnType.CLOUDFLARE) QsColors.CloudflareOrange else QsColors.CloudFrontSky
+            Glass3dCard(
+                surfaceColor = QsColors.SurfaceElevated,
+                glowColor = providerAccent.copy(alpha = 0.42f),
+                beamSeed = 17,
+            ) {
                 Text(
                     text = if (provider == CdnType.CLOUDFLARE) {
                         stringResource(R.string.qsn3d_cf_pool_title)
@@ -108,7 +118,7 @@ fun Qs3dRangesScreen(
                     },
                     color = QsColors.TextPrimary,
                     fontWeight = FontWeight.Bold,
-                    fontSize = 14.sp
+                    fontSize = 15.sp
                 )
                 Spacer(Modifier.height(10.dp))
 
@@ -145,7 +155,7 @@ fun Qs3dRangesScreen(
                         text = stringResource(R.string.novapulse_last_aws_sync_fmt, syncedStr),
                         style = QsTextStyles.TabularStat,
                         color = QsColors.TextSecondary,
-                        fontSize = 11.sp
+                        fontSize = 12.sp
                     )
                 }
             }
@@ -153,7 +163,10 @@ fun Qs3dRangesScreen(
 
         // Discovery & AWS Controls
         item {
-            Glass3dCard {
+            Glass3dCard(
+                glowColor = QsColors.ElectricCyan.copy(alpha = 0.36f),
+                beamSeed = 21,
+            ) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -164,7 +177,7 @@ fun Qs3dRangesScreen(
                             else onStartDiscovery(provider)
                         },
                         modifier = Modifier.weight(1f),
-                        shape = RoundedCornerShape(10.dp),
+                        shape = RoundedCornerShape(11.dp),
                         colors = ButtonDefaults.buttonColors(
                             containerColor = if (state.isManualDiscoveryRunning) QsColors.DangerCrimson else QsColors.ElectricCyan,
                             contentColor = if (state.isManualDiscoveryRunning) Color.White else Color(0xFF04151E),
@@ -173,7 +186,7 @@ fun Qs3dRangesScreen(
                         Text(
                             text = if (state.isManualDiscoveryRunning) stringResource(R.string.qsn3d_stop_discovery)
                             else stringResource(R.string.qsn3d_run_discovery),
-                            fontSize = 12.sp,
+                            fontSize = 13.sp,
                             fontWeight = FontWeight.Bold,
                             maxLines = 1,
                         )
@@ -184,14 +197,15 @@ fun Qs3dRangesScreen(
                             onClick = onSyncAws,
                             enabled = !state.isSyncingAws,
                             modifier = Modifier.weight(0.85f),
-                            shape = RoundedCornerShape(10.dp),
+                            shape = RoundedCornerShape(11.dp),
                             border = BorderStroke(1.dp, QsColors.BorderStrong),
                         ) {
                             Text(
                                 text = if (state.isSyncingAws) stringResource(R.string.qsn3d_syncing)
                                 else stringResource(R.string.qsn3d_sync_aws),
                                 color = QsColors.ElectricCyan,
-                                fontSize = 12.sp,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold,
                                 maxLines = 1,
                             )
                         }
@@ -205,17 +219,17 @@ fun Qs3dRangesScreen(
                         progress = { progress },
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(5.dp)
+                            .height(6.dp)
                             .clip(RoundedCornerShape(999.dp)),
                         color = QsColors.ElectricCyan,
                         trackColor = QsColors.SurfaceInset,
                     )
-                    Spacer(Modifier.height(5.dp))
+                    Spacer(Modifier.height(6.dp))
                     Text(
                         text = "${state.manualDiscoveryDone} / ${state.manualDiscoveryTotal}  •  ${state.manualDiscoveryCidr}",
                         style = QsTextStyles.MonoCode,
                         color = QsColors.TextSecondary,
-                        fontSize = 11.sp,
+                        fontSize = 12.sp,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
@@ -225,21 +239,24 @@ fun Qs3dRangesScreen(
 
         // Read-Only Explorer Launcher
         item {
-            Glass3dCard {
+            Glass3dCard(
+                glowColor = QsColors.AuroraMint.copy(alpha = 0.28f),
+                beamSeed = 29,
+            ) {
                 Text(
                     text = stringResource(R.string.novapulse_range_viewer_card_title),
                     color = QsColors.TextPrimary,
                     fontWeight = FontWeight.Bold,
-                    fontSize = 15.sp
+                    fontSize = 16.sp
                 )
-                Spacer(Modifier.height(4.dp))
+                Spacer(Modifier.height(5.dp))
                 Text(
                     text = stringResource(R.string.novapulse_range_viewer_card_desc),
                     color = QsColors.TextSecondary,
-                    fontSize = 12.sp,
-                    lineHeight = 18.sp,
+                    fontSize = 13.sp,
+                    lineHeight = 20.sp,
                 )
-                Spacer(Modifier.height(10.dp))
+                Spacer(Modifier.height(11.dp))
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -247,25 +264,26 @@ fun Qs3dRangesScreen(
                     OutlinedButton(
                         onClick = onOpenExplorer,
                         modifier = Modifier.weight(1f),
-                        shape = RoundedCornerShape(10.dp),
+                        shape = RoundedCornerShape(11.dp),
                         border = BorderStroke(1.dp, QsColors.BorderStrong),
                     ) {
                         Text(
                             text = stringResource(R.string.novapulse_open_range_viewer_btn),
                             color = QsColors.ElectricCyan,
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold,
                         )
                     }
                     OutlinedButton(
                         onClick = onCopyAll,
-                        shape = RoundedCornerShape(10.dp),
+                        shape = RoundedCornerShape(11.dp),
                         border = BorderStroke(1.dp, QsColors.BorderSubtle),
                     ) {
                         Text(
                             text = stringResource(R.string.qsn3d_copy_all_btn),
                             color = QsColors.TextPrimary,
-                            fontSize = 12.sp,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold,
                         )
                     }
                 }
@@ -296,13 +314,13 @@ fun Qs3dRangesExplorerScreen(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 TextButton(onClick = onBack) {
-                    Text(stringResource(R.string.novapulse_back_btn), color = QsColors.ElectricCyan, fontWeight = FontWeight.SemiBold)
+                    Text(stringResource(R.string.novapulse_back_btn), color = QsColors.ElectricCyan, fontSize = 14.sp, fontWeight = FontWeight.Bold)
                 }
                 Text(
                     text = "${state.activeRangeProvider.name} (${filtered.size})",
                     style = QsTextStyles.TabularStat,
                     color = QsColors.TextPrimary,
-                    fontSize = 15.sp,
+                    fontSize = 16.sp,
                     fontWeight = FontWeight.Bold,
                 )
                 OutlinedButton(
@@ -311,7 +329,7 @@ fun Qs3dRangesExplorerScreen(
                     border = BorderStroke(1.dp, QsColors.BorderStrong),
                     contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
                 ) {
-                    Text(stringResource(R.string.qsn3d_copy_all_btn), color = QsColors.ElectricCyan, fontSize = 11.sp)
+                    Text(stringResource(R.string.qsn3d_copy_all_btn), color = QsColors.ElectricCyan, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                 }
             }
         }
@@ -344,6 +362,7 @@ fun Qs3dRangesExplorerScreen(
 @Composable
 private fun ProviderSegmentTab(
     label: String,
+    @DrawableRes iconRes: Int,
     selected: Boolean,
     accent: Color,
     onClick: () -> Unit,
@@ -351,20 +370,26 @@ private fun ProviderSegmentTab(
 ) {
     Surface(
         modifier = modifier
-            .clip(RoundedCornerShape(9.dp))
+            .clip(RoundedCornerShape(10.dp))
             .clickable(onClick = onClick),
-        shape = RoundedCornerShape(9.dp),
+        shape = RoundedCornerShape(10.dp),
         color = if (selected) QsColors.SurfaceElevated else Color.Transparent,
-        border = if (selected) BorderStroke(1.dp, accent.copy(alpha = 0.45f)) else null,
+        border = if (selected) BorderStroke(1.dp, accent.copy(alpha = 0.52f)) else null,
     ) {
-        Box(
-            modifier = Modifier.padding(vertical = 9.dp),
-            contentAlignment = Alignment.Center,
+        Row(
+            modifier = Modifier.padding(vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(7.dp, Alignment.CenterHorizontally),
         ) {
+            Image(
+                painter = painterResource(iconRes),
+                contentDescription = label,
+                modifier = Modifier.size(18.dp),
+            )
             Text(
                 text = label,
                 color = if (selected) accent else QsColors.TextSecondary,
-                fontSize = 13.sp,
+                fontSize = 14.sp,
                 fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
             )
         }
@@ -382,7 +407,7 @@ private fun RangeEntryRow(entry: ProviderRangeEntry) {
 
     Surface(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(11.dp),
+        shape = RoundedCornerShape(12.dp),
         color = QsColors.SurfaceCard,
         border = BorderStroke(1.dp, QsColors.BorderSubtle),
     ) {
@@ -398,21 +423,21 @@ private fun RangeEntryRow(entry: ProviderRangeEntry) {
                     text = entry.cidr,
                     style = QsTextStyles.MonoCode,
                     color = QsColors.TextPrimary,
-                    fontSize = 13.sp,
+                    fontSize = 14.sp,
                     fontWeight = FontWeight.SemiBold,
                 )
             }
             Surface(
-                shape = RoundedCornerShape(7.dp),
-                color = originColor.copy(alpha = 0.14f),
-                border = BorderStroke(1.dp, originColor.copy(alpha = 0.35f)),
+                shape = RoundedCornerShape(8.dp),
+                color = originColor.copy(alpha = 0.16f),
+                border = BorderStroke(1.dp, originColor.copy(alpha = 0.38f)),
             ) {
                 Text(
                     text = originLabel,
                     color = originColor,
-                    fontSize = 10.sp,
+                    fontSize = 11.sp,
                     fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                    modifier = Modifier.padding(horizontal = 9.dp, vertical = 3.dp),
                 )
             }
         }

@@ -1,0 +1,35 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- CloudFront outer ring & latitude/longitude lines -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#FF38BDF8"
+        android:strokeWidth="1.7"
+        android:pathData="M12,3.2a8.8,8.8 0 1,0 0,17.6a8.8,8.8 0 1,0 0,-17.6z" />
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#FF38BDF8"
+        android:strokeWidth="1.35"
+        android:pathData="M12,3.2c-2.6,2.3 -4.0,5.4 -4.0,8.8s1.4,6.5 4.0,8.8c2.6,-2.3 4.0,-5.4 4.0,-8.8S14.6,5.5 12,3.2z" />
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#FF38BDF8"
+        android:strokeWidth="1.35"
+        android:pathData="M3.6,12h16.8" />
+    <!-- AWS orange orbital sweep & edge nodes -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#FFFF9900"
+        android:strokeWidth="1.8"
+        android:strokeLineCap="round"
+        android:pathData="M5.4,17.2c3.8,2.6 9.4,2.6 13.2,0" />
+    <path
+        android:fillColor="#FFFF9900"
+        android:pathData="M18.8,15.6m-1.6,0a1.6,1.6 0 1,0 3.2,0a1.6,1.6 0 1,0 -3.2,0" />
+    <path
+        android:fillColor="#FF38BDF8"
+        android:pathData="M5.2,8.4m-1.5,0a1.5,1.5 0 1,0 3.0,0a1.5,1.5 0 1,0 -3.0,0" />
+</vector>

@@ -117,6 +117,8 @@ data class Qs3dUiState(
     val showOptimizeConsentPrompt: Boolean = false,
     val hasActiveLicense: Boolean = false,
     val isRedeemingLicense: Boolean = false,
+    val activationProgressPercent: Int = 0,
+    val activationStageKey: String = "",
     val isLoggingOut: Boolean = false,
     val coreRunning: Boolean = false,
     val selectedGuid: String? = null,
@@ -205,6 +207,7 @@ class Qs3dViewModel(
     @Volatile
     private var forceRevokingLicense = false
     private val verifyInFlight = AtomicBoolean(false)
+    private val autoInitialPingTriggered = AtomicBoolean(false)
     private var licenseWatchdogJob: Job? = null
     @Volatile
     private var cachedSystemCoreLogs: List<AppLogEntry> = emptyList()
@@ -408,7 +411,12 @@ class Qs3dViewModel(
             )
         }
         if (tab == Qs3dTab.Ranges) loadRanges(_uiState.value.activeRangeProvider)
-        if (tab == Qs3dTab.Configs || tab == Qs3dTab.Connect) loadConfigsAndSubs()
+        if (tab == Qs3dTab.Configs || tab == Qs3dTab.Connect) {
+            loadConfigsAndSubs()
+            if (tab == Qs3dTab.Configs) {
+                autoTestUntestedDelaysIfNeeded()
+            }
+        }
     }
 
     fun openSubscriptionDetails(open: Boolean) {
@@ -693,20 +701,41 @@ class Qs3dViewModel(
             _uiState.update { it.copy(toastMessage = ctx.getString(R.string.novapulse_license_enter_prompt)) }
             return
         }
-        _uiState.update { it.copy(isRedeemingLicense = true) }
-        SmartConnectCoordinator.redeemInputOnly(ctx, input) { res ->
+        _uiState.update {
+            it.copy(
+                isRedeemingLicense = true,
+                activationProgressPercent = 8,
+                activationStageKey = "challenge",
+            )
+        }
+        SmartConnectCoordinator.redeemInputOnly(
+            context = ctx,
+            rawInput = input,
+            onProgress = { pct, stage ->
+                _uiState.update {
+                    it.copy(
+                        activationProgressPercent = pct,
+                        activationStageKey = stage,
+                    )
+                }
+            }
+        ) { res ->
             res.onSuccess { count ->
                 _uiState.update {
                     it.copy(
                         isRedeemingLicense = false,
+                        activationProgressPercent = 100,
+                        activationStageKey = "ready",
                         hasActiveLicense = true,
                         activationInput = "",
                         showAboutPromo = false,
                         toastMessage = ctx.getString(R.string.novapulse_license_activated_fmt, count)
                     )
                 }
+                autoInitialPingTriggered.set(false)
                 loadConfigsAndSubs()
                 detectCdnForSelected()
+                autoTestUntestedDelaysIfNeeded(force = true)
             }.onFailure { err ->
                 val cleanErr = LicenseBackendClient.sanitizeForDisplay(err.message)
                     .ifBlank { ctx.getString(R.string.novapulse_license_failed) }
@@ -714,6 +743,8 @@ class Qs3dViewModel(
                 _uiState.update {
                     it.copy(
                         isRedeemingLicense = false,
+                        activationProgressPercent = 0,
+                        activationStageKey = "",
                         toastMessage = if (showModal) it.toastMessage else cleanErr,
                         activeNoticeDialog = if (showModal) cleanErr else it.activeNoticeDialog,
                     )
@@ -1077,6 +1108,32 @@ class Qs3dViewModel(
             guids.filter { it != active }.forEach { MmkvManager.removeServer(it) }
             _uiState.update { it.copy(bulkSelectedGuids = emptySet()) }
             loadConfigsAndSubs()
+        }
+    }
+
+    fun autoTestUntestedDelaysIfNeeded(force: Boolean = false) {
+        if (_uiState.value.isDelayTestingAll || _uiState.value.smartFlow.busy) return
+        viewModelScope.launch(Dispatchers.IO) {
+            delay(350L)
+            val rows = _uiState.value.configs
+            if (rows.isEmpty()) return@launch
+            val targets = if (force) {
+                rows.map { it.guid }
+            } else {
+                rows.filter { it.delayMillis <= 0L }.map { it.guid }
+            }
+            if (targets.isEmpty()) return@launch
+            if (!force && !autoInitialPingTriggered.compareAndSet(false, true)) return@launch
+            MmkvManager.clearAllTestDelayResults(targets)
+            _uiState.update { it.copy(isDelayTestingAll = true, delayTestProgress = "0/${targets.size}") }
+            dataSource.sendMsg2TestService(
+                TestServiceMessage(
+                    key = AppConfig.MSG_MEASURE_CONFIG_START,
+                    subscriptionId = "",
+                    serverGuids = targets,
+                    onlyTcp = false
+                )
+            )
         }
     }
 

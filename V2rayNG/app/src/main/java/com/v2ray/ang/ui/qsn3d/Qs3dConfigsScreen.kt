@@ -57,10 +57,11 @@ import com.v2ray.ang.senpai.ConfigListBucket
 import com.v2ray.ang.senpai.ConfigPipeline
 
 /**
- * Redesigned Servers / Configs Screen:
- * - Clean single-track segmented switcher (`All | CDN | Direct`) instead of generic boxy chips
- * - Dedicated top Search + Add Config bar without visual clutter
- * - Crisp server rows with left/right active indicator bar, pipeline badge & tabular delay badge
+ * 3D Frosted Glass Servers Screen:
+ * - Separate Label + Count Badge pills inside segmented filter (eliminates RTL/LTR parenthetical slop)
+ * - Official Cloudflare / CloudFront / Direct logos on every server card
+ * - Auto-ping indicator (`در حال تست…` / live ms latency / `آماده تست`) instead of static "عدم پاسخ"
+ * - Rotating perimeter light beam on active/selected server card
  */
 @Composable
 fun Qs3dConfigsScreen(
@@ -93,7 +94,7 @@ fun Qs3dConfigsScreen(
     ) {
         Spacer(Modifier.height(10.dp))
 
-        // Search + Dedicated Add Config Button
+        // Search + Add Config Bar
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
@@ -124,20 +125,20 @@ fun Qs3dConfigsScreen(
 
             Surface(
                 shape = RoundedCornerShape(12.dp),
-                color = QsColors.ElectricCyan.copy(alpha = 0.14f),
-                border = BorderStroke(1.dp, QsColors.ElectricCyan.copy(alpha = 0.45f)),
+                color = QsColors.ElectricCyan.copy(alpha = 0.16f),
+                border = BorderStroke(1.dp, QsColors.ElectricCyan.copy(alpha = 0.50f)),
                 modifier = Modifier
-                    .height(50.dp)
+                    .height(52.dp)
                     .clickable { showAddDialog = true },
             ) {
                 Box(
-                    modifier = Modifier.padding(horizontal = 12.dp),
+                    modifier = Modifier.padding(horizontal = 14.dp),
                     contentAlignment = Alignment.Center,
                 ) {
                     Text(
                         text = stringResource(R.string.novapulse_add_config_btn),
                         color = QsColors.ElectricCyan,
-                        fontSize = 12.sp,
+                        fontSize = 13.sp,
                         fontWeight = FontWeight.Bold,
                         maxLines = 1,
                     )
@@ -147,30 +148,33 @@ fun Qs3dConfigsScreen(
 
         Spacer(Modifier.height(10.dp))
 
-        // Unified Segmented Pipeline Switcher (Anti-Slop single track)
+        // Unified Segmented Pipeline Switcher with Separate Clean Count Pills
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(12.dp))
+                .clip(RoundedCornerShape(14.dp))
                 .background(QsColors.SurfaceInset)
-                .border(1.dp, QsColors.BorderSubtle, RoundedCornerShape(12.dp))
+                .border(1.dp, QsColors.BorderSubtle, RoundedCornerShape(14.dp))
                 .padding(4.dp),
             horizontalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             SegmentBucketTab(
-                label = stringResource(R.string.novapulse_configs_tab_all, allCount),
+                label = stringResource(R.string.novapulse_configs_tab_all),
+                count = allCount,
                 selected = state.configBucket == ConfigListBucket.ALL,
                 onClick = { onBucketChange(ConfigListBucket.ALL) },
-                modifier = Modifier.weight(1f),
+                modifier = Modifier.weight(0.85f),
             )
             SegmentBucketTab(
-                label = stringResource(R.string.novapulse_configs_tab_cdn, cdnCount),
+                label = stringResource(R.string.novapulse_configs_tab_cdn),
+                count = cdnCount,
                 selected = state.configBucket == ConfigListBucket.CDN,
                 onClick = { onBucketChange(ConfigListBucket.CDN) },
-                modifier = Modifier.weight(1f),
+                modifier = Modifier.weight(1.15f),
             )
             SegmentBucketTab(
-                label = stringResource(R.string.novapulse_configs_tab_standard, stdCount),
+                label = stringResource(R.string.novapulse_configs_tab_standard),
+                count = stdCount,
                 selected = state.configBucket == ConfigListBucket.STANDARD,
                 onClick = { onBucketChange(ConfigListBucket.STANDARD) },
                 modifier = Modifier.weight(1f),
@@ -179,13 +183,12 @@ fun Qs3dConfigsScreen(
 
         Spacer(Modifier.height(10.dp))
 
-        // Compact Utilities Strip OR Bulk Selection Action Bar
         if (state.bulkSelectedGuids.isNotEmpty()) {
             Surface(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(12.dp),
-                color = QsColors.DangerCrimson.copy(alpha = 0.10f),
-                border = BorderStroke(1.dp, QsColors.DangerCrimson.copy(alpha = 0.35f)),
+                color = QsColors.DangerCrimson.copy(alpha = 0.12f),
+                border = BorderStroke(1.dp, QsColors.DangerCrimson.copy(alpha = 0.40f)),
             ) {
                 Row(
                     modifier = Modifier
@@ -198,18 +201,18 @@ fun Qs3dConfigsScreen(
                         text = "${state.bulkSelectedGuids.size} ${stringResource(R.string.qsn3d_selected)}",
                         style = QsTextStyles.TabularStat,
                         color = QsColors.TextPrimary,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold,
                     )
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         TextButton(onClick = onClearBulkSelection) {
-                            Text(stringResource(R.string.qsn3d_cancel), color = QsColors.TextSecondary, fontSize = 12.sp)
+                            Text(stringResource(R.string.qsn3d_cancel), color = QsColors.TextSecondary, fontSize = 13.sp)
                         }
                         Button(
                             onClick = onDeleteBulkSelected,
-                            shape = RoundedCornerShape(8.dp),
+                            shape = RoundedCornerShape(9.dp),
                             colors = ButtonDefaults.buttonColors(containerColor = QsColors.DangerCrimson),
-                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 5.dp),
                         ) {
                             Text(
                                 text = stringResource(R.string.qsn3d_delete_count_fmt, state.bulkSelectedGuids.size),
@@ -227,9 +230,12 @@ fun Qs3dConfigsScreen(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 UtilityActionButton(
-                    label = if (state.isDelayTestingAll) state.delayTestProgress.ifBlank { "…" }
-                    else stringResource(R.string.qsn3d_test_all),
-                    enabled = !state.isDelayTestingAll,
+                    label = if (state.isDelayTestingAll) {
+                        "${stringResource(R.string.novapulse_ping_testing)} ${state.delayTestProgress}"
+                    } else {
+                        stringResource(R.string.qsn3d_test_all)
+                    },
+                    enabled = true,
                     onClick = onTestAllDelays,
                     modifier = Modifier.weight(1f),
                 )
@@ -243,11 +249,11 @@ fun Qs3dConfigsScreen(
         }
 
         if (state.isDelayTestingAll) {
-            Spacer(Modifier.height(6.dp))
+            Spacer(Modifier.height(7.dp))
             LinearProgressIndicator(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(3.dp)
+                    .height(3.5.dp)
                     .clip(RoundedCornerShape(999.dp)),
                 color = QsColors.ElectricCyan,
                 trackColor = QsColors.SurfaceInset,
@@ -256,18 +262,17 @@ fun Qs3dConfigsScreen(
 
         Spacer(Modifier.height(10.dp))
 
-        // Server List
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(bottom = 18.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(9.dp),
         ) {
             if (state.configBucket != ConfigListBucket.STANDARD && cdnRows.isNotEmpty()) {
                 item(key = "hdr_cdn") {
                     Text(
                         text = stringResource(R.string.novapulse_configs_section_cdn),
                         color = QsColors.TextSecondary,
-                        fontSize = 11.sp,
+                        fontSize = 13.sp,
                         fontWeight = FontWeight.Bold,
                         modifier = Modifier.padding(top = 4.dp, bottom = 2.dp),
                     )
@@ -277,6 +282,7 @@ fun Qs3dConfigsScreen(
                         cfg = cfg,
                         selected = cfg.guid == state.selectedGuid,
                         running = cfg.guid == state.selectedGuid && state.coreRunning,
+                        isDelayTestingAll = state.isDelayTestingAll,
                         inBulkMode = state.bulkSelectedGuids.isNotEmpty(),
                         bulkChecked = cfg.guid in state.bulkSelectedGuids,
                         onClick = {
@@ -293,7 +299,7 @@ fun Qs3dConfigsScreen(
                     Text(
                         text = stringResource(R.string.novapulse_configs_section_standard),
                         color = QsColors.TextSecondary,
-                        fontSize = 11.sp,
+                        fontSize = 13.sp,
                         fontWeight = FontWeight.Bold,
                         modifier = Modifier.padding(top = 8.dp, bottom = 2.dp),
                     )
@@ -303,6 +309,7 @@ fun Qs3dConfigsScreen(
                         cfg = cfg,
                         selected = cfg.guid == state.selectedGuid,
                         running = cfg.guid == state.selectedGuid && state.coreRunning,
+                        isDelayTestingAll = state.isDelayTestingAll,
                         inBulkMode = state.bulkSelectedGuids.isNotEmpty(),
                         bulkChecked = cfg.guid in state.bulkSelectedGuids,
                         onClick = {
@@ -334,31 +341,49 @@ fun Qs3dConfigsScreen(
 @Composable
 private fun SegmentBucketTab(
     label: String,
+    count: Int,
     selected: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Surface(
         modifier = modifier
-            .clip(RoundedCornerShape(9.dp))
+            .clip(RoundedCornerShape(10.dp))
             .clickable(onClick = onClick),
-        shape = RoundedCornerShape(9.dp),
+        shape = RoundedCornerShape(10.dp),
         color = if (selected) QsColors.SurfaceElevated else Color.Transparent,
-        border = if (selected) BorderStroke(1.dp, QsColors.BorderStrong) else null,
+        border = if (selected) BorderStroke(1.dp, QsColors.ElectricCyan.copy(alpha = 0.45f)) else null,
     ) {
-        Box(
+        Row(
             modifier = Modifier.padding(vertical = 8.dp, horizontal = 6.dp),
-            contentAlignment = Alignment.Center,
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(5.dp, Alignment.CenterHorizontally),
         ) {
             Text(
                 text = label,
-                style = QsTextStyles.TabularStat,
-                color = if (selected) QsColors.ElectricCyan else QsColors.TextSecondary,
-                fontSize = 11.sp,
+                color = if (selected) QsColors.TextPrimary else QsColors.TextSecondary,
+                fontSize = 12.sp,
                 fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(
+                        if (selected) QsColors.ElectricCyan.copy(alpha = 0.18f)
+                        else QsColors.BorderSubtle.copy(alpha = 0.65f)
+                    )
+                    .padding(horizontal = 6.dp, vertical = 1.dp),
+            ) {
+                Text(
+                    text = count.toString(),
+                    style = QsTextStyles.TabularStat,
+                    color = if (selected) QsColors.ElectricCyan else QsColors.TextSecondary,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
         }
     }
 }
@@ -372,22 +397,23 @@ private fun UtilityActionButton(
 ) {
     Surface(
         modifier = modifier
-            .clip(RoundedCornerShape(10.dp))
+            .clip(RoundedCornerShape(11.dp))
             .clickable(enabled = enabled, onClick = onClick),
-        shape = RoundedCornerShape(10.dp),
+        shape = RoundedCornerShape(11.dp),
         color = QsColors.SurfaceCard,
         border = BorderStroke(1.dp, QsColors.BorderSubtle),
     ) {
         Box(
-            modifier = Modifier.padding(vertical = 8.dp, horizontal = 10.dp),
+            modifier = Modifier.padding(vertical = 9.dp, horizontal = 10.dp),
             contentAlignment = Alignment.Center,
         ) {
             Text(
                 text = label,
                 color = if (enabled) QsColors.TextPrimary else QsColors.TextMuted,
-                fontSize = 12.sp,
+                fontSize = 13.sp,
                 fontWeight = FontWeight.SemiBold,
                 maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
         }
     }
@@ -399,35 +425,41 @@ private fun ServerNodeRow(
     cfg: ConfigUiRow,
     selected: Boolean,
     running: Boolean,
+    isDelayTestingAll: Boolean,
     inBulkMode: Boolean,
     bulkChecked: Boolean,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
 ) {
-    val accentBorder = when {
-        running -> QsColors.ConnectedEmerald.copy(alpha = 0.55f)
-        selected -> QsColors.ElectricCyan.copy(alpha = 0.55f)
-        else -> QsColors.BorderSubtle
+    val activeGlow = when {
+        running -> QsColors.ConnectedEmerald.copy(alpha = 0.72f)
+        selected -> QsColors.ElectricCyan.copy(alpha = 0.58f)
+        else -> Color.Transparent
     }
-    val rowBg = when {
-        running -> QsColors.ConnectedEmerald.copy(alpha = 0.08f)
+
+    val rowSurface = when {
+        running -> Color(0xD80D2722)
         selected -> QsColors.SurfaceElevated
         else -> QsColors.SurfaceCard
     }
 
-    Surface(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(14.dp))
-            .combinedClickable(onClick = onClick, onLongClick = onLongClick),
-        shape = RoundedCornerShape(14.dp),
-        color = rowBg,
-        border = BorderStroke(1.dp, accentBorder),
-    ) {
+    val delay = cfg.delayMillis
+    val (delayText, delayColor) = when {
+        delay > 0L && delay < 900L -> "${delay} ms" to QsColors.ConnectedEmerald
+        delay >= 900L -> "${delay} ms" to QsColors.SolarGold
+        isDelayTestingAll && delay == 0L -> stringResource(R.string.novapulse_ping_testing) to QsColors.ElectricCyan
+        delay == 0L -> stringResource(R.string.novapulse_ping_untested) to QsColors.TextSecondary
+        else -> stringResource(R.string.novapulse_timeout) to QsColors.DangerCrimson
+    }
+
+    val cardMod = Modifier
+        .fillMaxWidth()
+        .clip(RoundedCornerShape(16.dp))
+        .combinedClickable(onClick = onClick, onLongClick = onLongClick)
+
+    val rowContent: @Composable () -> Unit = {
         Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 13.dp, vertical = 12.dp),
+            modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
@@ -446,7 +478,7 @@ private fun ServerNodeRow(
                 } else {
                     Box(
                         modifier = Modifier
-                            .size(9.dp)
+                            .size(10.dp)
                             .clip(CircleShape)
                             .background(
                                 when {
@@ -462,12 +494,12 @@ private fun ServerNodeRow(
                     Text(
                         text = cfg.remarks.ifBlank { stringResource(R.string.novapulse_default_server_name) },
                         color = QsColors.TextPrimary,
-                        fontSize = 14.sp,
-                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                        fontSize = 15.sp,
+                        fontWeight = if (selected) FontWeight.Bold else FontWeight.SemiBold,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
-                    Spacer(Modifier.height(4.dp))
+                    Spacer(Modifier.height(5.dp))
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -480,15 +512,15 @@ private fun ServerNodeRow(
 
                         if (cfg.isManual) {
                             Surface(
-                                shape = RoundedCornerShape(6.dp),
+                                shape = RoundedCornerShape(7.dp),
                                 color = QsColors.SurfaceInset,
                                 border = BorderStroke(1.dp, QsColors.BorderSubtle),
                             ) {
                                 Text(
                                     text = stringResource(R.string.novapulse_manual_badge),
                                     color = QsColors.TextSecondary,
-                                    fontSize = 10.sp,
-                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                    fontSize = 11.sp,
+                                    modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp),
                                 )
                             }
                         }
@@ -497,7 +529,7 @@ private fun ServerNodeRow(
                             Text(
                                 text = stringResource(R.string.novapulse_connected_badge),
                                 color = QsColors.ConnectedEmerald,
-                                fontSize = 10.sp,
+                                fontSize = 11.sp,
                                 fontWeight = FontWeight.Bold,
                             )
                         }
@@ -507,27 +539,43 @@ private fun ServerNodeRow(
 
             Spacer(Modifier.width(8.dp))
 
-            // Latency Pill
-            val delay = cfg.delayMillis
-            val (delayText, delayColor) = when {
-                delay > 0L && delay < 900L -> "${delay} ms" to QsColors.ConnectedEmerald
-                delay >= 900L -> "${delay} ms" to QsColors.SolarGold
-                delay < 0L -> stringResource(R.string.novapulse_timeout) to QsColors.DangerCrimson
-                else -> "—" to QsColors.TextMuted
-            }
             Surface(
-                shape = RoundedCornerShape(8.dp),
+                shape = RoundedCornerShape(9.dp),
                 color = QsColors.SurfaceInset,
-                border = BorderStroke(1.dp, QsColors.BorderSubtle),
+                border = BorderStroke(1.dp, delayColor.copy(alpha = 0.35f)),
             ) {
                 Text(
                     text = delayText,
                     style = QsTextStyles.TabularStat,
                     color = delayColor,
-                    fontSize = 11.sp,
+                    fontSize = 12.sp,
                     fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
+                    modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp),
                 )
+            }
+        }
+    }
+
+    if (selected || running) {
+        Glass3dCard(
+            modifier = cardMod,
+            cornerRadius = 16.dp,
+            glowColor = activeGlow,
+            surfaceColor = rowSurface,
+            contentPadding = 13.dp,
+            beamSeed = cfg.guid.hashCode(),
+        ) {
+            rowContent()
+        }
+    } else {
+        Surface(
+            modifier = cardMod,
+            shape = RoundedCornerShape(16.dp),
+            color = rowSurface,
+            border = BorderStroke(1.dp, QsColors.BorderSubtle),
+        ) {
+            Box(modifier = Modifier.padding(horizontal = 13.dp, vertical = 12.dp)) {
+                rowContent()
             }
         }
     }
@@ -546,12 +594,13 @@ private fun AddManualConfigDialog(
     Dialog(onDismissRequest = onDismiss) {
         Glass3dCard(
             surfaceColor = QsColors.SurfaceElevated,
-            glowColor = QsColors.ElectricCyan.copy(alpha = 0.40f),
+            glowColor = QsColors.ElectricCyan.copy(alpha = 0.45f),
+            beamSeed = 99,
         ) {
             Text(
                 text = stringResource(R.string.novapulse_add_config_title),
                 color = QsColors.TextPrimary,
-                fontSize = 16.sp,
+                fontSize = 17.sp,
                 fontWeight = FontWeight.Bold,
             )
             Spacer(Modifier.height(10.dp))
@@ -561,15 +610,15 @@ private fun AddManualConfigDialog(
                     onValueChange = { inputText = it },
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(124.dp),
+                        .height(126.dp),
                     placeholder = {
                         Text(
                             text = stringResource(R.string.novapulse_add_config_hint),
                             color = QsColors.TextMuted,
-                            fontSize = 12.sp,
+                            fontSize = 13.sp,
                         )
                     },
-                    textStyle = QsTextStyles.MonoCode.copy(color = QsColors.TextPrimary, fontSize = 12.sp),
+                    textStyle = QsTextStyles.MonoCode.copy(color = QsColors.TextPrimary, fontSize = 13.sp),
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedBorderColor = QsColors.ElectricCyan,
                         unfocusedBorderColor = QsColors.BorderStrong,
@@ -593,7 +642,7 @@ private fun AddManualConfigDialog(
                     shape = RoundedCornerShape(10.dp),
                     border = BorderStroke(1.dp, QsColors.BorderStrong),
                 ) {
-                    Text(stringResource(R.string.novapulse_add_config_paste_btn), color = QsColors.TextPrimary, fontSize = 12.sp)
+                    Text(stringResource(R.string.novapulse_add_config_paste_btn), color = QsColors.TextPrimary, fontSize = 13.sp)
                 }
                 OutlinedButton(
                     onClick = onScanQr,
@@ -601,7 +650,7 @@ private fun AddManualConfigDialog(
                     shape = RoundedCornerShape(10.dp),
                     border = BorderStroke(1.dp, QsColors.BorderStrong),
                 ) {
-                    Text(stringResource(R.string.novapulse_add_config_scan_qr_btn), color = QsColors.ElectricCyan, fontSize = 12.sp)
+                    Text(stringResource(R.string.novapulse_add_config_scan_qr_btn), color = QsColors.ElectricCyan, fontSize = 13.sp)
                 }
             }
             Spacer(Modifier.height(10.dp))
@@ -610,7 +659,7 @@ private fun AddManualConfigDialog(
                 horizontalArrangement = Arrangement.End,
             ) {
                 TextButton(onClick = onDismiss) {
-                    Text(stringResource(R.string.novapulse_add_config_cancel_btn), color = QsColors.TextSecondary)
+                    Text(stringResource(R.string.novapulse_add_config_cancel_btn), color = QsColors.TextSecondary, fontSize = 13.sp)
                 }
                 Spacer(Modifier.width(8.dp))
                 Button(
@@ -622,7 +671,7 @@ private fun AddManualConfigDialog(
                         contentColor = Color(0xFF04151E),
                     ),
                 ) {
-                    Text(stringResource(R.string.novapulse_add_config_save_btn), fontWeight = FontWeight.Bold)
+                    Text(stringResource(R.string.novapulse_add_config_save_btn), fontWeight = FontWeight.Bold, fontSize = 13.sp)
                 }
             }
         }

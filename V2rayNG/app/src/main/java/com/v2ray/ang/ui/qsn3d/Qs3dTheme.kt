@@ -6,53 +6,65 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
+import com.v2ray.ang.R
 
 /**
- * Tinted Obsidian Slate + Precision Cyan/Emerald design tokens.
- * Structured surface hierarchy (Base -> Elevated -> Card -> Inset) with crisp hairline borders
- * and tabular numeric support so telemetry values stay rock-steady during live updates.
+ * Bundled Vazirmatn typeface (OFL-1.1) for crisp Persian & Latin legibility across the entire app.
+ */
+val VazirFontFamily = FontFamily(
+    Font(R.font.vazirmatn_regular, FontWeight.Normal),
+    Font(R.font.vazirmatn_medium, FontWeight.Medium),
+    Font(R.font.vazirmatn_medium, FontWeight.SemiBold),
+    Font(R.font.vazirmatn_bold, FontWeight.Bold),
+    Font(R.font.vazirmatn_extrabold, FontWeight.ExtraBold),
+)
+
+/**
+ * Frosted Obsidian Glass + Aerospace Cyan/Emerald palette.
+ * Balanced translucent card fills let the per-tab 3D hero artwork breathe while keeping contrast crisp.
  */
 object QsColors {
-    // Structural Surfaces (60% canvas + 30% elevated containers)
-    val DeepVoid = Color(0xFF0A0F18)
-    val MidnightNavy = Color(0xFF0F1624)
-    val NebulaSurface = Color(0xFF131C2E)
-    val GlassSurface = Color(0xFF151F32)
-    val GlassSurfaceElevated = Color(0xFF1B273E)
-    val SurfaceCard = Color(0xFF151F32)
-    val SurfaceElevated = Color(0xFF1A253B)
-    val SurfaceInset = Color(0xFF0D1420)
+    // Structural & Frosted Glass Surfaces
+    val DeepVoid = Color(0xFF070B14)
+    val MidnightNavy = Color(0xFF0C1322)
+    val NebulaSurface = Color(0xB8111B30)
+    val GlassSurface = Color(0xC2111B2E)
+    val GlassSurfaceElevated = Color(0xD617243D)
+    val SurfaceCard = Color(0xC2111B2E)
+    val SurfaceElevated = Color(0xD617243D)
+    val SurfaceInset = Color(0xCC0A101D)
 
-    // Hairline Borders
-    val BorderSubtle = Color(0xFF24324B)
-    val BorderStrong = Color(0xFF334668)
-    val GlassBorderTop = Color(0xFF2C3D5C)
-    val GlassBorderBottom = Color(0xFF1D2A42)
+    // Hairline Borders & Glass Specular Highlights
+    val BorderSubtle = Color(0xFF263652)
+    val BorderStrong = Color(0xFF3A5075)
+    val GlassBorderTop = Color(0x7093C5FD)
+    val GlassBorderBottom = Color(0x3838BDF8)
 
-    // Primary & Semantic Accents (10% intentional emphasis)
+    // Primary & Semantic Accents
     val ElectricCyan = Color(0xFF22D3EE)
     val AccentPrimary = Color(0xFF0EA5E9)
     val AuroraMint = Color(0xFF34D399)
     val PlasmaViolet = Color(0xFF818CF8)
     val NeonRose = Color(0xFFF43F5E)
     val SolarGold = Color(0xFFF59E0B)
-    val CloudflareOrange = Color(0xFFF97316)
+    val CloudflareOrange = Color(0xFFF38020)
     val CloudFrontSky = Color(0xFF38BDF8)
     val ConnectedEmerald = Color(0xFF10B981)
     val DangerCrimson = Color(0xFFEF4444)
 
     // Content Hierarchy
-    val TextPrimary = Color(0xFFF1F5F9)
-    val TextSecondary = Color(0xFF94A3B8)
-    val TextMuted = Color(0xFF64748B)
+    val TextPrimary = Color(0xFFF8FAFC)
+    val TextSecondary = Color(0xFFCBD5E1)
+    val TextMuted = Color(0xFF94A3B8)
 }
 
 object QsTextStyles {
     val TabularStat = TextStyle(
-        fontFamily = FontFamily.SansSerif,
+        fontFamily = VazirFontFamily,
         fontFeatureSettings = "tnum",
     )
     val MonoCode = TextStyle(
@@ -79,34 +91,18 @@ private val QsDarkScheme = darkColorScheme(
 )
 
 private val QsTypography = Typography(
-    headlineSmall = TextStyle(
-        fontFamily = FontFamily.SansSerif,
-        fontWeight = FontWeight.Bold,
-        fontSize = 20.sp,
-        lineHeight = 28.sp,
-    ),
-    titleMedium = TextStyle(
-        fontFamily = FontFamily.SansSerif,
-        fontWeight = FontWeight.SemiBold,
-        fontSize = 15.sp,
-        lineHeight = 22.sp,
-    ),
-    bodyLarge = TextStyle(
-        fontFamily = FontFamily.SansSerif,
-        fontSize = 14.sp,
-        lineHeight = 21.sp,
-    ),
-    bodyMedium = TextStyle(
-        fontFamily = FontFamily.SansSerif,
-        fontSize = 13.sp,
-        lineHeight = 19.sp,
-    ),
-    labelMedium = TextStyle(
-        fontFamily = FontFamily.SansSerif,
-        fontWeight = FontWeight.SemiBold,
-        fontSize = 11.sp,
-        lineHeight = 16.sp,
-    ),
+    displaySmall = TextStyle(fontFamily = VazirFontFamily, fontWeight = FontWeight.ExtraBold, fontSize = 28.sp, lineHeight = 36.sp),
+    headlineMedium = TextStyle(fontFamily = VazirFontFamily, fontWeight = FontWeight.Bold, fontSize = 24.sp, lineHeight = 32.sp),
+    headlineSmall = TextStyle(fontFamily = VazirFontFamily, fontWeight = FontWeight.Bold, fontSize = 20.sp, lineHeight = 28.sp),
+    titleLarge = TextStyle(fontFamily = VazirFontFamily, fontWeight = FontWeight.Bold, fontSize = 18.sp, lineHeight = 26.sp),
+    titleMedium = TextStyle(fontFamily = VazirFontFamily, fontWeight = FontWeight.Bold, fontSize = 16.sp, lineHeight = 24.sp),
+    titleSmall = TextStyle(fontFamily = VazirFontFamily, fontWeight = FontWeight.Medium, fontSize = 14.sp, lineHeight = 20.sp),
+    bodyLarge = TextStyle(fontFamily = VazirFontFamily, fontWeight = FontWeight.Normal, fontSize = 15.sp, lineHeight = 23.sp),
+    bodyMedium = TextStyle(fontFamily = VazirFontFamily, fontWeight = FontWeight.Normal, fontSize = 14.sp, lineHeight = 21.sp),
+    bodySmall = TextStyle(fontFamily = VazirFontFamily, fontWeight = FontWeight.Normal, fontSize = 12.sp, lineHeight = 18.sp),
+    labelLarge = TextStyle(fontFamily = VazirFontFamily, fontWeight = FontWeight.Bold, fontSize = 14.sp, lineHeight = 20.sp),
+    labelMedium = TextStyle(fontFamily = VazirFontFamily, fontWeight = FontWeight.Medium, fontSize = 12.sp, lineHeight = 17.sp),
+    labelSmall = TextStyle(fontFamily = VazirFontFamily, fontWeight = FontWeight.Medium, fontSize = 11.sp, lineHeight = 16.sp),
 )
 
 @Composable

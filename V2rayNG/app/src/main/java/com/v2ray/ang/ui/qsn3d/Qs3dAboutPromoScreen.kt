@@ -153,16 +153,18 @@ fun Qs3dAboutPromoScreen(
                 ) {
                     Box(
                         modifier = Modifier
-                            .size(54.dp)
-                            .clip(CircleShape)
+                            .size(62.dp)
+                            .clip(RoundedCornerShape(16.dp))
                             .background(QsColors.SurfaceInset)
-                            .border(1.dp, QsColors.BorderStrong, CircleShape),
+                            .border(1.dp, QsColors.BorderStrong, RoundedCornerShape(16.dp)),
                         contentAlignment = Alignment.Center
                     ) {
                         Image(
-                            painter = painterResource(R.drawable.ic_stat_name),
-                            contentDescription = null,
-                            modifier = Modifier.size(30.dp)
+                            painter = painterResource(R.drawable.np_app_logo),
+                            contentDescription = stringResource(R.string.app_name),
+                            modifier = Modifier
+                                .size(52.dp)
+                                .clip(RoundedCornerShape(13.dp))
                         )
                     }
                     Column(modifier = Modifier.weight(1f)) {
@@ -390,15 +392,15 @@ private fun PromoFeatureRow(
             Text(
                 text = title,
                 color = QsColors.TextPrimary,
-                fontSize = 13.sp,
+                fontSize = 14.sp,
                 fontWeight = FontWeight.Bold
             )
-            Spacer(Modifier.height(2.dp))
+            Spacer(Modifier.height(3.dp))
             Text(
                 text = desc,
                 color = QsColors.TextSecondary,
-                fontSize = 12.sp,
-                lineHeight = 18.sp
+                fontSize = 13.sp,
+                lineHeight = 20.sp
             )
         }
     }
@@ -420,15 +422,15 @@ private fun GuideQuestionBlock(
         Text(
             text = question,
             color = QsColors.ElectricCyan,
-            fontSize = 13.sp,
+            fontSize = 14.sp,
             fontWeight = FontWeight.Bold
         )
-        Spacer(Modifier.height(4.dp))
+        Spacer(Modifier.height(5.dp))
         Text(
             text = answer,
             color = QsColors.TextSecondary,
-            fontSize = 12.sp,
-            lineHeight = 18.sp
+            fontSize = 13.sp,
+            lineHeight = 20.sp
         )
     }
 }

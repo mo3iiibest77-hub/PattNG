@@ -179,10 +179,17 @@ object SmartConnectCoordinator {
         context: Context,
         rawInput: String,
         remarksHint: String = "NovaPulse",
+        onProgress: (percent: Int, stageKey: String) -> Unit = { _, _ -> },
         onComplete: (Result<Int>) -> Unit,
     ) {
         scope.launch {
-            val result = performRedeemAndImport(context.applicationContext, rawInput, remarksHint)
+            val result = performRedeemAndImport(
+                context = context.applicationContext,
+                rawInput = rawInput,
+                remarksHint = remarksHint,
+                isStatusRefresh = false,
+                onProgress = onProgress,
+            )
             onComplete(result)
         }
     }
@@ -747,8 +754,11 @@ object SmartConnectCoordinator {
         rawInput: String,
         remarksHint: String,
         isStatusRefresh: Boolean = false,
+        onProgress: (percent: Int, stageKey: String) -> Unit = { _, _ -> },
     ): Result<Int> {
+        onProgress(15, "challenge")
         val deviceId = runCatching { DeviceIdentityManager.getDeviceId(context) }.getOrDefault("")
+        onProgress(32, "proof")
         val redeemed = if (isStatusRefresh) {
             LicenseBackendClient.refreshStatus(rawInput, deviceId, remarksHint)
         } else {
@@ -762,6 +772,7 @@ object SmartConnectCoordinator {
                 Result.failure(IllegalStateException(redeemed.reason))
 
             is LicenseResolutionResult.ReadySubscription -> {
+                onProgress(62, "configs")
                 val existing = MmkvManager.decodeSubscriptions()
                     .firstOrNull { it.subscription.url.trim() == redeemed.subscriptionUrl.trim() }
                     ?: MmkvManager.decodeSubscriptions().firstOrNull()
@@ -780,6 +791,7 @@ object SmartConnectCoordinator {
                 val cache = SubscriptionCache(subId, item)
                 val edgeSnapshots = snapshotScannedEdgeProfiles(subId)
                 val updateRes = AngConfigManager.updateConfigViaSub(cache)
+                onProgress(84, "classify")
                 val appCtx = context.applicationContext
                 CdnPingClassifier.classifyAllProfilesIfNeeded(appCtx, forceRefresh = !isStatusRefresh)
                 CloudflareConfigEnricher.enrichAllStoredCloudflareProfiles(appCtx)
@@ -797,6 +809,7 @@ object SmartConnectCoordinator {
                 } else {
                     SubscriptionQuotaStore.fetchAndSaveHeader(subId, item.url, item.userAgent)
                 }
+                onProgress(100, "ready")
                 if (updateRes.configCount > 0) {
                     Result.success(updateRes.configCount)
                 } else {

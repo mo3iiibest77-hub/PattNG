@@ -1,10 +1,8 @@
 package com.v2ray.ang.ui.qsn3d
 
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -13,7 +11,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -29,7 +26,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -41,8 +37,11 @@ import com.v2ray.ang.senpai.ConfigPipeline
 import com.v2ray.ang.senpai.SmartStep
 
 /**
- * Clean, calm, high-precision Home / Connect Screen.
- * Prioritizes immediate clarity: Smart Mode Pill -> Magnetic Core Trigger -> Live Speeds -> Active Node & Quota.
+ * 3D Frosted Glass Home / Connect Screen:
+ * - Smart Mode Strip + Failover Notice
+ * - Volumetric 3D Gyroscope + Fibonacci Core Connect Trigger
+ * - 3D Illuminated Live Speed HUD (Bezier waveform + animated packet conduits + rotating border light)
+ * - Active Server Card with official Cloudflare / CloudFront / Direct logo + Subscription summary
  */
 @Composable
 fun Qs3dConnectScreen(
@@ -100,14 +99,14 @@ fun Qs3dConnectScreen(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        // 1. Smart Mode & Failover Strip
+        // 1. Smart Mode Strip
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Surface(
-                shape = RoundedCornerShape(10.dp),
+                shape = RoundedCornerShape(11.dp),
                 color = QsColors.SurfaceElevated,
                 border = BorderStroke(1.dp, QsColors.BorderSubtle),
                 modifier = Modifier
@@ -115,7 +114,7 @@ fun Qs3dConnectScreen(
                     .clickable(onClick = onOpenConfigsTab),
             ) {
                 Row(
-                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(7.dp),
                 ) {
@@ -127,8 +126,8 @@ fun Qs3dConnectScreen(
                             stringResource(R.string.novapulse_mode_smart_auto)
                         },
                         color = QsColors.TextPrimary,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
@@ -139,51 +138,52 @@ fun Qs3dConnectScreen(
                 Spacer(Modifier.width(8.dp))
                 TextButton(
                     onClick = onSwitchToSmartAuto,
-                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 3.dp),
                 ) {
                     Text(
                         text = stringResource(R.string.novapulse_switch_smart_auto_btn),
                         color = QsColors.ElectricCyan,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
                     )
                 }
             }
         }
 
-        // Optional Failover / Background Discovery Banners
+        // Optional Failover Notice
         val banner = state.failoverBanner
         if (banner != null && state.coreRunning) {
             Surface(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(12.dp),
-                color = QsColors.SolarGold.copy(alpha = 0.12f),
-                border = BorderStroke(1.dp, QsColors.SolarGold.copy(alpha = 0.35f)),
+                color = QsColors.SolarGold.copy(alpha = 0.14f),
+                border = BorderStroke(1.dp, QsColors.SolarGold.copy(alpha = 0.40f)),
             ) {
                 Text(
                     text = stringResource(
                         R.string.novapulse_failover_switched_fmt,
-                        banner.transportBadge.ifBlank { "Standard" },
+                        banner.transportBadge.ifBlank { "Direct" },
                         banner.delayMs,
                     ),
                     style = QsTextStyles.TabularStat,
                     color = QsColors.SolarGold,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
                 )
             }
         }
 
-        // 2. Hero Connect Trigger Zone
+        // 2. Hero 3D Connect Core Card
         Glass3dCard(
             surfaceColor = QsColors.SurfaceCard,
             glowColor = when {
-                state.coreRunning -> QsColors.ConnectedEmerald.copy(alpha = 0.36f)
-                isBusy -> QsColors.ElectricCyan.copy(alpha = 0.36f)
-                else -> QsColors.BorderSubtle
+                state.coreRunning -> QsColors.ConnectedEmerald.copy(alpha = 0.65f)
+                isBusy -> QsColors.SolarGold.copy(alpha = 0.60f)
+                else -> QsColors.ElectricCyan.copy(alpha = 0.42f)
             },
             contentPadding = 18.dp,
+            beamSeed = 1,
         ) {
             Column(
                 modifier = Modifier.fillMaxWidth(),
@@ -195,9 +195,9 @@ fun Qs3dConnectScreen(
                     mode = orbMode,
                     scanProgressFraction = scanProgress,
                     onClick = onConnectOrDisconnect,
-                    sizeDp = 188.dp,
+                    sizeDp = 204.dp,
                 ) {
-                    OrbCenterGlyph(mode = orbMode, sizeDp = 42.dp)
+                    OrbCenterGlyph(mode = orbMode, sizeDp = 44.dp)
                 }
 
                 Spacer(Modifier.height(14.dp))
@@ -209,8 +209,8 @@ fun Qs3dConnectScreen(
                         isBusy -> QsColors.ElectricCyan
                         else -> QsColors.TextPrimary
                     },
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Bold,
+                    fontSize = 17.sp,
+                    fontWeight = FontWeight.ExtraBold,
                 )
 
                 Spacer(Modifier.height(4.dp))
@@ -219,7 +219,7 @@ fun Qs3dConnectScreen(
                     text = tapInstruction,
                     style = QsTextStyles.TabularStat,
                     color = QsColors.TextSecondary,
-                    fontSize = 12.sp,
+                    fontSize = 13.sp,
                 )
 
                 if (scanProgress != null) {
@@ -228,17 +228,17 @@ fun Qs3dConnectScreen(
                         progress = { scanProgress },
                         modifier = Modifier
                             .fillMaxWidth(0.75f)
-                            .height(5.dp)
+                            .height(6.dp)
                             .clip(RoundedCornerShape(999.dp)),
                         color = QsColors.ElectricCyan,
                         trackColor = QsColors.SurfaceInset,
                     )
-                    Spacer(Modifier.height(4.dp))
+                    Spacer(Modifier.height(5.dp))
                     Text(
                         text = "${flow.scanDone} / ${flow.scanTotal}",
                         style = QsTextStyles.TabularStat,
-                        color = QsColors.TextMuted,
-                        fontSize = 11.sp,
+                        color = QsColors.TextSecondary,
+                        fontSize = 12.sp,
                     )
                 }
 
@@ -254,7 +254,7 @@ fun Qs3dConnectScreen(
                         ),
                         style = QsTextStyles.TabularStat,
                         color = QsColors.AuroraMint,
-                        fontSize = 11.sp,
+                        fontSize = 12.sp,
                     )
                 }
 
@@ -267,23 +267,23 @@ fun Qs3dConnectScreen(
                     if (isBusy) {
                         OutlinedButton(
                             onClick = onCancelFlow,
-                            shape = RoundedCornerShape(10.dp),
-                            border = BorderStroke(1.dp, QsColors.DangerCrimson.copy(alpha = 0.5f)),
+                            shape = RoundedCornerShape(11.dp),
+                            border = BorderStroke(1.dp, QsColors.DangerCrimson.copy(alpha = 0.55f)),
                             colors = ButtonDefaults.outlinedButtonColors(contentColor = QsColors.DangerCrimson),
                         ) {
-                            Text(stringResource(R.string.qsn3d_cancel), fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                            Text(stringResource(R.string.qsn3d_cancel), fontSize = 13.sp, fontWeight = FontWeight.Bold)
                         }
                     } else if (activePipeline == ConfigPipeline.CDN) {
                         OutlinedButton(
                             onClick = onRescanIpAndConnect,
-                            shape = RoundedCornerShape(10.dp),
+                            shape = RoundedCornerShape(11.dp),
                             border = BorderStroke(1.dp, QsColors.BorderStrong),
                             colors = ButtonDefaults.outlinedButtonColors(contentColor = QsColors.ElectricCyan),
                         ) {
                             Text(
                                 text = stringResource(R.string.novapulse_find_faster_ip_btn),
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.SemiBold,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold,
                             )
                         }
                     }
@@ -291,7 +291,7 @@ fun Qs3dConnectScreen(
                     if (state.coreRunning) {
                         OutlinedButton(
                             onClick = onTestConnectedPing,
-                            shape = RoundedCornerShape(10.dp),
+                            shape = RoundedCornerShape(11.dp),
                             border = BorderStroke(1.dp, QsColors.BorderStrong),
                             colors = ButtonDefaults.outlinedButtonColors(contentColor = QsColors.TextPrimary),
                         ) {
@@ -300,8 +300,8 @@ fun Qs3dConnectScreen(
                             Text(
                                 text = pingLabel,
                                 style = QsTextStyles.TabularStat,
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.SemiBold,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold,
                             )
                         }
                     }
@@ -309,7 +309,7 @@ fun Qs3dConnectScreen(
             }
         }
 
-        // 3. Live Speed Telemetry
+        // 3. 3D Illuminated Live Speed Telemetry Pair
         if (state.speedDisplayEnabled) {
             LiveSpeedHudRow(
                 downloadLabel = stringResource(R.string.novapulse_download_speed),
@@ -322,7 +322,7 @@ fun Qs3dConnectScreen(
             )
         }
 
-        // 4. Active Server & Subscription Compact Strip
+        // 4. Active Server + Real Brand Logo + Subscription Strip
         val activeSub = state.subscriptions.firstOrNull()
         val quota = activeSub?.quota
         val gbUnit = stringResource(R.string.novapulse_unit_gb)
@@ -330,7 +330,9 @@ fun Qs3dConnectScreen(
 
         Glass3dCard(
             surfaceColor = QsColors.SurfaceElevated,
-            contentPadding = 14.dp,
+            glowColor = QsColors.AuroraMint.copy(alpha = 0.34f),
+            contentPadding = 15.dp,
+            beamSeed = 31,
         ) {
             Row(
                 modifier = Modifier
@@ -343,13 +345,13 @@ fun Qs3dConnectScreen(
                     Text(
                         text = stringResource(R.string.novapulse_location_label),
                         color = QsColors.TextMuted,
-                        fontSize = 11.sp,
+                        fontSize = 12.sp,
                     )
-                    Spacer(Modifier.height(2.dp))
+                    Spacer(Modifier.height(3.dp))
                     Text(
                         text = selectedConfig?.remarks ?: flow.activeRemarks ?: stringResource(R.string.qsn3d_no_config_selected),
                         color = QsColors.TextPrimary,
-                        fontSize = 14.sp,
+                        fontSize = 15.sp,
                         fontWeight = FontWeight.Bold,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
@@ -382,7 +384,7 @@ fun Qs3dConnectScreen(
                         Text(
                             text = stringResource(R.string.novapulse_my_subscription_short),
                             color = QsColors.TextMuted,
-                            fontSize = 11.sp,
+                            fontSize = 12.sp,
                         )
                         val remStr = quota?.remainingBytes?.let { formatTrafficLocalized(it, gbUnit, mbUnit) }
                             ?: if (quota != null && quota.totalBytes <= 0L) stringResource(R.string.novapulse_unlimited)
@@ -391,8 +393,8 @@ fun Qs3dConnectScreen(
                             text = stringResource(R.string.novapulse_settings_quota_summary_fmt, remStr),
                             style = QsTextStyles.TabularStat,
                             color = QsColors.TextPrimary,
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold,
                         )
                     }
                     TextButton(
@@ -402,8 +404,8 @@ fun Qs3dConnectScreen(
                         Text(
                             text = stringResource(R.string.novapulse_view_details_chevron),
                             color = QsColors.ElectricCyan,
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold,
                         )
                     }
                 }
