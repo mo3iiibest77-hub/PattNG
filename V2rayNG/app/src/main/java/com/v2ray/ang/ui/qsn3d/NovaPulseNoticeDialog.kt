@@ -3,6 +3,7 @@ package com.v2ray.ang.ui.qsn3d
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
@@ -50,8 +51,11 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -407,6 +411,7 @@ fun NovaPulseUpdateDialogCard(
 fun NovaPulseSecurityNoticeDialog(
     message: String,
     title: String? = null,
+    badgeOverride: String? = null,
     onDismiss: () -> Unit,
 ) {
     Dialog(
@@ -423,6 +428,7 @@ fun NovaPulseSecurityNoticeDialog(
             NovaPulseSecurityNoticeCard(
                 message = message,
                 title = title,
+                badgeOverride = badgeOverride,
                 onDismiss = onDismiss,
             )
         }
@@ -433,13 +439,14 @@ fun NovaPulseSecurityNoticeDialog(
 fun NovaPulseSecurityNoticeCard(
     message: String,
     title: String? = null,
+    badgeOverride: String? = null,
     onDismiss: () -> Unit = {},
 ) {
     val parsed = remember(message) { NovaPulseNoticeParser.parse(message) }
     val palette = remember(parsed.severity) { paletteFor(parsed.severity) }
     val effectiveTitle = title?.takeIf { it.isNotBlank() }
         ?: stringResource(R.string.novapulse_notice_security_title)
-    val badgeLabel = when (parsed.severity) {
+    val badgeLabel = badgeOverride?.takeIf { it.isNotBlank() } ?: when (parsed.severity) {
         NoticeSeverity.MANDATORY_SECURITY -> stringResource(R.string.novapulse_notice_badge_mandatory)
         NoticeSeverity.SECURITY_NOTICE -> stringResource(R.string.novapulse_notice_badge_security)
         NoticeSeverity.UPDATE_INFO -> stringResource(R.string.novapulse_notice_badge_update)
@@ -749,6 +756,29 @@ private fun NovaPulseNoticeShell(
         orbitDeg = 24f
     }
 
+    val entranceAlpha: Float
+    val entranceScale: Float
+    if (motionActive) {
+        var visible by remember { mutableStateOf(false) }
+        LaunchedEffect(Unit) { visible = true }
+        entranceAlpha = animateFloatAsState(
+            targetValue = if (visible) 1f else 0f,
+            animationSpec = tween(durationMillis = 320, easing = FastOutSlowInEasing),
+            label = "notice_entrance_alpha",
+        ).value
+        entranceScale = animateFloatAsState(
+            targetValue = if (visible) 1f else 0.92f,
+            animationSpec = spring(
+                dampingRatio = Spring.DampingRatioMediumBouncy,
+                stiffness = Spring.StiffnessMediumLow,
+            ),
+            label = "notice_entrance_scale",
+        ).value
+    } else {
+        entranceAlpha = 1f
+        entranceScale = 1f
+    }
+
     val shape = RoundedCornerShape(26.dp)
     CompositionLocalProvider(LocalLayoutDirection provides layoutDirection) {
         Box(
@@ -756,6 +786,9 @@ private fun NovaPulseNoticeShell(
                 .fillMaxWidth()
                 .graphicsLayer {
                     cameraDistance = 22f * densityPx
+                    alpha = entranceAlpha
+                    scaleX = entranceScale
+                    scaleY = entranceScale
                     rotationX = tiltXDeg
                     rotationY = tiltYDeg
                 }

@@ -2,6 +2,7 @@ package com.v2ray.ang.handler
 
 import android.content.Context
 import android.os.Build
+import androidx.core.content.pm.PackageInfoCompat
 import com.v2ray.ang.AngApplication
 import com.v2ray.ang.AppConfig
 import com.v2ray.ang.BuildConfig
@@ -10,12 +11,14 @@ import com.v2ray.ang.dto.CheckUpdateResult
 import com.v2ray.ang.dto.GitHubRelease
 import com.v2ray.ang.dto.UrlContentRequest
 import com.v2ray.ang.extension.concatUrl
+import com.v2ray.ang.senpai.LicenseBackendClient
 import com.v2ray.ang.util.HttpUtil
 import com.v2ray.ang.util.JsonUtil
 import com.v2ray.ang.util.LogUtil
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.net.URLEncoder
 import java.util.zip.ZipFile
 
 object UpdateCheckerManager {
@@ -54,6 +57,26 @@ object UpdateCheckerManager {
         }
     }
 
+    private fun buildServerUpdateHeaders(): Map<String, String> = runCatching {
+        buildMap {
+            put("X-App-Version", BuildConfig.VERSION_NAME)
+            put("X-Campaign-Notice-V1", "1")
+            if (LicenseBackendClient.isLicenseSessionActive()) {
+                for ((k, v) in LicenseBackendClient.buildSubscriptionAuthHeaders()) {
+                    if (k.isNotBlank() && v.isNotBlank()) put(k, v)
+                }
+            }
+        }
+    }.getOrDefault(emptyMap())
+
+    private fun resolveInstalledVersionCode(context: Context?): Int {
+        if (context == null) return BuildConfig.VERSION_CODE
+        return runCatching {
+            val info = context.packageManager.getPackageInfo(context.packageName, 0)
+            PackageInfoCompat.getLongVersionCode(info).toInt().takeIf { it > 0 } ?: BuildConfig.VERSION_CODE
+        }.getOrDefault(BuildConfig.VERSION_CODE)
+    }
+
     suspend fun checkForUpdate(
         includePreRelease: Boolean = false,
         context: Context? = null,
@@ -61,9 +84,13 @@ object UpdateCheckerManager {
         val supportedAbis = Build.SUPPORTED_ABIS?.toList().orEmpty()
         val installedApkAbi = detectInstalledApkAbi(context)
         val ts = System.currentTimeMillis()
+        val encodedVer = runCatching { URLEncoder.encode(BuildConfig.VERSION_NAME, "UTF-8") }
+            .getOrDefault(BuildConfig.VERSION_NAME)
         val serverUrl = buildString {
             append(AppConfig.APP_UPDATE_SERVER_URL)
-            append("?force=1&t=")
+            append("?force=1&campaign_v1=1&app_version=")
+            append(encodedVer)
+            append("&t=")
             append(ts)
             if (includePreRelease) append("&prerelease=1")
         }
@@ -74,25 +101,32 @@ object UpdateCheckerManager {
             AppConfig.APP_API_URL.concatUrl("latest")
         }
 
-        val serverRelease = fetchReleaseFromUrl(serverUrl, expectList = false)
+        val serverRelease = fetchReleaseFromUrl(
+            url = serverUrl,
+            expectList = false,
+            headers = buildServerUpdateHeaders(),
+        )
         // Always cross-check GitHub when needed or compare both sources so the newest version ALWAYS wins.
         val ghRelease = fetchReleaseFromUrl(ghUrl, expectList = includePreRelease)
         val release = pickNewestRelease(serverRelease, ghRelease)
+        val campaignNotice = serverRelease?.campaignNotice ?: release?.campaignNotice
 
         if (release == null) {
-            return@withContext CheckUpdateResult(hasUpdate = false)
+            return@withContext CheckUpdateResult(hasUpdate = false, campaignNotice = campaignNotice)
         }
 
+        val effectiveVersionCode = resolveInstalledVersionCode(context)
         val result = evaluateReleaseUpdate(
             release = release,
             currentVersionName = BuildConfig.VERSION_NAME,
-            currentVersionCode = BuildConfig.VERSION_CODE,
+            currentVersionCode = effectiveVersionCode,
             supportedAbis = supportedAbis,
             installedApkAbi = installedApkAbi,
+            campaignNotice = campaignNotice,
         )
         LogUtil.i(
             AppConfig.TAG,
-            "Update check: hasUpdate=${result.hasUpdate}, latest=${result.latestVersion}, installedVariant=$installedApkAbi, recommended=${result.recommendedAbi}"
+            "Update check: hasUpdate=${result.hasUpdate}, latest=${result.latestVersion}, campaignSegment=${campaignNotice?.segment ?: "none"}, recommended=${result.recommendedAbi}"
         )
         result
     }
@@ -124,7 +158,11 @@ object UpdateCheckerManager {
         return first
     }
 
-    private fun fetchReleaseFromUrl(url: String, expectList: Boolean): GitHubRelease? {
+    private fun fetchReleaseFromUrl(
+        url: String,
+        expectList: Boolean,
+        headers: Map<String, String> = emptyMap(),
+    ): GitHubRelease? {
         val proxyUsername = SettingsManager.getSocksUsername()
         val proxyPassword = SettingsManager.getSocksPassword()
 
@@ -132,7 +170,8 @@ object UpdateCheckerManager {
             HttpUtil.getUrlContent(
                 UrlContentRequest(
                     url = url,
-                    timeout = 6000
+                    timeout = 6000,
+                    headers = headers,
                 )
             )
         }.getOrNull()
@@ -146,7 +185,8 @@ object UpdateCheckerManager {
                         timeout = 6000,
                         httpPort = httpPort,
                         proxyUsername = proxyUsername,
-                        proxyPassword = proxyPassword
+                        proxyPassword = proxyPassword,
+                        headers = headers,
                     )
                 )
             }.getOrNull()
@@ -167,9 +207,11 @@ object UpdateCheckerManager {
         currentVersionCode: Int,
         supportedAbis: List<String>,
         installedApkAbi: String? = null,
+        campaignNotice: GitHubRelease.CampaignNoticePayload? = null,
     ): CheckUpdateResult {
         val cleanVersion = normalizeVersion(release.tagName)
         val hasNewer = isNewerRelease(release, currentVersionName, currentVersionCode)
+        val effectiveCampaign = campaignNotice ?: release.campaignNotice
         val installedClean = installedApkAbi?.trim()?.lowercase()?.takeIf { it in KNOWN_ABIS }
         val devicePrimaryAbi = installedClean
             ?: supportedAbis.firstOrNull { abi ->
@@ -198,7 +240,8 @@ object UpdateCheckerManager {
                 recommendedAbi = recommendedOption.abi,
                 recommendedFileName = recommendedOption.fileName,
                 availableAssets = selectableAssets,
-                isPreRelease = release.prerelease
+                isPreRelease = release.prerelease,
+                campaignNotice = effectiveCampaign,
             )
         } else if (hasNewer) {
             // Version bump published before assets finished uploading: still report non-downloadable info safely
@@ -207,6 +250,7 @@ object UpdateCheckerManager {
                 latestVersion = cleanVersion,
                 latestVersionCode = release.versionCode,
                 recommendedAbi = devicePrimaryAbi,
+                campaignNotice = effectiveCampaign,
             )
         } else {
             CheckUpdateResult(
@@ -214,7 +258,8 @@ object UpdateCheckerManager {
                 latestVersion = cleanVersion,
                 latestVersionCode = release.versionCode,
                 recommendedAbi = devicePrimaryAbi,
-                availableAssets = selectableAssets
+                availableAssets = selectableAssets,
+                campaignNotice = effectiveCampaign,
             )
         }
     }

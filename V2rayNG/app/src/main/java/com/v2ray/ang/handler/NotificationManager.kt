@@ -1,5 +1,6 @@
 package com.v2ray.ang.handler
 
+import android.Manifest
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -7,6 +8,7 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
@@ -15,6 +17,7 @@ import android.view.View
 import android.widget.RemoteViews
 import androidx.annotation.RequiresApi
 import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
 import com.v2ray.ang.AppConfig
 import com.v2ray.ang.R
 import com.v2ray.ang.core.CoreServiceManager
@@ -35,10 +38,15 @@ object NotificationManager {
     private const val NOTIFICATION_ID = 1
     private const val LICENSE_ALERT_NOTIFICATION_ID = 1002
     private const val LICENSE_ALERT_CHANNEL_ID = "NOVAPULSE_LICENSE_ALERTS"
+    private const val CAMPAIGN_NOTICE_CHANNEL_ID = "NOVAPULSE_CAMPAIGN_NOTICES"
+    private const val CAMPAIGN_NOTICE_NOTIFICATION_BASE_ID = 2100
     private const val NOTIFICATION_PENDING_INTENT_CONTENT = 0
     private const val NOTIFICATION_PENDING_INTENT_STOP_V2RAY = 1
     private const val NOTIFICATION_PENDING_INTENT_RESTART_V2RAY = 2
     private const val NOTIFICATION_PENDING_INTENT_LICENSE_ALERT = 3
+    private const val NOTIFICATION_PENDING_INTENT_CAMPAIGN_NOTICE = 4
+    const val EXTRA_CAMPAIGN_NOTICE_TITLE = "np_campaign_notice_title"
+    const val EXTRA_CAMPAIGN_NOTICE_BODY = "np_campaign_notice_body"
     private const val NOTIFICATION_ICON_THRESHOLD = 3000
     private const val QUERY_INTERVAL_MS = 3000L
 
@@ -414,5 +422,75 @@ object NotificationManager {
 
             nm.notify(LICENSE_ALERT_NOTIFICATION_ID, notification)
         }
+    }
+
+    /**
+     * Posts a gentle, rate-limited notification for personalized NovaPulse offers & notices.
+     * Reuses the existing NotificationManager & QuietStormActivity launch flow without redesign.
+     */
+    fun showCampaignNoticeNotification(
+        context: Context,
+        noticeId: String,
+        title: String,
+        shortText: String,
+        fullBody: String,
+    ): Boolean {
+        return runCatching {
+            val appCtx = context.applicationContext
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                val granted = ContextCompat.checkSelfPermission(
+                    appCtx,
+                    Manifest.permission.POST_NOTIFICATIONS,
+                ) == PackageManager.PERMISSION_GRANTED
+                if (!granted) return@runCatching false
+            }
+            val nm = appCtx.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+                ?: return@runCatching false
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val chan = NotificationChannel(
+                    CAMPAIGN_NOTICE_CHANNEL_ID,
+                    "پیام‌ها و پیشنهادهای NovaPulse",
+                    NotificationManager.IMPORTANCE_DEFAULT,
+                ).apply {
+                    description = "اطلاع‌رسانی اشتراک هدیه، پیشنهادهای ویژه و پیام‌های NovaPulse"
+                    enableLights(true)
+                    lightColor = Color.parseColor("#38BDF8")
+                    lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+                }
+                nm.createNotificationChannel(chan)
+            }
+
+            val cleanTitle = title.trim().ifBlank { appCtx.getString(R.string.app_name) }
+            val cleanSummary = shortText.trim().ifBlank { fullBody.trim() }
+            val flags = PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+            val openIntent = Intent(appCtx, QuietStormActivity::class.java).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                putExtra(EXTRA_CAMPAIGN_NOTICE_TITLE, cleanTitle)
+                putExtra(EXTRA_CAMPAIGN_NOTICE_BODY, fullBody.trim().ifBlank { cleanSummary })
+            }
+            val notifId = CAMPAIGN_NOTICE_NOTIFICATION_BASE_ID + ((noticeId.hashCode() and 0x0FFF) % 500)
+            val openPendingIntent = PendingIntent.getActivity(
+                appCtx,
+                NOTIFICATION_PENDING_INTENT_CAMPAIGN_NOTICE,
+                openIntent,
+                flags,
+            )
+
+            val notification = NotificationCompat.Builder(appCtx, CAMPAIGN_NOTICE_CHANNEL_ID)
+                .setSmallIcon(R.drawable.ic_stat_name)
+                .setLargeIcon(getBrandLargeIcon(appCtx))
+                .setColor(Color.parseColor("#38BDF8"))
+                .setContentTitle(cleanTitle)
+                .setContentText(cleanSummary)
+                .setStyle(NotificationCompat.BigTextStyle().bigText(cleanSummary))
+                .setAutoCancel(true)
+                .setOnlyAlertOnce(true)
+                .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+                .setContentIntent(openPendingIntent)
+                .build()
+
+            nm.notify(notifId, notification)
+            true
+        }.getOrDefault(false)
     }
 }

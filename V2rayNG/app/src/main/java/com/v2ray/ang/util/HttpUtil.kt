@@ -116,6 +116,11 @@ object HttpUtil {
             .url(url)
             .get()
             .header("Connection", "close")
+        for ((k, v) in request.headers) {
+            if (k.isNotBlank() && v.isNotBlank()) {
+                requestBuilder.header(k, v)
+            }
+        }
         if (request.httpPort != 0 && !request.proxyUsername.isNullOrBlank() && !request.proxyPassword.isNullOrBlank()) {
             requestBuilder.header("Proxy-Authorization", Credentials.basic(request.proxyUsername, request.proxyPassword))
         }
@@ -289,6 +294,11 @@ object HttpUtil {
             .url(url)
             .get()
             .header("Connection", "close")
+        for ((k, v) in request.headers) {
+            if (k.isNotBlank() && v.isNotBlank()) {
+                requestBuilder.header(k, v)
+            }
+        }
         if (request.httpPort != 0 && !request.proxyUsername.isNullOrBlank() && !request.proxyPassword.isNullOrBlank()) {
             requestBuilder.header("Proxy-Authorization", Credentials.basic(request.proxyUsername, request.proxyPassword))
         }

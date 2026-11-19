@@ -117,6 +117,23 @@ class QuietStormActivity : BaseComponentActivity() {
         super.onCreate(savedInstanceState)
         requestNotificationPermissionIfNeeded()
         perAppViewModel.loadApps(this)
+        handleCampaignNotificationIntent(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleCampaignNotificationIntent(intent)
+    }
+
+    private fun handleCampaignNotificationIntent(intent: Intent?) {
+        val body = intent?.getStringExtra(com.v2ray.ang.handler.NotificationManager.EXTRA_CAMPAIGN_NOTICE_BODY)?.trim().orEmpty()
+        if (body.isNotEmpty()) {
+            val title = intent?.getStringExtra(com.v2ray.ang.handler.NotificationManager.EXTRA_CAMPAIGN_NOTICE_TITLE)?.trim()
+            viewModel.openCampaignNotice(title = title, body = body)
+            intent?.removeExtra(com.v2ray.ang.handler.NotificationManager.EXTRA_CAMPAIGN_NOTICE_BODY)
+            intent?.removeExtra(com.v2ray.ang.handler.NotificationManager.EXTRA_CAMPAIGN_NOTICE_TITLE)
+        }
     }
 
     override fun onResume() {
@@ -430,6 +447,8 @@ class QuietStormActivity : BaseComponentActivity() {
                 if (!noticeMsg.isNullOrBlank()) {
                     NovaPulseSecurityNoticeDialog(
                         message = noticeMsg,
+                        title = state.activeNoticeTitle,
+                        badgeOverride = state.activeNoticeBadge,
                         onDismiss = viewModel::dismissNoticeDialog,
                     )
                 }

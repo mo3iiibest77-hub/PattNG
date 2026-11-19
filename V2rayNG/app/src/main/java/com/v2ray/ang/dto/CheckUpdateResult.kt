@@ -21,5 +21,6 @@ data class CheckUpdateResult(
     val recommendedFileName: String? = null,
     val availableAssets: List<ApkAssetOption> = emptyList(),
     val error: String? = null,
-    val isPreRelease: Boolean = false
+    val isPreRelease: Boolean = false,
+    val campaignNotice: GitHubRelease.CampaignNoticePayload? = null,
 )

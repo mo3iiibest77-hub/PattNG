@@ -90,4 +90,46 @@ class NovaPulseNoticeParserTest {
         assertTrue(NovaPulseNoticeParser.shouldShowAsRichDialog("خطا در اتصال؛ لطفاً به @Mo3i_Best پیام دهید."))
         assertTrue(NovaPulseNoticeParser.shouldShowAsRichDialog("خط اول\nخط دوم"))
     }
+
+    @Test
+    fun parsesGiftAndPersonalCampaignNotices_withSpecialOfferHighlightAndTelegramAction() {
+        val giftNotice = """
+            هدیه‌ای از طرف NovaPulse برای شما ❤️:
+            • ما در NovaPulse خوشحالیم که فرصت استفاده از سرویس را در اختیار شما قرار داده‌ایم.
+
+            زمان باقیمانده از هدیه شما:
+            • زمان باقیمانده واقعی تا پایان اعتبار هدیه: 2 روز و 5 ساعت
+
+            پلن سوم: پیشنهاد ویژه NovaPulse ⭐:
+            • حجم: ۱۰۰ گیگابایت | مدت اعتبار: یک ماه
+            • تعداد کاربران: دقیقاً ۱ کاربر (ثابت و غیرقابل تغییر)
+            • قیمت: ۳۰۰,۰۰۰ تومان
+
+            پشتیبانی و دریافت اشتراک اختصاصی:
+            • تلگرام پشتیبانی: @Mo3i_Best
+            • لینک مستقیم: https://t.me/Mo3i_Best
+        """.trimIndent()
+
+        val parsedGift = NovaPulseNoticeParser.parse(giftNotice)
+        assertEquals(NoticeSeverity.INFO, parsedGift.severity)
+        assertTrue(parsedGift.isRtl)
+        assertEquals(4, parsedGift.sections.size)
+        assertEquals(NoticeSectionKind.SAFE_STATUS, parsedGift.sections[2].kind)
+        assertEquals(NoticeSectionKind.SUPPORT, parsedGift.sections[3].kind)
+        assertEquals(1, parsedGift.contactActions.size)
+        assertEquals("@Mo3i_Best", parsedGift.contactActions[0].subLabel)
+        assertEquals("https://t.me/Mo3i_Best", parsedGift.contactActions[0].target)
+
+        val personalNotice = """
+            ممنونیم که همراه NovaPulse هستید ❤️:
+            • از اینکه NovaPulse را برای اتصال و استفاده روزمره خود انتخاب کرده‌اید، صمیمانه سپاسگزاریم.
+
+            پشتیبانی رسمی NovaPulse:
+            • @Mo3i_Best
+        """.trimIndent()
+        val parsedPersonal = NovaPulseNoticeParser.parse(personalNotice)
+        assertEquals(NoticeSeverity.INFO, parsedPersonal.severity)
+        assertEquals(1, parsedPersonal.contactActions.size)
+        assertEquals("@Mo3i_Best", parsedPersonal.contactActions[0].subLabel)
+    }
 }

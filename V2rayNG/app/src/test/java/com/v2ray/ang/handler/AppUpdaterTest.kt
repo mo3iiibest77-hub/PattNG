@@ -1,8 +1,10 @@
 package com.v2ray.ang.handler
 
 import com.v2ray.ang.dto.GitHubRelease
+import com.v2ray.ang.util.JsonUtil
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
@@ -229,5 +231,66 @@ class AppUpdaterTest {
             serverLatestUrl = "https://nova.dontbedumb.ir/api/v1/license/app-update/latest",
         )
         assertEquals(1, gatewayOnly.size)
+    }
+
+    @Test
+    fun `parses separated campaign_notice and preserves it even when no app update is needed`() {
+        val rawJson = """
+            {
+              "tag_name": "v2.6.2",
+              "version_code": 4000758,
+              "name": "NovaPulse v2.6.2",
+              "body": "Release notes v2.6.2",
+              "prerelease": false,
+              "assets": [
+                {
+                  "name": "NovaPulse_2.6.2_arm64-v8a.apk",
+                  "browser_download_url": "https://gr.arpras.ir/npdl/NovaPulse_2.6.2_arm64-v8a.apk",
+                  "size": 25377915
+                }
+              ],
+              "campaign_notice": {
+                "id": "202611_novapulse_campaign_v1_gift",
+                "segment": "gift",
+                "title": "هدیه‌ای از طرف NovaPulse برای شما ❤️",
+                "body": "پیشنهاد ویژه ۱۰۰ گیگابایت ۳۰۰,۰۰۰ تومان\n@Mo3i_Best",
+                "severity": "info",
+                "expire_at_ms": 1795312024044,
+                "server_now_ms": 1795104000000,
+                "has_valid_expiry": true,
+                "notify_enabled": true,
+                "notify_title": "هدیه NovaPulse",
+                "notify_body": "مشاهده پیشنهادهای ویژه",
+                "min_notify_interval_sec": 21600,
+                "min_dialog_interval_sec": 43200
+              }
+            }
+        """.trimIndent()
+
+        val release = JsonUtil.fromJsonSafe(rawJson, GitHubRelease::class.java)
+        assertNotNull(release)
+        assertNotNull(release!!.campaignNotice)
+
+        val noUpdateRes = UpdateCheckerManager.evaluateReleaseUpdate(
+            release = release,
+            currentVersionName = "2.6.2",
+            currentVersionCode = 4000758,
+            supportedAbis = listOf("arm64-v8a"),
+        )
+        assertFalse(noUpdateRes.hasUpdate)
+        assertEquals("gift", noUpdateRes.campaignNotice?.segment)
+        assertEquals(1795312024044L, noUpdateRes.campaignNotice?.expireAtMs)
+        assertTrue(noUpdateRes.campaignNotice?.hasValidExpiry == true)
+        assertEquals(21600L, noUpdateRes.campaignNotice?.minNotifyIntervalSec)
+
+        val withUpdateRes = UpdateCheckerManager.evaluateReleaseUpdate(
+            release = release,
+            currentVersionName = "2.5.0",
+            currentVersionCode = 4000755,
+            supportedAbis = listOf("arm64-v8a"),
+        )
+        assertTrue(withUpdateRes.hasUpdate)
+        assertEquals("2.6.2", withUpdateRes.latestVersion)
+        assertEquals("gift", withUpdateRes.campaignNotice?.segment)
     }
 }

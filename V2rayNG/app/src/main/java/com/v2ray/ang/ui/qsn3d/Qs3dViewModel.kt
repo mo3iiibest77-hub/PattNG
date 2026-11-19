@@ -19,6 +19,7 @@ import com.v2ray.ang.R
 import com.v2ray.ang.core.LauncherManager
 import com.v2ray.ang.dto.ApkAssetOption
 import com.v2ray.ang.dto.CheckUpdateResult
+import com.v2ray.ang.dto.GitHubRelease
 import com.v2ray.ang.dto.TestServiceMessage
 import com.v2ray.ang.dto.entities.ProfileItem
 import com.v2ray.ang.extension.toSpeedString
@@ -26,6 +27,7 @@ import com.v2ray.ang.handler.AngConfigManager
 import com.v2ray.ang.handler.ApkInstallResult
 import com.v2ray.ang.handler.AppLocaleManager
 import com.v2ray.ang.handler.MmkvManager
+import com.v2ray.ang.handler.NotificationManager
 import com.v2ray.ang.handler.NovaPulseApkDownloader
 import com.v2ray.ang.handler.UpdateCheckerManager
 import java.io.File
@@ -131,6 +133,8 @@ data class Qs3dUiState(
     val activationInput: String = "",
     val toastMessage: String? = null,
     val activeNoticeDialog: String? = null,
+    val activeNoticeTitle: String? = null,
+    val activeNoticeBadge: String? = null,
     val smartFlow: SmartFlowState = SmartFlowState(),
     val discoveryState: PostConnectDiscoveryState = PostConnectDiscoveryState(),
     val lastCdnDetection: CdnDetectionResult? = null,
@@ -190,6 +194,10 @@ class Qs3dViewModel(
 
     companion object {
         private const val PREF_OPTIMIZE_CONSENT_ASKED = "np_2h_optimize_consent_asked"
+        private const val PREF_CAMPAIGN_DIALOG_ID = "np_campaign_dialog_id"
+        private const val PREF_CAMPAIGN_DIALOG_AT_MS = "np_campaign_dialog_at_ms"
+        private const val PREF_CAMPAIGN_NOTIFY_ID = "np_campaign_notify_id"
+        private const val PREF_CAMPAIGN_NOTIFY_AT_MS = "np_campaign_notify_at_ms"
     }
 
     @Volatile
@@ -512,7 +520,96 @@ class Qs3dViewModel(
     }
 
     fun dismissNoticeDialog() {
-        _uiState.update { it.copy(activeNoticeDialog = null) }
+        _uiState.update {
+            it.copy(
+                activeNoticeDialog = null,
+                activeNoticeTitle = null,
+                activeNoticeBadge = null,
+            )
+        }
+    }
+
+    fun openCampaignNotice(title: String?, body: String) {
+        val cleanBody = body.trim()
+        if (cleanBody.isEmpty()) return
+        val cleanTitle = title?.trim()?.takeIf { it.isNotEmpty() }
+            ?: "پیام NovaPulse"
+        val badge = if (cleanTitle.contains("هدیه")) "پیشنهاد ویژه NovaPulse" else "پیام همراهان NovaPulse"
+        _uiState.update {
+            it.copy(
+                activeNoticeDialog = cleanBody,
+                activeNoticeTitle = cleanTitle,
+                activeNoticeBadge = badge,
+            )
+        }
+    }
+
+    private fun clearCampaignThrottleForLicenseChange() {
+        runCatching {
+            MmkvManager.encodeSettings(PREF_CAMPAIGN_DIALOG_ID, "")
+            MmkvManager.encodeSettings(PREF_CAMPAIGN_DIALOG_AT_MS, 0L)
+            MmkvManager.encodeSettings(PREF_CAMPAIGN_NOTIFY_ID, "")
+            MmkvManager.encodeSettings(PREF_CAMPAIGN_NOTIFY_AT_MS, 0L)
+        }
+    }
+
+    private fun applyCampaignNotice(notice: GitHubRelease.CampaignNoticePayload?) {
+        if (notice == null || notice.body.isBlank()) return
+        val app = getApplication<Application>()
+        val nowMs = System.currentTimeMillis()
+        val noticeId = notice.id.ifBlank { "default_${notice.segment}" }
+        val minDialogMs = (notice.minDialogIntervalSec.coerceAtLeast(60L)) * 1000L
+        val minNotifyMs = (notice.minNotifyIntervalSec.coerceAtLeast(60L)) * 1000L
+        val lastDialogId = MmkvManager.decodeSettingsString(PREF_CAMPAIGN_DIALOG_ID).orEmpty()
+        val lastDialogMs = MmkvManager.decodeSettingsLong(PREF_CAMPAIGN_DIALOG_AT_MS, 0L)
+        val shouldShowDialog = lastDialogId != noticeId || (nowMs - lastDialogMs) >= minDialogMs
+
+        if (shouldShowDialog) {
+            val cur = _uiState.value
+            val busyWithHigherPriority = !cur.activeNoticeDialog.isNullOrBlank() ||
+                cur.showUpdateDialog ||
+                cur.updateDownloadProgress != null ||
+                cur.isRedeemingLicense
+            if (!busyWithHigherPriority) {
+                MmkvManager.encodeSettings(PREF_CAMPAIGN_DIALOG_ID, noticeId)
+                MmkvManager.encodeSettings(PREF_CAMPAIGN_DIALOG_AT_MS, nowMs)
+                val badge = if (notice.segment.equals("gift", ignoreCase = true)) {
+                    "پیشنهاد ویژه NovaPulse"
+                } else {
+                    "پیام همراهان NovaPulse"
+                }
+                _uiState.update {
+                    if (!it.activeNoticeDialog.isNullOrBlank() || it.showUpdateDialog) {
+                        it
+                    } else {
+                        it.copy(
+                            activeNoticeDialog = notice.body,
+                            activeNoticeTitle = notice.title.ifBlank { null },
+                            activeNoticeBadge = badge,
+                        )
+                    }
+                }
+            }
+        }
+
+        if (notice.notifyEnabled) {
+            val lastNotifyId = MmkvManager.decodeSettingsString(PREF_CAMPAIGN_NOTIFY_ID).orEmpty()
+            val lastNotifyMs = MmkvManager.decodeSettingsLong(PREF_CAMPAIGN_NOTIFY_AT_MS, 0L)
+            val shouldNotify = lastNotifyId != noticeId || (nowMs - lastNotifyMs) >= minNotifyMs
+            if (shouldNotify) {
+                val posted = NotificationManager.showCampaignNoticeNotification(
+                    context = app,
+                    noticeId = noticeId,
+                    title = notice.notifyTitle.ifBlank { notice.title },
+                    shortText = notice.notifyBody.ifBlank { notice.title },
+                    fullBody = notice.body,
+                )
+                if (posted) {
+                    MmkvManager.encodeSettings(PREF_CAMPAIGN_NOTIFY_ID, noticeId)
+                    MmkvManager.encodeSettings(PREF_CAMPAIGN_NOTIFY_AT_MS, nowMs)
+                }
+            }
+        }
     }
 
     fun setActivationInput(text: String) {
@@ -737,9 +834,11 @@ class Qs3dViewModel(
                     )
                 }
                 autoInitialPingTriggered.set(false)
+                clearCampaignThrottleForLicenseChange()
                 loadConfigsAndSubs()
                 detectCdnForSelected()
                 autoTestUntestedDelaysIfNeeded(force = true)
+                checkForAppUpdates(silent = true, openDialogIfUpdate = true)
             }.onFailure { err ->
                 val cleanErr = LicenseBackendClient.sanitizeForDisplay(err.message)
                     .ifBlank { ctx.getString(R.string.novapulse_license_failed) }
@@ -1387,6 +1486,7 @@ class Qs3dViewModel(
                         }
                     }
                 }
+                applyCampaignNotice(res.campaignNotice)
             } catch (_: Exception) {
                 _uiState.update { it.copy(isCheckingUpdate = false) }
                 if (!silent) {

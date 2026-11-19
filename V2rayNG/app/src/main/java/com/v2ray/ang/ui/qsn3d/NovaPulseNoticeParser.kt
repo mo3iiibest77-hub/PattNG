@@ -340,6 +340,7 @@ object NovaPulseNoticeParser {
                 combined.contains("هشدار") -> NoticeSectionKind.ALERT
             combined.contains("کاملاً برقرار و ایمن") ||
                 combined.contains("2.4.4 و بالاتر") ||
+                combined.contains("پیشنهاد ویژه") ||
                 combined.contains("اختیاری است") -> NoticeSectionKind.SAFE_STATUS
             else -> NoticeSectionKind.GENERAL
         }
