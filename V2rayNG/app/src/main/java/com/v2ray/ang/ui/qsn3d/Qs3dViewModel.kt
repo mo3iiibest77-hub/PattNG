@@ -207,7 +207,9 @@ class Qs3dViewModel(
     @Volatile
     private var lastLicenseVerifyMs = 0L
     @Volatile
-    private var lastUpdateCheckMs = 0L
+    private var lastUpdateCheckMs = System.currentTimeMillis()
+    @Volatile
+    private var initialUpdateCheckPending = true
     @Volatile
     private var lastSubSyncMs = 0L
     @Volatile
@@ -232,7 +234,8 @@ class Qs3dViewModel(
         verifyLicenseSessionNow(force = true)
         viewModelScope.launch(Dispatchers.IO) {
             delay(1500L)
-            checkForAppUpdates(silent = true)
+            initialUpdateCheckPending = false
+            checkForAppUpdates(silent = true, openDialogIfUpdate = true)
         }
     }
 
@@ -1435,6 +1438,7 @@ class Qs3dViewModel(
     // ---------- Self-Update Checker & Installer ----------
 
     fun checkForAppUpdatesIfStale(minIntervalMs: Long = 60_000L) {
+        if (initialUpdateCheckPending) return
         val now = System.currentTimeMillis()
         if ((now - lastUpdateCheckMs) < minIntervalMs) return
         val shouldRemindGently = _uiState.value.let { st ->
