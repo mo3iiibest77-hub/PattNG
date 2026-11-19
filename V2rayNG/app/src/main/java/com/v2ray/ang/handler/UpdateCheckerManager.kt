@@ -293,7 +293,7 @@ object UpdateCheckerManager {
                 fileName = asset.name,
                 downloadUrl = asset.browserDownloadUrl,
                 sizeBytes = asset.size,
-                sha256 = asset.sha256,
+                sha256 = asset.sha256.orEmpty(),
                 isDeviceMatch = isMatch,
                 isUniversal = isUniversal,
             )

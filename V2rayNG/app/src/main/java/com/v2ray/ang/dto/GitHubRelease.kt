@@ -57,6 +57,6 @@ data class GitHubRelease(
         @SerializedName("size")
         val size: Long = 0L,
         @SerializedName("sha256")
-        val sha256: String = ""
+        val sha256: String? = ""
     )
 }
