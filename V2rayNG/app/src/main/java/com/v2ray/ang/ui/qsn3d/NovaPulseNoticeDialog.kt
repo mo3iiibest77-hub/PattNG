@@ -199,7 +199,7 @@ fun NovaPulseUpdateDialog(
             modifier = Modifier
                 .fillMaxSize()
                 .background(Color(0xB802050E))
-                .padding(horizontal = 16.dp, vertical = 20.dp),
+                .padding(horizontal = 12.dp, vertical = 14.dp),
             contentAlignment = Alignment.Center,
         ) {
             NovaPulseUpdateDialogCard(
@@ -283,10 +283,10 @@ fun NovaPulseUpdateDialogCard(
                 modifier = Modifier
                     .fillMaxWidth()
                     .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(11.dp),
             ) {
-                parsed.sections.forEach { section ->
-                    NovaPulseSectionCard(section = section, palette = palette)
+                parsed.sections.forEachIndexed { idx, section ->
+                    NovaPulseSectionCard(section = section, palette = palette, sectionIndex = idx)
                 }
 
                 if (parsed.contactActions.isNotEmpty()) {
@@ -422,7 +422,7 @@ fun NovaPulseSecurityNoticeDialog(
             modifier = Modifier
                 .fillMaxSize()
                 .background(Color(0xB802050E))
-                .padding(horizontal = 16.dp, vertical = 20.dp),
+                .padding(horizontal = 12.dp, vertical = 14.dp),
             contentAlignment = Alignment.Center,
         ) {
             NovaPulseSecurityNoticeCard(
@@ -478,10 +478,10 @@ fun NovaPulseSecurityNoticeCard(
                 modifier = Modifier
                     .fillMaxWidth()
                     .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(11.dp),
             ) {
-                parsed.sections.forEach { section ->
-                    NovaPulseSectionCard(section = section, palette = palette)
+                parsed.sections.forEachIndexed { idx, section ->
+                    NovaPulseSectionCard(section = section, palette = palette, sectionIndex = idx)
                 }
 
                 if (parsed.contactActions.isNotEmpty()) {
@@ -531,7 +531,7 @@ fun NovaPulseConfirmNoticeDialog(
             modifier = Modifier
                 .fillMaxSize()
                 .background(Color(0xB802050E))
-                .padding(horizontal = 16.dp, vertical = 20.dp),
+                .padding(horizontal = 12.dp, vertical = 14.dp),
             contentAlignment = Alignment.Center,
         ) {
             NovaPulseNoticeShell(
@@ -554,10 +554,10 @@ fun NovaPulseConfirmNoticeDialog(
                         modifier = Modifier
                             .fillMaxWidth()
                             .verticalScroll(rememberScrollState()),
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(11.dp),
                     ) {
-                        parsed.sections.forEach { section ->
-                            NovaPulseSectionCard(section = section, palette = palette)
+                        parsed.sections.forEachIndexed { idx, section ->
+                            NovaPulseSectionCard(section = section, palette = palette, sectionIndex = idx)
                         }
                     }
                 }
@@ -900,7 +900,7 @@ private fun NovaPulseNoticeShell(
                             Text(
                                 text = badgeLabel,
                                 color = palette.primaryAccent,
-                                fontSize = 10.5.sp,
+                                fontSize = 11.5.sp,
                                 fontWeight = FontWeight.ExtraBold,
                             )
                         }
@@ -908,8 +908,8 @@ private fun NovaPulseNoticeShell(
                         Text(
                             text = NovaPulseNoticeParser.isolateLtrTokensForDisplay(title),
                             color = QsColors.TextPrimary,
-                            fontSize = 16.5.sp,
-                            lineHeight = 22.sp,
+                            fontSize = 18.5.sp,
+                            lineHeight = 27.sp,
                             fontWeight = FontWeight.ExtraBold,
                         )
                     }
@@ -1126,10 +1126,31 @@ private fun NoticeBeaconEmblem(
     }
 }
 
+private val NOVAPULSE_GENERAL_SECTION_ACCENTS = listOf(
+    QsColors.ElectricCyan,
+    QsColors.AuroraMint,
+    Color(0xFFFBBF24), // Bright SolarGold
+    QsColors.CloudFrontSky,
+    Color(0xFFC4B5FD), // Bright PlasmaViolet
+    Color(0xFFFDA4AF), // Bright NeonRose
+)
+
+private val NOVAPULSE_RICH_WORD_COLORS = listOf(
+    QsColors.TextPrimary,
+    QsColors.ElectricCyan,
+    QsColors.AuroraMint,
+    Color(0xFFFBBF24), // Bright SolarGold
+    QsColors.CloudFrontSky,
+    Color(0xFFC4B5FD), // Bright PlasmaViolet
+    Color(0xFFFDA4AF), // Bright NeonRose
+    Color(0xFFFDBA74), // Bright CloudflareOrange
+)
+
 @Composable
 private fun NovaPulseSectionCard(
     section: NoticeSection,
     palette: NoticePalette,
+    sectionIndex: Int = 0,
 ) {
     val sectionAccent: Color
     val bgTint: Color
@@ -1138,75 +1159,82 @@ private fun NovaPulseSectionCard(
         NoticeSectionKind.ALERT -> {
             sectionAccent = if (palette.secondaryAccent == QsColors.DangerCrimson) QsColors.SolarGold else palette.primaryAccent
             bgTint = Color(0x4726131C)
-            borderTint = sectionAccent.copy(alpha = 0.42f)
+            borderTint = sectionAccent.copy(alpha = 0.48f)
         }
 
         NoticeSectionKind.SAFE_STATUS -> {
             sectionAccent = QsColors.ConnectedEmerald
-            bgTint = Color(0x450B2320)
-            borderTint = QsColors.ConnectedEmerald.copy(alpha = 0.40f)
+            bgTint = Color(0x480B2622)
+            borderTint = QsColors.ConnectedEmerald.copy(alpha = 0.50f)
         }
 
         NoticeSectionKind.SUPPORT -> {
             sectionAccent = QsColors.ElectricCyan
-            bgTint = Color(0x4A0E1B37)
-            borderTint = QsColors.ElectricCyan.copy(alpha = 0.35f)
+            bgTint = Color(0x4E0E1E3C)
+            borderTint = QsColors.ElectricCyan.copy(alpha = 0.45f)
         }
 
         NoticeSectionKind.GENERAL -> {
-            sectionAccent = palette.primaryAccent
-            bgTint = Color(0x42101B36)
-            borderTint = Color.White.copy(alpha = 0.12f)
+            sectionAccent = NOVAPULSE_GENERAL_SECTION_ACCENTS[
+                sectionIndex.mod(NOVAPULSE_GENERAL_SECTION_ACCENTS.size)
+            ]
+            bgTint = Color(0x4A101D38)
+            borderTint = sectionAccent.copy(alpha = 0.34f)
         }
     }
 
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(15.dp))
+            .clip(RoundedCornerShape(16.dp))
             .background(bgTint)
-            .border(0.9.dp, borderTint, RoundedCornerShape(15.dp))
-            .padding(horizontal = 12.dp, vertical = 10.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp),
+            .border(1.dp, borderTint, RoundedCornerShape(16.dp))
+            .padding(horizontal = 15.dp, vertical = 13.dp),
+        verticalArrangement = Arrangement.spacedBy(9.dp),
     ) {
         if (!section.heading.isNullOrBlank()) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(7.dp),
+                horizontalArrangement = Arrangement.spacedBy(9.dp),
             ) {
                 Box(
                     modifier = Modifier
-                        .width(3.dp)
-                        .height(14.dp)
+                        .width(4.dp)
+                        .height(18.dp)
                         .clip(RoundedCornerShape(99.dp))
                         .background(sectionAccent)
                 )
                 Text(
                     text = NovaPulseNoticeParser.isolateLtrTokensForDisplay(section.heading),
                     color = sectionAccent,
-                    fontSize = 12.5.sp,
+                    fontSize = 15.5.sp,
+                    lineHeight = 23.sp,
                     fontWeight = FontWeight.ExtraBold,
                 )
             }
         }
 
-        section.lines.forEach { line ->
+        section.lines.forEachIndexed { lineIdx, line ->
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                horizontalArrangement = Arrangement.spacedBy(9.dp),
                 verticalAlignment = Alignment.Top,
             ) {
                 if (line.isBullet) {
+                    val dotColor = NOVAPULSE_RICH_WORD_COLORS[
+                        (sectionIndex + lineIdx + 1).mod(NOVAPULSE_RICH_WORD_COLORS.size)
+                    ]
                     Box(
                         modifier = Modifier
-                            .padding(top = 7.dp)
-                            .size(5.dp)
+                            .padding(top = 9.dp)
+                            .size(7.dp)
                             .clip(CircleShape)
-                            .background(sectionAccent.copy(alpha = 0.85f))
+                            .background(dotColor.copy(alpha = 0.92f))
                     )
                 }
                 NovaPulseRichText(
                     segments = line.segments,
+                    colorSeed = sectionIndex * 7 + lineIdx * 3,
                     modifier = Modifier.weight(1f),
                 )
             }
@@ -1214,9 +1242,42 @@ private fun NovaPulseSectionCard(
     }
 }
 
+private fun AnnotatedString.Builder.appendVibrantWords(
+    text: String,
+    seed: Int,
+) {
+    var cursor = 0
+    var wordSeq = 0
+    val len = text.length
+    while (cursor < len) {
+        if (text[cursor].isWhitespace()) {
+            val wsStart = cursor
+            while (cursor < len && text[cursor].isWhitespace()) cursor++
+            append(text.substring(wsStart, cursor))
+        } else {
+            val wStart = cursor
+            while (cursor < len && !text[cursor].isWhitespace()) cursor++
+            val word = text.substring(wStart, cursor)
+            val colorIdx = (seed + wordSeq * 3 + (word.firstOrNull()?.code ?: 0))
+                .mod(NOVAPULSE_RICH_WORD_COLORS.size)
+            val wordColor = NOVAPULSE_RICH_WORD_COLORS[colorIdx]
+            withStyle(
+                SpanStyle(
+                    color = wordColor,
+                    fontWeight = FontWeight.Medium,
+                )
+            ) {
+                append(word)
+            }
+            wordSeq++
+        }
+    }
+}
+
 @Composable
 private fun NovaPulseRichText(
     segments: List<NoticeTextSegment>,
+    colorSeed: Int = 0,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -1230,8 +1291,9 @@ private fun NovaPulseRichText(
         )
     }
 
-    val annotated: AnnotatedString = remember(segments) {
+    val annotated: AnnotatedString = remember(segments, colorSeed) {
         buildAnnotatedString {
+            var segSeed = colorSeed
             for (seg in segments) {
                 when (seg) {
                     is NoticeTextSegment.Plain -> {
@@ -1239,14 +1301,15 @@ private fun NovaPulseRichText(
                             withStyle(
                                 SpanStyle(
                                     color = QsColors.TextPrimary,
-                                    fontWeight = FontWeight.SemiBold,
+                                    fontWeight = FontWeight.Bold,
                                     fontFamily = FontFamily.Monospace,
                                 )
                             ) {
                                 append(seg.text)
                             }
                         } else {
-                            append(seg.text)
+                            appendVibrantWords(seg.text, segSeed)
+                            segSeed += 5
                         }
                     }
 
@@ -1275,9 +1338,9 @@ private fun NovaPulseRichText(
             text = annotated,
             modifier = modifier,
             style = TextStyle(
-                color = QsColors.TextSecondary,
-                fontSize = 12.sp,
-                lineHeight = 19.sp,
+                color = QsColors.TextPrimary,
+                fontSize = 14.5.sp,
+                lineHeight = 24.5.sp,
                 fontWeight = FontWeight.Normal,
                 textDirection = if (isPureLinkLine) TextDirection.Ltr else TextDirection.Content,
             ),
@@ -1311,8 +1374,8 @@ private fun NovaPulseQuickActionsBar(
     ) {
         Text(
             text = title,
-            color = QsColors.TextSecondary,
-            fontSize = 11.sp,
+            color = QsColors.TextPrimary,
+            fontSize = 13.sp,
             fontWeight = FontWeight.Bold,
         )
         FlowRow(
